@@ -1,0 +1,150 @@
+import * as THREE from 'three';
+import { PALETTE } from './palette.js';
+import { toonVertexColors } from './materials.js';
+export const WORLD_SIZE = 200;
+const SEGMENTS = 90;
+const STEP = WORLD_SIZE / SEGMENTS;
+const HALF = WORLD_SIZE / 2;
+const ISLAND_RADIUS = 58;
+export const SEA_FLOOR = -6;
+// ---- ノイズ ----
+function hash(ix, iz) {
+    let h = Math.imul(ix, 374761393) ^ Math.imul(iz, 668265263);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967295;
+}
+export function valueNoise(x, z) {
+    const ix = Math.floor(x);
+    const iz = Math.floor(z);
+    const fx = x - ix;
+    const fz = z - iz;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uz = fz * fz * (3 - 2 * fz);
+    const a = hash(ix, iz);
+    const b = hash(ix + 1, iz);
+    const c = hash(ix, iz + 1);
+    const d = hash(ix + 1, iz + 1);
+    return THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, ux), THREE.MathUtils.lerp(c, d, ux), uz) * 2 - 1;
+}
+function fbm(x, z) {
+    return valueNoise(x, z) * 0.6 + valueNoise(x * 2.1, z * 2.1) * 0.3 + valueNoise(x * 4.3, z * 4.3) * 0.1;
+}
+const smoothstep = THREE.MathUtils.smoothstep;
+function rawHeight(x, z) {
+    const r = Math.hypot(x, z);
+    const a = Math.atan2(z, x);
+    // 海岸線を揺らして円形っぽさを消す
+    const coast = ISLAND_RADIUS + Math.sin(a * 3 + 0.5) * 6 + Math.sin(a * 5 + 2.1) * 3.5 + Math.sin(a * 8) * 1.5;
+    const land = 1 - smoothstep(r / coast, 0.62, 1.08);
+    let h = SEA_FLOOR + land * 8.5;
+    // ほぼ平らにして、ローポリ感が出る程度のわずかな起伏だけ残す
+    h += land * land * fbm(x * 0.03, z * 0.03) * 0.15;
+    return h;
+}
+// グリッド頂点の高さ（メッシュと歩行判定で共有する）
+const heights = new Float32Array((SEGMENTS + 1) * (SEGMENTS + 1));
+for (let j = 0; j <= SEGMENTS; j++) {
+    for (let i = 0; i <= SEGMENTS; i++) {
+        heights[j * (SEGMENTS + 1) + i] = rawHeight(-HALF + i * STEP, -HALF + j * STEP);
+    }
+}
+function h(i, j) {
+    return heights[j * (SEGMENTS + 1) + i];
+}
+/** 描画されている三角形そのものの高さを返す */
+export function terrainHeight(x, z) {
+    const gx = (x + HALF) / STEP;
+    const gz = (z + HALF) / STEP;
+    const i = Math.floor(gx);
+    const j = Math.floor(gz);
+    if (i < 0 || j < 0 || i >= SEGMENTS || j >= SEGMENTS)
+        return SEA_FLOOR;
+    const fx = gx - i;
+    const fz = gz - j;
+    const h00 = h(i, j);
+    const h10 = h(i + 1, j);
+    const h01 = h(i, j + 1);
+    const h11 = h(i + 1, j + 1);
+    if (fx + fz < 1)
+        return h00 + (h10 - h00) * fx + (h01 - h00) * fz;
+    return h11 + (h01 - h11) * (1 - fx) + (h10 - h11) * (1 - fz);
+}
+const SAND_TOP = 0.9; // これより低いところは砂浜
+/** 負なら砂浜。ノイズで境界線をゆるやかに波打たせる */
+function sandLine(p) {
+    return p.y + fbm(p.x * 0.07 + 31, p.z * 0.07 - 17) * 0.45 - SAND_TOP;
+}
+const probe = new THREE.Vector3();
+/** 草地（砂浜でも岩肌でもない）か。margin だけ砂浜の境界から内側に入ったところに限る */
+export function isGrassAt(x, z, margin = 0) {
+    const y = terrainHeight(x, z);
+    if (sandLine(probe.set(x, y, z)) < margin)
+        return false;
+    const dx = terrainHeight(x + 0.5, z) - terrainHeight(x - 0.5, z);
+    const dz = terrainHeight(x, z + 0.5) - terrainHeight(x, z - 0.5);
+    return 1 / Math.hypot(1, dx, dz) >= 0.8; // 地面の色分けと同じく、急な斜面は岩肌
+}
+export function createTerrain() {
+    const positions = [];
+    const colors = [];
+    const sand = new THREE.Color(PALETTE.sand);
+    const grass = new THREE.Color(PALETTE.grass);
+    const rock = new THREE.Color(PALETTE.rock);
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const ab = new THREE.Vector3();
+    const ac = new THREE.Vector3();
+    // 多角形（凸、4頂点まで）を扇形に三角形分割して1色で塗る
+    const pushPolygon = (poly, col) => {
+        for (let k = 1; k + 1 < poly.length; k++) {
+            for (const v of [poly[0], poly[k], poly[k + 1]]) {
+                positions.push(v.x, v.y, v.z);
+                colors.push(col.r, col.g, col.b);
+            }
+        }
+    };
+    // 砂浜と草地の境界線で三角形を切り分け、境目をギザギザでなく揺らいだ線にする
+    const pushTri = (p, q, r) => {
+        const normalY = ab.subVectors(q, p).cross(ac.subVectors(r, p)).normalize().y;
+        const upper = normalY < 0.78 ? rock : grass;
+        const tri = [p.clone(), q.clone(), r.clone()];
+        const f = tri.map(sandLine);
+        const below = [];
+        const above = [];
+        for (let k = 0; k < 3; k++) {
+            const n = (k + 1) % 3;
+            (f[k] < 0 ? below : above).push(tri[k]);
+            if (f[k] < 0 !== f[n] < 0) {
+                const cut = tri[k].clone().lerp(tri[n], f[k] / (f[k] - f[n]));
+                below.push(cut);
+                above.push(cut);
+            }
+        }
+        if (below.length >= 3)
+            pushPolygon(below, sand);
+        if (above.length >= 3)
+            pushPolygon(above, upper);
+    };
+    for (let j = 0; j < SEGMENTS; j++) {
+        for (let i = 0; i < SEGMENTS; i++) {
+            const x0 = -HALF + i * STEP;
+            const z0 = -HALF + j * STEP;
+            const p00 = new THREE.Vector3(x0, h(i, j), z0);
+            const p10 = new THREE.Vector3(x0 + STEP, h(i + 1, j), z0);
+            const p01 = new THREE.Vector3(x0, h(i, j + 1), z0 + STEP);
+            const p11 = new THREE.Vector3(x0 + STEP, h(i + 1, j + 1), z0 + STEP);
+            pushTri(a.copy(p00), b.copy(p01), c.copy(p10));
+            pushTri(a.copy(p10), b.copy(p01), c.copy(p11));
+        }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, toonVertexColors());
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    return mesh;
+}
