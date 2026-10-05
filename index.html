@@ -12,23 +12,22 @@
         background: rgba(43, 38, 51, 0.45); color: #fff; cursor: pointer; text-align: center;
       }
       #overlay.hidden { display: none; }
-      #overlay h1 { margin: 0 0 12px; font-size: 32px; letter-spacing: 0.1em; }
-      #overlay p { margin: 4px 0; opacity: 0.9; }
-      #world-name { margin-bottom: 6px; font-size: 15px; font-weight: 700; opacity: 0.75; }
+      #overlay h1 { margin: 0 0 calc(12 * var(--u)); font-size: calc(32 * var(--u)); letter-spacing: 0.1em; }
+      #world-name { margin-bottom: calc(6 * var(--u)); font-size: calc(15 * var(--u)); font-weight: 700; opacity: 0.75; }
       #to-title {
-        margin-top: 16px; padding: 8px 18px; border: none; border-radius: 8px; cursor: pointer;
-        font: inherit; font-size: 14px; font-weight: 700; color: #fff; background: rgba(255, 255, 255, 0.18);
+        margin-top: calc(16 * var(--u)); padding: calc(8 * var(--u)) calc(18 * var(--u)); border: none; border-radius: calc(8 * var(--u)); cursor: pointer;
+        font: inherit; font-size: calc(14 * var(--u)); font-weight: 700; color: #fff; background: rgba(255, 255, 255, 0.18);
       }
       #to-title:hover { background: rgba(255, 255, 255, 0.3); }
       #crosshair {
-        position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
-        border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px #2b2633; pointer-events: none;
+        position: fixed; left: 50%; top: 50%; width: calc(6 * var(--u)); height: calc(6 * var(--u)); margin: calc(-3 * var(--u)) 0 0 calc(-3 * var(--u));
+        border-radius: 50%; background: #fff; box-shadow: 0 0 0 calc(2 * var(--u)) #2b2633; pointer-events: none;
       }
       #crosshair.hidden { display: none; }
       #pickup-hint {
-        position: fixed; left: 50%; top: 50%; transform: translate(-50%, 28px); pointer-events: none;
-        padding: 4px 12px; border-radius: 6px; background: rgba(43, 38, 51, 0.55);
-        color: #fff; font-size: 15px; font-weight: 700;
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%, calc(28 * var(--u))); pointer-events: none;
+        padding: calc(4 * var(--u)) calc(12 * var(--u)); border-radius: calc(6 * var(--u)); background: rgba(43, 38, 51, 0.55);
+        color: #fff; font-size: calc(15 * var(--u)); font-weight: 700;
       }
       #pickup-hint.hidden { display: none; }
     </style>
@@ -38,16 +37,11 @@
       <div>
         <div id="world-name"></div>
         <h1>クリックして開始</h1>
-        <p>WASD：移動 ／ マウス：視点 ／ Shift：走る ／ Ctrl：しゃがむ ／ Space：ジャンプ</p>
-        <p>海では泳げる：視線の方向へ W で泳ぐ ／ Space：浮上（水面で岸や桟橋に向かって押すと上がる） ／ C：潜る</p>
-        <p>F：拾う・茂みから葉っぱと枝を採取 ／ E・Tab：インベントリ ／ 1〜9・ホイール：アイテム選択 ／ 左クリック：斧を振る（倒した木をさらに叩くとばらせる）</p>
-        <p>Q：建築メニュー（左クリック：設置 ／ R：回転 ／ 右クリック：やめる）</p>
-        <p>Esc：一時停止（自動でセーブされます）</p>
         <button id="to-title">セーブしてタイトルへ</button>
       </div>
     </div>
     <div id="crosshair"></div>
-    <div id="pickup-hint" class="hidden">F：拾う</div>
+    <div id="pickup-hint" class="hidden"></div>
     <!-- three と物理エンジン Rapier は CDN から読み込む（TS 側の import 文はそのまま使える） -->
     <script type="importmap">
       {

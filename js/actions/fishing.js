@@ -1,0 +1,420 @@
+import * as THREE from 'three';
+import { PALETTE } from '../core/palette.js';
+import { flat } from '../core/materials.js';
+import { terrainHeight } from '../world/terrain.js';
+import { WATER_LEVEL } from '../core/physics.js';
+import { waveOffset } from '../core/waves.js';
+import { BOBBER_R, buildBobberModel } from '../items/itemModels.js';
+import { showToast } from '../ui/title.js';
+// 釣り：釣り竿を持って右クリックを押している間ゲージが溜まり、離すと溜めた分だけ遠くへウキを投げる。
+// 左クリックを押している間は糸を巻き取る。水に浮いたウキに魚がかかったら、巻き上げて岸まで寄せると釣れる。
+// 釣りはワールドを変えない自分だけの行動（釣れた魚は自分のインベントリに入るだけ）なので、ワールドコマンドにはせず、
+// 魚がかかるまでの時間なども各自のブラウザで決める。マルチでは、ほかの人に見せるウキと糸の位置だけを送る
+const CHARGE_TIME = 1.2; // ゲージが満タンになるまでの時間（秒）
+const MIN_CAST_SPEED = 5; // ゲージが空のときに投げる速さ（m/秒）。約2〜3m先に落ちる
+const MAX_CAST_SPEED = 16; // ゲージが満タンのときに投げる速さ。約20m先に落ちる
+const CAST_LIFT = 0.45; // 視線より上へ投げ上げる分（大きいほど山なり）
+const BOBBER_GRAVITY = 14; // 飛んでいるウキにかかる重力
+const MAX_FLIGHT_TIME = 5; // これだけ飛んでも落ちなければ、その場に落ちたことにする
+const MIN_DEPTH = 0.6; // この深さより浅い所では魚がかからない
+const BITE_MIN = 3; // 水に落ちてから魚がかかるまでの最短時間（秒）
+const BITE_MAX = 10; // 最長時間
+const REEL_SPEED = 5; // 何もかかっていないときに巻き取る速さ（m/秒）
+const HOOKED_REEL_SPEED = 2.4; // 魚がかかっているときに巻き上げる速さ
+const FISH_PULL_SPEED = 1.1; // 巻いていないとき、魚がウキを沖へ引っぱる速さ
+const RUN_PULL_SPEED = 1.8; // 魚が暴れて走っている間は、巻いていてもこれだけ引き戻される
+const RUN_EVERY_MIN = 1.2; // 魚が走り出す間隔（秒）
+const RUN_EVERY_MAX = 2.8;
+const RUN_TIME_MIN = 0.5; // 魚が走り続ける時間（秒）
+const RUN_TIME_MAX = 1.1;
+const ESCAPE_TIME = 2.2; // かかった魚をこれだけ巻かずに放っておくと逃げられる（秒）
+const CATCH_DIST = 2; // ウキが足元からこの距離まで寄ったら、釣り上げる・回収する
+const MAX_LINE = 45; // 糸の長さ。ウキからこれ以上離れると、糸を巻き取ってしまう
+const LINE_POINTS = 20; // 糸を描く点の数
+// 竿のしなり（rad。竿先までの曲がりの合計）
+const HOOK_BEND = 0.85; // 魚がかかっている間
+const RUN_BEND = 0.45; // 魚が走っている間は、さらにこれだけ曲がる
+const HOOK_SHAKE = 0.3; // 魚がかかっている間に、竿先が前後に震える大きさ
+const HOOK_SWAY = 0.35; // 左右に振られる大きさ
+const REEL_BEND = 0.15; // 何もかかっていないウキを巻き取っている間
+const BEND_RATE = 10; // しなりが目標に近づく速さ
+// 握りの構え（構えからの移動 [x,y,z] と回転 [x,y,z]）
+const POSE_CHARGE = [[0.03, 0.09, 0.12], [0.75, 0, 0.05]]; // ゲージ満タンで振りかぶった構え
+const POSE_FLICK = [[-0.02, -0.02, -0.12], [-0.7, 0, -0.03]]; // 投げた瞬間に前へ振り出す
+const POSE_LINE_OUT = [[0, -0.03, -0.03], [-0.2, 0, 0]]; // 糸を出している間（竿先を下げる）
+const POSE_HOOKED = [[0, -0.02, -0.06], [-0.4, 0, 0]]; // 魚に引かれている間
+const FLICK_TIME = 0.14; // 前へ振り出している時間（秒）
+const POSE_RATE = 14; // 構えが目標に近づく速さ
+const SPLASH_GRAVITY = 14;
+const splashGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
+export class Fisher {
+    world;
+    hand;
+    rig;
+    obstacles;
+    state = 'idle';
+    charge = 0; // 0〜1
+    reeling = false;
+    bobber = buildBobberModel();
+    velocity = new THREE.Vector3();
+    flightTime = 0;
+    biteTimer = 0; // 魚がかかるまでの残り時間
+    escapeTimer = 0; // かかった魚を巻かずに放っている時間
+    running = false; // かかった魚が暴れて走っているか
+    runTimer = 0; // 走り出すまで・走り終わるまでの残り時間
+    flick = 0; // 前へ振り出している残り時間
+    splashTimer = 0;
+    time = 0;
+    bendForward = 0;
+    bendSide = 0;
+    posePos = new THREE.Vector3();
+    poseRot = new THREE.Vector3();
+    line;
+    linePos;
+    tipPos = new THREE.Vector3();
+    raycaster = new THREE.Raycaster();
+    drops = [];
+    gauge;
+    gaugeFill;
+    /** 魚を釣り上げたときに呼ばれる */
+    onCatch = () => { };
+    constructor(world, hand, rig, 
+    /** 飛んでいるウキが当たって止まる物（地形・岩・建てた部材など） */
+    obstacles) {
+        this.world = world;
+        this.hand = hand;
+        this.rig = rig;
+        this.obstacles = obstacles;
+        const geo = new THREE.BufferGeometry();
+        this.linePos = new THREE.BufferAttribute(new Float32Array(LINE_POINTS * 3), 3);
+        geo.setAttribute('position', this.linePos);
+        this.line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: PALETTE.bark }));
+        this.line.frustumCulled = false;
+        this.line.visible = false;
+        world.add(this.line);
+        injectStyle();
+        this.gauge = document.createElement('div');
+        this.gauge.className = 'fish-gauge hidden';
+        this.gaugeFill = document.createElement('div');
+        this.gauge.append(this.gaugeFill);
+        document.body.append(this.gauge);
+    }
+    /** 右クリックを押した：ゲージを溜め始める */
+    startCharge() {
+        if (this.state !== 'idle')
+            return;
+        this.state = 'charging';
+        this.charge = 0;
+    }
+    /** 右クリックを離した：溜めた分だけ遠くへ投げる */
+    release(camera) {
+        if (this.state !== 'charging')
+            return;
+        this.rig.tip.getWorldPosition(this.bobber.position);
+        const dir = camera.getWorldDirection(new THREE.Vector3());
+        dir.y += CAST_LIFT;
+        this.velocity.copy(dir.normalize()).multiplyScalar(THREE.MathUtils.lerp(MIN_CAST_SPEED, MAX_CAST_SPEED, this.charge));
+        this.bobber.rotation.set(0, 0, 0);
+        this.world.add(this.bobber);
+        this.state = 'flying';
+        this.flightTime = 0;
+        this.flick = FLICK_TIME;
+    }
+    /** 左クリックを押している間は巻き取る */
+    setReeling(on) {
+        this.reeling = on;
+    }
+    /** ゲージを溜めている途中なら、投げずにやめる（一時停止したときなど） */
+    stopCharge() {
+        if (this.state === 'charging')
+            this.state = 'idle';
+    }
+    /** 糸を引き上げて手元に戻す（釣り竿を持ち替えたときなど） */
+    cancel() {
+        this.state = 'idle';
+        this.reeling = false;
+        this.bobber.removeFromParent();
+        this.line.visible = false;
+    }
+    /** ゲージを溜めているか、糸を出している */
+    get busy() {
+        return this.state !== 'idle';
+    }
+    /** 画面に出す操作の案内 */
+    get hint() {
+        switch (this.state) {
+            case 'idle':
+                return '[右長]：ためて投げる';
+            case 'charging':
+                return '[右]を離す：投げる';
+            case 'hooked':
+                return 'かかった！ [左長]：巻き上げる';
+            case 'out':
+                return this.depth() < MIN_DEPTH ? '[左長]：巻き取る（ここは浅くて魚がかからない）' : '[左長]：巻き取る';
+            default:
+                return '';
+        }
+    }
+    /** active は釣り竿を手に持っているか（持っていなければ糸を引き上げる） */
+    update(dt, camera, active) {
+        this.updateDrops(dt);
+        if (!active) {
+            if (this.state !== 'idle')
+                this.cancel();
+            this.gauge.classList.add('hidden');
+            return;
+        }
+        this.time += dt;
+        this.flick = Math.max(this.flick - dt, 0);
+        this.rig.tip.getWorldPosition(this.tipPos);
+        if (this.state === 'charging')
+            this.charge = Math.min(this.charge + dt / CHARGE_TIME, 1);
+        else if (this.state === 'flying')
+            this.fly(dt);
+        else if (this.state === 'out' || this.state === 'hooked')
+            this.reel(dt, camera);
+        if (this.state !== 'idle' && this.state !== 'charging' && this.tipPos.distanceTo(this.bobber.position) > MAX_LINE)
+            this.cancel();
+        this.animateRod(dt);
+        this.drawLine();
+        this.gauge.classList.toggle('hidden', this.state !== 'charging');
+        this.gaugeFill.style.width = `${(this.charge * 100).toFixed(1)}%`;
+        this.gauge.classList.toggle('full', this.charge >= 1);
+    }
+    // ---- ウキ ----
+    /** 飛んでいるウキを進め、水面か地面・物に落ちたら止める */
+    fly(dt) {
+        this.flightTime += dt;
+        this.velocity.y -= BOBBER_GRAVITY * dt;
+        const from = this.bobber.position;
+        const to = from.clone().addScaledVector(this.velocity, dt);
+        const surface = WATER_LEVEL + waveOffset(to.x, to.z);
+        if (to.y <= surface && terrainHeight(to.x, to.z) < surface - 0.05) {
+            from.set(to.x, surface, to.z);
+            this.land();
+            this.splash(from, 10);
+            return;
+        }
+        const step = to.clone().sub(from);
+        this.raycaster.set(from, step.clone().normalize());
+        this.raycaster.far = step.length();
+        const hit = this.raycaster.intersectObjects(this.obstacles, true)[0];
+        if (hit) {
+            from.copy(hit.point).y += BOBBER_R;
+            this.land();
+        }
+        else if (this.flightTime > MAX_FLIGHT_TIME) {
+            this.land();
+        }
+        else {
+            from.copy(to);
+        }
+    }
+    land() {
+        this.state = 'out';
+        this.biteTimer = THREE.MathUtils.lerp(BITE_MIN, BITE_MAX, Math.random());
+    }
+    /** ウキの下の水の深さ（陸なら負） */
+    depth() {
+        const p = this.bobber.position;
+        return WATER_LEVEL + waveOffset(p.x, p.z) - terrainHeight(p.x, p.z);
+    }
+    /** 落ちているウキを、巻き取って寄せる・魚に引かれる・浮かべる */
+    reel(dt, camera) {
+        const p = this.bobber.position;
+        const toPlayer = new THREE.Vector3(camera.position.x - p.x, 0, camera.position.z - p.z);
+        const dist = toPlayer.length();
+        toPlayer.normalize();
+        const hooked = this.state === 'hooked';
+        // 寄せる速さ（負なら沖へ引かれる）
+        let speed = 0;
+        if (hooked) {
+            this.runTimer -= dt;
+            if (this.runTimer <= 0) {
+                this.running = !this.running;
+                this.runTimer = this.running
+                    ? THREE.MathUtils.lerp(RUN_TIME_MIN, RUN_TIME_MAX, Math.random())
+                    : THREE.MathUtils.lerp(RUN_EVERY_MIN, RUN_EVERY_MAX, Math.random());
+            }
+            speed = this.reeling ? HOOKED_REEL_SPEED : -FISH_PULL_SPEED;
+            if (this.running)
+                speed -= RUN_PULL_SPEED;
+            this.escapeTimer = this.reeling ? Math.max(this.escapeTimer - dt, 0) : this.escapeTimer + dt;
+            if (this.escapeTimer >= ESCAPE_TIME) {
+                showToast('魚に逃げられた');
+                this.state = 'out';
+                this.land();
+                return;
+            }
+        }
+        else if (this.reeling) {
+            speed = REEL_SPEED;
+        }
+        // 沖へ引かれるのは深い所だけ（浅瀬や陸へは引き戻されない）
+        if (speed < 0 && this.depth() < MIN_DEPTH)
+            speed = 0;
+        p.addScaledVector(toPlayer, Math.min(speed * dt, dist));
+        const depth = this.depth();
+        const surface = WATER_LEVEL + waveOffset(p.x, p.z);
+        if (depth > 0.05) {
+            // 浮かぶ。魚がかかっていれば沈められて、左右に暴れる
+            if (hooked) {
+                const thrash = this.running ? 2 : 1;
+                p.y = surface - 0.12 + Math.sin(this.time * 21) * 0.04 * thrash;
+                this.bobber.rotation.set(Math.sin(this.time * 17) * 0.5 * thrash, 0, Math.sin(this.time * 13) * 0.5 * thrash);
+                this.splashTimer -= dt;
+                if (this.splashTimer <= 0) {
+                    this.splash(p, this.running ? 5 : 2);
+                    this.splashTimer = this.running ? 0.12 : 0.3;
+                }
+            }
+            else {
+                p.y = surface + Math.sin(this.time * 2.2) * 0.02;
+                this.bobber.rotation.set(Math.sin(this.time * 1.7) * 0.1, 0, Math.sin(this.time * 1.3) * 0.1);
+            }
+        }
+        else {
+            // 陸の上を引きずる（引いていなければ、落ちた所（床の上など）にそのまま置いておく）
+            const ground = terrainHeight(p.x, p.z) + BOBBER_R;
+            p.y = speed > 0 ? Math.max(p.y - 6 * dt, ground) : Math.max(p.y, ground);
+            this.bobber.rotation.set(0, 0, 0);
+        }
+        // 魚がかかったまま陸へ引き上げるか足元まで寄せたら釣れる。何もかかっていなければ手元に戻る
+        if (hooked && (depth <= 0.05 || dist < CATCH_DIST)) {
+            this.splash(p, 8);
+            this.cancel();
+            showToast('魚が釣れた！');
+            this.onCatch('fish', 1);
+            return;
+        }
+        if (!hooked && this.reeling && dist < CATCH_DIST) {
+            this.cancel();
+            return;
+        }
+        // 深い所に浮かべておくと、そのうち魚がかかる（巻いている間はかからない）
+        if (!hooked && !this.reeling && depth >= MIN_DEPTH) {
+            this.biteTimer -= dt;
+            if (this.biteTimer <= 0) {
+                this.state = 'hooked';
+                this.escapeTimer = 0;
+                this.running = true; // かかった瞬間に走り出す
+                this.runTimer = THREE.MathUtils.lerp(RUN_TIME_MIN, RUN_TIME_MAX, Math.random());
+                this.splashTimer = 0;
+                this.splash(p, 10);
+            }
+        }
+    }
+    // ---- 竿と糸 ----
+    /** 構えとしなりを、今の状態に合わせて動かす */
+    animateRod(dt) {
+        const hooked = this.state === 'hooked';
+        const running = hooked && this.running;
+        // 構え
+        let [pos, rot] = this.flick > 0 ? POSE_FLICK : hooked ? POSE_HOOKED : this.state === 'idle' ? [[0, 0, 0], [0, 0, 0]] : POSE_LINE_OUT;
+        if (this.state === 'charging') {
+            pos = POSE_CHARGE[0].map((v) => v * this.charge);
+            rot = POSE_CHARGE[1].map((v) => v * this.charge);
+        }
+        const k = 1 - Math.exp(-POSE_RATE * dt);
+        this.posePos.lerp(new THREE.Vector3(...pos), k);
+        this.poseRot.lerp(new THREE.Vector3(...rot), k);
+        const shake = new THREE.Vector3();
+        if (hooked) {
+            const s = running ? 2 : 1;
+            shake.set(Math.sin(this.time * 19) * 0.008 * s, Math.sin(this.time * 27) * 0.01 * s, 0);
+        }
+        else if (this.state === 'charging' && this.charge >= 1) {
+            shake.set(0, Math.sin(this.time * 40) * 0.003, 0); // 満タンで力んで震える
+        }
+        this.hand.pose(this.posePos.clone().add(shake).toArray(), this.poseRot.toArray());
+        // しなり：魚がかかっている間は大きく曲がって激しく震える
+        let forward = 0;
+        let side = 0;
+        if (hooked) {
+            forward = HOOK_BEND + (running ? RUN_BEND : 0) + (this.reeling ? 0.15 : 0);
+            side = Math.sin(this.time * 2.3) * HOOK_SWAY;
+        }
+        else if (this.state === 'out' && this.reeling) {
+            forward = REEL_BEND;
+        }
+        else if (this.state === 'charging') {
+            forward = -0.12 * this.charge; // 振りかぶると竿先が後ろへ残る
+        }
+        const b = 1 - Math.exp(-BEND_RATE * dt);
+        this.bendForward += (forward - this.bendForward) * b;
+        this.bendSide += (side - this.bendSide) * b;
+        let shakeF = 0;
+        let shakeS = 0;
+        if (hooked) {
+            const s = running ? 1.6 : 1;
+            shakeF = (Math.sin(this.time * 23) * 0.6 + Math.sin(this.time * 37) * 0.4) * HOOK_SHAKE * s;
+            shakeS = (Math.sin(this.time * 13) * 0.6 + Math.sin(this.time * 31) * 0.4) * HOOK_SHAKE * 0.6 * s;
+        }
+        this.rig.bend(this.bendForward + shakeF, this.bendSide + shakeS);
+        this.rig.tip.getWorldPosition(this.tipPos); // しならせたあとの竿先から糸を出す
+        this.rig.hanging.visible = this.state === 'idle' || this.state === 'charging';
+    }
+    /** 竿先からウキまで糸を張る。たるんでいるほど下へ垂れる */
+    drawLine() {
+        const out = this.state === 'flying' || this.state === 'out' || this.state === 'hooked';
+        this.line.visible = out;
+        if (!out)
+            return;
+        const a = this.tipPos;
+        const b = this.bobber.position;
+        const taut = this.state === 'hooked' || this.reeling;
+        const sag = this.state === 'flying' ? 0.1 : taut ? 0.02 : Math.min(a.distanceTo(b) * 0.06, 1.5);
+        const p = new THREE.Vector3();
+        for (let i = 0; i < LINE_POINTS; i++) {
+            const t = i / (LINE_POINTS - 1);
+            p.lerpVectors(a, b, t);
+            p.y -= sag * 4 * t * (1 - t);
+            this.linePos.setXYZ(i, p.x, p.y, p.z);
+        }
+        this.linePos.needsUpdate = true;
+    }
+    // ---- 水しぶき（自分の画面にだけ出す演出） ----
+    splash(point, count) {
+        for (let n = 0; n < count; n++) {
+            const mesh = new THREE.Mesh(splashGeo, flat(PALETTE.water));
+            mesh.position.copy(point);
+            mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+            const a = Math.random() * Math.PI * 2;
+            const r = 0.6 + Math.random() * 0.8;
+            const velocity = new THREE.Vector3(Math.cos(a) * r, 2 + Math.random() * 1.5, Math.sin(a) * r);
+            this.world.add(mesh);
+            this.drops.push({ mesh, velocity, life: 0.45 + Math.random() * 0.2 });
+        }
+    }
+    updateDrops(dt) {
+        for (let i = this.drops.length - 1; i >= 0; i--) {
+            const d = this.drops[i];
+            d.life -= dt;
+            if (d.life <= 0) {
+                d.mesh.removeFromParent();
+                this.drops.splice(i, 1);
+                continue;
+            }
+            d.velocity.y -= SPLASH_GRAVITY * dt;
+            d.mesh.position.addScaledVector(d.velocity, dt);
+        }
+    }
+}
+const css = (c) => '#' + c.toString(16).padStart(6, '0');
+function injectStyle() {
+    const style = document.createElement('style');
+    style.textContent = `
+    .fish-gauge {
+      position: fixed; left: 50%; top: calc(50% + 40 * var(--u)); transform: translateX(-50%);
+      width: calc(160 * var(--u)); height: calc(12 * var(--u)); padding: calc(3 * var(--u));
+      border-radius: calc(8 * var(--u)); background: rgba(43, 38, 51, 0.55); pointer-events: none; z-index: 4;
+    }
+    .fish-gauge.hidden { display: none; }
+    .fish-gauge > div {
+      height: 100%; width: 0; border-radius: calc(5 * var(--u));
+      background: linear-gradient(90deg, ${css(PALETTE.grass)}, ${css(PALETTE.sand)});
+    }
+    .fish-gauge.full > div { background: ${css(PALETTE.accent)}; }
+  `;
+    document.head.append(style);
+}
