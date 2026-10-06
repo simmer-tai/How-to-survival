@@ -47,8 +47,11 @@ export type GuestMsg =
 /** ホストの部屋（link.ts の HostLink）が届ける形（from は送った参加者。join・leave はつながり・切れたときに HostLink が知らせる） */
 export interface FromGuest { from: number; data: GuestMsg | { t: 'join' } | { t: 'leave' } }
 
-/** 動いている物の位置（ホストの物理で決めた値）。中身は drops.motion()・chopper.motion() の形 */
-export interface Motion { drops: number[][]; trees: number[][] }
+/**
+ * 動いている物の位置（ホストの物理で決めた値）。中身は drops.motion()・chopper.motion() の形。
+ * isles は海図に載せた島の分で、[島の番号, 落とし物, 木] の並び（world/isles.ts の motion()）
+ */
+export interface Motion { drops: number[][]; trees: number[][]; isles?: [number, number[][], number[][]][] }
 
 /** ホストから参加者へ */
 export type HostMsg =

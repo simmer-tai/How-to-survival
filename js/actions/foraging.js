@@ -8,7 +8,7 @@ const DAMAGE = { fist: 1, knife: 2, axe: 2 }; // 1回叩くと減る耐久値（
 // 壊すまでに採れる物と個数（いつも同じ）。叩いて減った耐久値の割合に合わせて、少しずつ手に入る
 const YIELD = [['leaf', 3], ['stick', 2]];
 const BERRY_REACH = 3.2; // F で実を摘める距離
-const REGROW_TIME = 90; // 丸裸になってから生え直すまで（秒）
+const REGROW_TIME = 9 * 60; // 丸裸になってから生え直すまで（秒）。ゲームの中の半日
 const GROW_TIME = 1.5; // 生え直すのにかかる時間
 const SHAKE_TIME = 0.35; // 採ったときに揺れる時間
 const SHRINK_TIME = 0.3; // 採り尽くして縮んで消えるまで
@@ -35,6 +35,8 @@ export class BushForager {
     onHarvest = () => { };
     /** 共有ワールドを変える頼みを出す（main.ts が差し替える）。適用できたら true */
     request = () => false;
+    /** どの島の物か（海図に載せた島なら { loc }。頼みとコマンドに入れて、main がその島へ振り分ける） */
+    at = {};
     constructor(world, bushes) {
         this.world = world;
         bushes.forEach((mesh, i) => {
@@ -60,7 +62,7 @@ export class BushForager {
         const s = this.aimed(camera, reach);
         if (!s)
             return false;
-        return this.request({ type: 'harvestBush', bush: this.list.indexOf(s), tool });
+        return this.request({ type: 'harvestBush', bush: this.list.indexOf(s), tool, ...this.at });
     }
     /** F で実を摘める茂みに視線が合っているか */
     canPick(camera) {
@@ -71,7 +73,7 @@ export class BushForager {
         const s = this.aimed(camera, BERRY_REACH);
         if (!s || s.berries <= 0)
             return false;
-        return this.request({ type: 'pickBerry', bush: this.list.indexOf(s) });
+        return this.request({ type: 'pickBerry', bush: this.list.indexOf(s), ...this.at });
     }
     // ---- ホスト側：頼みを確かめてコマンドにする ----
     /** 頼みを確かめてコマンドにする。叩くなら減る耐久値とその1回で採れる物を決める。できなければ null（マルチではホストだけが呼ぶ） */
@@ -80,7 +82,7 @@ export class BushForager {
         if (!s || s.phase !== 'full' || s.hp <= 0)
             return null;
         if (req.type === 'pickBerry')
-            return s.berries > 0 ? { type: 'pickBerry', bush: req.bush } : null;
+            return s.berries > 0 ? { type: 'pickBerry', bush: req.bush, ...this.at } : null;
         const damage = DAMAGE[req.tool];
         if (damage === undefined)
             return null;
@@ -97,7 +99,7 @@ export class BushForager {
         const fallen = s.berries - berryCap(BUSH_HP - after);
         if (fallen > 0)
             items.push(['berry', fallen]);
-        return { type: 'harvestBush', bush: req.bush, damage, items };
+        return { type: 'harvestBush', bush: req.bush, damage, items, ...this.at };
     }
     // ---- 全員：コマンドを適用する ----
     /** 茂みの耐久値を減らす（実を摘むなら1つ減らす）。壊れたら縮んで消え、自分の頼み（mine）なら採れた物を受け取る */

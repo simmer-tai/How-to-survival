@@ -1,11 +1,14 @@
 import { PALETTE } from '../core/palette.js';
 import { itemIcon } from './itemIcons.js';
+import { landInfoName } from './landInfo.js';
+import { readChart, validChart } from './islandChart.js';
 
 const HOTBAR_SIZE = 4; // ホットバーのマスの数（数字キー 1〜4 で選ぶ）
 const BAG_COLS = 9; // カバンの横のマスの数
 const BAG_ROWS = 3;
 const SLOT_COUNT = HOTBAR_SIZE + BAG_COLS * BAG_ROWS;
 const MAX_STACK = 99; // 素材・作業台の最大スタック数（ベリーと道具は別）
+const INFO_STACK = 16; // 地形のメモの最大スタック数
 const MAX_COINS = 9999; // お金のマスに入るコインの最大枚数
 // 道具の耐久力：何回使うと壊れるか（木や部材を叩く・茂みを刈る・建てる／壊すたびに 1 減る）
 const AXE_DURABILITY = 100; // 木1本を切り倒してばらすのに 7 回叩く
@@ -37,7 +40,7 @@ export interface ItemDef {
   durability?: number;
   /** お金。お金のマスにだけ入り、ホットバーやカバンには入らない（なので手に持つことはない） */
   currency?: boolean;
-  /** 設計図。持って右クリックすると、この id の物の作り方を覚える（設計図は減らない） */
+  /** 設計図。持って右クリックすると、この id の物の作り方を覚え、設計図は1枚なくなる（もう覚えていたら減らない） */
   teaches?: string;
 }
 
@@ -69,17 +72,39 @@ export const ITEMS = {
   hammer: { id: 'hammer', name: 'ハンマー', maxStack: 1, durability: HAMMER_DURABILITY }, // 持って右クリックで部材を選び、左クリックで建てる
   // 手に持って左クリックで設置する部材（id は actions/pieces.ts の部材と同じ）。ほかの部材はハンマーで建てる
   workbench: { id: 'workbench', name: '作業台', maxStack: MAX_STACK },
-  campfire: { id: 'campfire', name: '焚火', maxStack: MAX_STACK }, // 石を輪に並べて枝を組んだ焚火。置いて F で燃料を入れる（actions/campfire.ts）
+  campfire: { id: 'campfire', name: '焚火', maxStack: MAX_STACK },
+  draftingTable: { id: 'draftingTable', name: '製図台', maxStack: MAX_STACK }, // 置いて F で使う。白紙の地図とメモから島の地図を作る // 石を輪に並べて枝を組んだ焚火。置いて F で燃料を入れる（actions/campfire.ts）
   coin: { id: 'coin', name: 'コイン', maxStack: MAX_COINS, currency: true }, // 島のお金。桟橋の人との取引で手に入る
-  boatBlueprint: { id: 'boatBlueprint', name: '木製の船の設計図', maxStack: 1, teaches: 'boat' }, // 桟橋の人からコインで買う
-  map: { id: 'map', name: '地図', maxStack: 1 }, // 街の地図屋からコインで買う。持って右クリックで、今いる場所の地図を広げる（ui/areaMap.ts）
+  // 設計図は桟橋の人からコインで買う
+  boatBlueprint: { id: 'boatBlueprint', name: '木製の船の設計図', maxStack: 1, teaches: 'boat' },
+  pickaxeBlueprint: { id: 'pickaxeBlueprint', name: '石のツルハシの設計図', maxStack: 1, teaches: 'pickaxe' },
+  spearBlueprint: { id: 'spearBlueprint', name: '石の槍の設計図', maxStack: 1, teaches: 'spear' },
+  hammerBlueprint: { id: 'hammerBlueprint', name: 'ハンマーの設計図', maxStack: 1, teaches: 'hammer' },
+  fishingRodBlueprint: { id: 'fishingRodBlueprint', name: '釣り竿の設計図', maxStack: 1, teaches: 'fishingRod' },
+  draftingTableBlueprint: { id: 'draftingTableBlueprint', name: '製図台の設計図', maxStack: 1, teaches: 'draftingTable' }, // 街の地図屋から買う
+  // 白紙の地図：街の地図屋からコインで買う。製図台でメモと組み合わせて島の地図にする（id は前の「地図」のまま。古いセーブを読めるように）
+  map: { id: 'map', name: '白紙の地図', maxStack: 1 },
+  // 島の地図：製図台で作る。中身（どのメモを組み合わせたか・本当の島の姿）はスタックの chart に持つ（items/islandChart.ts）。持って右クリックで広げる
+  islandMap: { id: 'islandMap', name: '島の地図', maxStack: 1 },
+  // 地形のメモ：街の地図屋からコインで買う（items/landInfo.ts）。あとで組み合わせて島の地図を作る
+  forestInfo: { id: 'forestInfo', name: landInfoName('forest'), maxStack: INFO_STACK },
+  meadowInfo: { id: 'meadowInfo', name: landInfoName('meadow'), maxStack: INFO_STACK },
+  beachInfo: { id: 'beachInfo', name: landInfoName('beach'), maxStack: INFO_STACK },
+  cragInfo: { id: 'cragInfo', name: landInfoName('crag'), maxStack: INFO_STACK },
+  lakeInfo: { id: 'lakeInfo', name: landInfoName('lake'), maxStack: INFO_STACK },
+  cliffInfo: { id: 'cliffInfo', name: landInfoName('cliff'), maxStack: INFO_STACK },
+  torrentInfo: { id: 'torrentInfo', name: landInfoName('torrent'), maxStack: INFO_STACK },
+  bambooInfo: { id: 'bambooInfo', name: landInfoName('bamboo'), maxStack: INFO_STACK },
+  reefInfo: { id: 'reefInfo', name: landInfoName('reef'), maxStack: INFO_STACK },
+  streamInfo: { id: 'streamInfo', name: landInfoName('stream'), maxStack: INFO_STACK },
+  hollowInfo: { id: 'hollowInfo', name: landInfoName('hollow'), maxStack: INFO_STACK },
   boat: { id: 'boat', name: '木製の船', maxStack: 1 }, // 設計図で作り方を覚えると、作業台で作れる。持って左クリックで水に浮かべる（actions/boats.ts。乗るのはこれから）
 } satisfies Record<string, ItemDef>;
 
 export type ItemId = keyof typeof ITEMS;
 
-/** dmg は道具が使われて減った耐久値（無ければ新品） */
-export interface Stack { item: ItemId; count: number; dmg?: number }
+/** dmg は道具が使われて減った耐久値（無ければ新品）。chart は島の地図の中身（items/islandChart.ts） */
+export interface Stack { item: ItemId; count: number; dmg?: number; chart?: number }
 
 /** 減った耐久値として正しい値なら、その値（新品や耐久力の無い物なら undefined） */
 export function validDmg(item: ItemId, dmg: unknown): number | undefined {
@@ -92,10 +117,16 @@ export function isCurrency(item: ItemId): boolean {
   return !!(ITEMS[item] as ItemDef).currency;
 }
 
-/** count 個だけ取り分けたスタック（減った耐久値も引き継ぐ） */
+/** スタック1つを作る（減った耐久値・島の地図の中身は、正しい値のときだけ持たせる） */
+export function makeStack(item: ItemId, count: number, dmg?: number, chart?: number): Stack {
+  const d = validDmg(item, dmg);
+  const c = item === 'islandMap' ? validChart(chart) : undefined;
+  return { item, count, ...(d ? { dmg: d } : {}), ...(c !== undefined ? { chart: c } : {}) };
+}
+
+/** count 個だけ取り分けたスタック（減った耐久値・島の地図の中身も引き継ぐ） */
 function part(s: Stack, count: number): Stack {
-  const dmg = validDmg(s.item, s.dmg);
-  return dmg ? { item: s.item, count, dmg } : { item: s.item, count };
+  return makeStack(s.item, count, s.dmg, s.chart);
 }
 
 /** trash はゴミ箱のマス、purse はお金のマス（無いセーブデータは空とみなす） */
@@ -221,8 +252,8 @@ export class Inventory {
     return this.home(item).reduce((n, s) => n + (!s ? max : s.item === item ? max - s.count : 0), 0);
   }
 
-  /** アイテムを追加し、入りきらなかった個数を返す。dmg は使いかけの道具の減った耐久値 */
-  add(item: ItemId, count = 1, dmg?: number): number {
+  /** アイテムを追加し、入りきらなかった個数を返す。dmg は使いかけの道具の減った耐久値、chart は島の地図の中身 */
+  add(item: ItemId, count = 1, dmg?: number, chart?: number): number {
     const max = ITEMS[item].maxStack;
     const list = this.home(item);
     // 既存スタックに詰める → 空きスロットへ（ホットバー優先）
@@ -237,7 +268,7 @@ export class Inventory {
     for (let i = 0; i < list.length && count > 0; i++) {
       if (list[i]) continue;
       const n = Math.min(max, count);
-      list[i] = dmg ? { item, count: n, dmg } : { item, count: n };
+      list[i] = makeStack(item, n, dmg, chart);
       count -= n;
     }
     this.render();
@@ -351,7 +382,7 @@ export class Inventory {
     }
     // マスの数が今より多かった頃のセーブデータは、はみ出した分を空いているマスへ入れる
     for (const s of save.slots.slice(SLOT_COUNT)) {
-      if (s && s.item in ITEMS && s.count > 0) this.add(s.item, s.count, validDmg(s.item, s.dmg));
+      if (s && s.item in ITEMS && s.count > 0) this.add(s.item, s.count, s.dmg, s.chart);
     }
     this.held = null;
     this.selected = save.selected >= 0 && save.selected < HOTBAR_SIZE ? save.selected : 0;
@@ -377,7 +408,7 @@ export class Inventory {
 
   /** インベントリに戻し、入りきらなかった分を返す */
   putBack(s: Stack): Stack | null {
-    const rest = this.add(s.item, s.count, s.dmg);
+    const rest = this.add(s.item, s.count, s.dmg, s.chart);
     return rest > 0 ? part(s, rest) : null;
   }
 
@@ -578,9 +609,10 @@ export function durabilityOf(s: Stack): { left: number; max: number } | null {
   return max ? { left: max - (s.dmg ?? 0), max } : null;
 }
 
-/** マスに出す名前（道具なら残りの耐久値も） */
-function itemLabel(s: Stack): string {
+/** マスに出す名前（道具なら残りの耐久値も、島の地図なら島の名前も） */
+export function itemLabel(s: Stack): string {
   const d = durabilityOf(s);
+  if (s.chart !== undefined) return `${ITEMS[s.item].name}（${readChart(s.chart).name}）`;
   return ITEMS[s.item].name + (d ? `（耐久 ${d.left}/${d.max}）` : '');
 }
 

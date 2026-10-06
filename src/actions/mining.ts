@@ -4,7 +4,7 @@ import { flat } from '../core/materials.js';
 import type { Physics, RAPIER } from '../core/physics.js';
 import { ITEMS, type ItemId } from '../items/inventory.js';
 import { terrainHeight } from '../world/terrain.js';
-import type { MineRock, MineTool, Requester, RockRequest } from '../core/commands.js';
+import type { MineRock, MineTool, OnIsle, Requester, RockRequest } from '../core/commands.js';
 
 const HP_PER_SIZE = 5; // 岩の大きさ 1 あたりの耐久値（大きい岩ほど叩く回数が多い）
 const MIN_HP = 3;
@@ -69,10 +69,12 @@ export class RockMiner {
   onHarvest: (item: ItemId, count: number) => void = () => {};
   /** 共有ワールドを変える頼みを出す（main.ts が差し替える）。適用できたら true */
   request: Requester = () => false;
+  /** どの島の物か（海図に載せた島なら { loc }。頼みとコマンドに入れて、main がその島へ振り分ける） */
+  at: OnIsle = {};
 
   /**
    * targets は視線をさえぎる物（地形・岩・桟橋・建てた部材）、blockers は木や茂み。岩はこの中で一番手前のときだけ叩ける。
-   * 岩の当たり判定はここで付ける（壊れたら外すため）
+   * 岩の当たり判定はここで付ける（壊れたら外すため）。body は当たり判定を付ける剛体（海図に載せた島の岩は、その島の剛体に付ける）
    */
   constructor(
     private readonly world: THREE.Object3D,
@@ -80,6 +82,7 @@ export class RockMiner {
     private readonly physics: Physics,
     private readonly targets: THREE.Object3D[],
     private readonly blockers: THREE.Object3D[],
+    body?: RAPIER.RigidBody,
   ) {
     for (const mesh of rocks) {
       const s = mesh.scale;
@@ -87,7 +90,7 @@ export class RockMiner {
       const maxHp = Math.max(MIN_HP, Math.round(HP_PER_SIZE * size));
       const trickle = Math.max(MIN_TRICKLE, Math.round(TRICKLE_PER_SIZE * size));
       const burst = Math.max(MIN_BREAK, Math.round(BREAK_PER_SIZE * size));
-      const collider = physics.addStatic(mesh);
+      const collider = physics.addStatic(mesh, body);
       const r: RockState = { mesh, baseScale: s.clone(), collider, maxHp, trickle, burst, hp: maxHp, phase: 'full', shake: 0 };
       this.list.push(r);
       this.byMesh.set(mesh, r);
@@ -109,7 +112,7 @@ export class RockMiner {
   mine(camera: THREE.Camera, tool: MineTool, reach: number): boolean {
     const r = this.aimed(camera, reach);
     if (!r) return false;
-    return this.request({ type: 'mineRock', rock: this.list.indexOf(r), tool });
+    return this.request({ type: 'mineRock', rock: this.list.indexOf(r), tool, ...this.at });
   }
 
   /** 狙っている岩ののこりの耐久値（傷ついていなければ null） */
@@ -130,7 +133,7 @@ export class RockMiner {
     const after = Math.min(before + damage, r.maxHp);
     const share = Math.floor((r.trickle * after) / r.maxHp) - Math.floor((r.trickle * before) / r.maxHp);
     const n = share + (after === r.maxHp ? r.burst : 0);
-    return { type: 'mineRock', rock: req.rock, damage, items: n > 0 ? [['stone', n]] : [] };
+    return { type: 'mineRock', rock: req.rock, damage, items: n > 0 ? [['stone', n]] : [], ...this.at };
   }
 
   // ---- 全員：コマンドを適用する ----

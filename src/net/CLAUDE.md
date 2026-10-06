@@ -9,7 +9,7 @@
 
 | ファイル | 中身 |
 |---|---|
-| `protocol.ts` | 送り合うメッセージの形。参加者→ホスト（`GuestMsg`）、ホスト→参加者（`HostMsg`）、つながりの決まりごと（`ServerMsg`：入れた・入れない・部屋を閉じた）、自分の様子（`PoseMsg`） |
+| `protocol.ts` | 送り合うメッセージの形。参加者→ホスト（`GuestMsg`）、ホスト→参加者（`HostMsg`）、つながりの決まりごと（`ServerMsg`：入れた・入れない・部屋を閉じた）、自分の様子（`PoseMsg`）、動いている物の位置（`Motion`。海図に載せた島の分は `isles`） |
 | `link.ts` | 部屋のつながり。ホストの部屋（`HostLink`。部屋コードから決まる PeerJS の ID で待ち、参加者に番号を付ける）と、参加者のつながり（`GuestLink`）。部屋コードの形をそろえる `cleanCode()` |
 | `multiplayer.ts` | マルチの進め方（`Multiplayer`）。役割（`solo`・`host`・`guest`）、頼みの送り先（`request()`）、届いたメッセージの処理、様子・動き・時刻を送る間隔。ゲームの世界とは `WorldHooks`（`main.ts` が渡す）だけでつながる |
 

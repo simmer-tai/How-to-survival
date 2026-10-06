@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { woodPiece } from '../items/drops.js';
-import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildDirtModel } from '../items/itemModels.js';
+import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildDirtModel } from '../items/itemModels.js';
 import { FISH_KINDS } from '../items/fishKinds.js';
+import { perLandInfo } from '../items/landInfo.js';
 import { HandModel } from './handModel.js';
 import { pieceIconModel } from '../actions/pieces.js';
 /** 腕を伸ばす向き（カメラ基準）。どの持ち方でも、画面の右下手前から手へまっすぐ腕が伸びる */
@@ -27,16 +28,16 @@ const SWING_KEYS = [
 const IMPACT_AT = 0.25; // 振り下ろしきって当たるタイミング（秒）
 /** 斧・ハンマー・ナイフ・ツルハシの、肩の上から振り下ろす動き */
 const CHOP_MOTION = { keys: SWING_KEYS, impactAt: IMPACT_AT };
-/** 槍の、いったん引いてから前へまっすぐ突き出す動き（穂先を水平近くまで倒して突く） */
+/** 槍の、いったん手元へ引いてから前へまっすぐ突き出す動き（槍は前へ水平近くに構えたまま、向きを変えずに押し出す） */
 export const THRUST_MOTION = {
     keys: [
         { t: 0, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構え
-        { t: 0.12, pos: [0.03, 0.03, 0.14], rot: [-0.55, 0, 0], ease: 'out' }, // 穂先を前へ倒しながら手元へ引く
-        { t: 0.2, pos: [-0.07, 0.05, -0.38], rot: [-0.62, -0.06, 0], ease: 'in' }, // 前へ突き出す
-        { t: 0.27, pos: [-0.07, 0.05, -0.4], rot: [-0.62, -0.06, 0], ease: 'out' }, // 突き刺さって止まる
-        { t: 0.5, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構えに戻る
+        { t: 0.12, pos: [0.01, -0.01, 0.16], rot: [0, 0, 0], ease: 'out' }, // まっすぐ手元へ引く
+        { t: 0.19, pos: [-0.03, 0.02, -0.5], rot: [0, 0, 0], ease: 'in' }, // 前へまっすぐ突き出す
+        { t: 0.26, pos: [-0.03, 0.02, -0.52], rot: [0, 0, 0], ease: 'out' }, // 突き刺さって止まる
+        { t: 0.48, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構えに戻る
     ],
-    impactAt: 0.2,
+    impactAt: 0.19,
 };
 /** 肩の位置（構えた握りから ARM_DIR 方向へこの距離）。振っている間も腕はここから伸びる */
 const SHOULDER_DIST = 0.55;
@@ -622,6 +623,36 @@ function fishHold(id) {
         hand: { pose: 'cup', at: [0, -0.06, 0.02], fingers: [-0.4, 0.15, -1], palm: [0, 1, 0.15], anchor: 'palm' },
     };
 }
+/** 設計図の持ち方。手のひらにのせ、図面が見えるようにこちらへ傾ける */
+function blueprintHold(kind) {
+    return {
+        build: () => buildBlueprintModel(kind),
+        slots: [[0, 0.004, 0, 0, 0, 0]],
+        rotation: [0.75, 0.15, 0.05],
+        scale: 0.85,
+        hand: { pose: 'cup', at: [0, -0.01, 0.08], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+    };
+}
+/** 地図（白紙の地図・島の地図） */
+function mapHold(build) {
+    return {
+        build,
+        slots: [[0, 0.004, 0, 0, 0, 0]],
+        rotation: [0.75, -0.1, 0.05],
+        scale: 0.75,
+        hand: { pose: 'cup', at: [0, -0.01, 0.06], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+    };
+}
+/** 地形のメモ：設計図と同じように手のひらにのせ、絵が見えるようにこちらへ傾ける */
+function landInfoHold(kind) {
+    return {
+        build: () => buildLandInfoModel(kind),
+        slots: [[0, 0.004, 0, 0, 0, 0]],
+        rotation: [0.75, 0.1, 0.05],
+        scale: 0.95,
+        hand: { pose: 'cup', at: [0, -0.01, 0.06], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+    };
+}
 const HOLD_STYLES = {
     // 右下で、木口（明るい切り口）がこちらから見えるよう斜めに抱える。1本目を手前に、2・3本目はその上に俵積み
     wood: {
@@ -692,21 +723,17 @@ const HOLD_STYLES = {
         hand: { pose: 'cup', at: [0.04, -0.02, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
     },
     // 設計図：手のひらにのせ、図面が見えるようにこちらへ傾ける
-    boatBlueprint: {
-        build: buildBlueprintModel,
-        slots: [[0, 0.004, 0, 0, 0, 0]],
-        rotation: [0.75, 0.15, 0.05],
-        scale: 0.85,
-        hand: { pose: 'cup', at: [0, -0.01, 0.08], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
-    },
-    // 地図：設計図と同じように手のひらにのせ、紙の表が見えるようにこちらへ傾ける
-    map: {
-        build: buildMapModel,
-        slots: [[0, 0.004, 0, 0, 0, 0]],
-        rotation: [0.75, -0.1, 0.05],
-        scale: 0.75,
-        hand: { pose: 'cup', at: [0, -0.01, 0.06], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
-    },
+    boatBlueprint: blueprintHold('boat'),
+    pickaxeBlueprint: blueprintHold('pickaxe'),
+    spearBlueprint: blueprintHold('spear'),
+    hammerBlueprint: blueprintHold('hammer'),
+    fishingRodBlueprint: blueprintHold('fishingRod'),
+    draftingTableBlueprint: blueprintHold('draftingTable'),
+    // 白紙の地図・島の地図：設計図と同じように手のひらにのせ、紙の表が見えるようにこちらへ傾ける
+    map: mapHold(buildMapModel),
+    islandMap: mapHold(buildIslandMapModel),
+    // 地形のメモ
+    ...perLandInfo(landInfoHold),
     // 木製の船：持ち物の中では小さく見せて、手のひらにのせる（舳先を左奥へ）
     boat: {
         build: buildBoatModel,

@@ -9,28 +9,32 @@
 
 | ファイル | 中身 | 状態の種類 |
 |---|---|---|
-| `terrain.ts` | 地形の高さ（`HeightField`、`islandField`）、`WORLD_SIZE`・`SEA_FLOOR`、ノイズ、砂・草の判定、地形メッシュ。`terrainHeight()` は `setActiveField()` で選んだ今いる場所の地形を返す | 固定 |
+| `terrain.ts` | 地形の高さ（`HeightField`、`islandField`）、`WORLD_SIZE`・`SEA_FLOOR`、ノイズ、砂・草の判定、地形メッシュ。`terrainHeight()` は `setActiveField()` で選んだ今いる場所の地形を返す（今いない島の木や草を置くときは `withField()` で一時的に切り替える） | 固定 |
 | `water.ts` | 海（`Sea`）と海底の高さのテクスチャ（`bakeSeabed()`） | 固定 |
 | `grass.ts` | 草（`Grass`）。風で揺れる | 固定 |
-| `props.ts` | 木・茂み・岩・桟橋の配置（固定シード）。木は `Tree`、桟橋は `buildPier()`。種から育てる木の見た目は `plantedTree()`（植えた木の番号から決める） | 配置は固定、木・茂み・岩の変化は共有（`actions/` が持つ） |
+| `props.ts` | 木・茂み・岩・桟橋の配置（固定シード）。木は `Tree`、桟橋は `buildPier()`。種から育てる木の見た目は `plantedTree()`（植えた木の番号から決める）。海図に載せた島の木・茂み・岩は `buildIsleProps()`（島の地図の種と、置く数 `IsleCounts` から決める） | 配置は固定、木・茂み・岩の変化は共有（`actions/` が持つ） |
 | `pebbles.ts` | 砂浜に湧く小石（`BeachPebbles`）。置いた数と時間をセーブ。置くのは世界の頼み（`dropItem`）なので、マルチではホストだけが置く | 共有 |
 | `clock.ts` | ワールドの時刻（`WorldClock`）。マルチではホストが進め、ときどき時刻を送って合わせる（ワールドコマンドにはしない） | 共有 |
 | `sky.ts` | 時刻と天気に合わせた空・太陽・月・星・雲・光（`Sky`）。見た目だけ | 演出 |
 | `weather.ts` | 天気（`Weather`）。晴れ・くもり・雨・嵐をワールドの時刻から固定シードで決める。コマンドメニューで決めた天気だけは `setWeather` コマンドで変え、セーブする | 共有 |
 | `rain.ts` | 雨粒・しぶき（`Rain`）。屋根の下に降りこまないよう、上にある物の高さの地図を使う | 自分の画面だけ |
 | `wind.ts` | 風（`Wind`）。天気の風の強さで草・木の葉・茂みを揺らすシェーダー（`swayMaterial()` など） | 自分の画面だけ |
-| `location.ts` | 場所の一覧（`LocationId` = `'island' \| 'town'`、`LOCATIONS`。海図での位置など） | — |
-| `town.ts` | 街の島（`buildTown()`、`townField`）。西側の石造りの港（岸壁・突堤・石段・桟橋）と、広場の農家の屋台と家と地図屋。住人が立つ位置（`farmerSpot`・`mapKeeperSpot`）と、地図に描く建物の形（`buildings`）と名前（`marks`）も返す | 固定 |
+| `location.ts` | 場所の一覧（`LocationId` = `'island' \| 'town' \| IsleId`。`IsleId` は海図に載せた島 `isle0` など）。名前・海図での位置は `locationDef()`、海図に並べる場所は `allLocations()`。海図に載せた島の名前と海図での位置は島の地図の中身から決める（`setIsles()`・`addIsle()` で `isles.ts` が登録する）。`toLocation()` はまだ海図にない島を自分の島にする | 共有（海図に載せた島は isles.ts が持つ） |
+| `isle.ts` | 海図に載せた島の地面（`isleShape()`）。島の地図の種から骨格（`Skeleton`：まどろむ丘・天を衝く峰・凪の平・竜の背・三日月の懐・拒む壁・散らばる飛び石）を選び、地面の形に関わる地形（白い渚・空を映す水・切り立つ岸）を作る。島は中心から 70m に収める（船は 82m の沖に着く） | 固定（地図の中身から決まる） |
+| `isles.ts` | 海図に載せた島（`Isles`）。島の地図を海図に書き写す（`chartIsle`）と島が1つ増える。島ごとに地面・木・茂み・岩と、`TreeChopper`・`BushForager`・`RockMiner`・`ItemDrops` を1組ずつ持つ（`at = { loc }` で、出す頼みとコマンドに島が入る）。どの地形があるかで置く物の数を変える（木々の海・風の原・白い渚・灰の牙・船喰い）。草は初めてその島へ行ったときに生やす（`grow()`）。島の中の物の状態は `serialize()` / `restore()`、動きは `motion()` | 共有：`chartIsle`（島の中の物は各クラスのコマンドに `loc` を付ける） |
+| `town.ts` | 街の島（`buildTown()`、`townField`）。西側の石造りの港（岸壁・突堤・石段・桟橋）と、広場の農家の屋台と家と地図屋。住人が立つ位置（`farmerSpot`・`mapKeeperSpot`）と、街灯と地図屋の明かり（`lamps`）と、地図に描く建物の形（`buildings`）と名前（`marks`）も返す | 固定 |
 | `house.ts` | 街の家（`buildHouse()`。真上から見た四隅を返す）。石積みの1階、木組みの2階、石板ぶきの屋根。家の中の座標で組み立て、位置と向き（`HouseSpot`）を渡して置く。石壁（`stoneWall()`。`open` の戸口は扉を付けない）・隅石・窓・妻壁・切妻屋根の部品はほかの建物からも使う | 固定 |
-| `mapShop.ts` | 街の地図屋（`buildMapShop()`）。石積みの平屋に切妻屋根。扉の無い戸口から中に入れ、中は板張りの床と天井・漆喰の壁、売り台・海図・巻いた地図の棚・地球儀。地図売りが立つ位置と、真上から見た四隅を返す。壁・売り台・棚などの当たり判定は見えない箱 | 固定 |
+| `mapShop.ts` | 街の地図屋（`buildMapShop()`）。石積みの平屋に切妻屋根。扉の無い戸口から中に入れ、中は板張りの床と天井・漆喰の壁、売り台・海図・巻いた地図の棚・地球儀、天井のランタン（夜は灯り、窓も外から光って見える）。地図売りが立つ位置と、真上から見た四隅を返す。壁・売り台・棚などの当たり判定は見えない箱 | 固定 |
+| `lamps.ts` | 街の明かり（`Lamps`）。街灯のランタンと地図屋の中のランタン・窓が、空の明るさ（`Sky.daylight`）に合わせて暗くなると灯る（ガラスは `glassMesh()` で光る材質にし、点光源を置く）。`main.ts` が毎フレーム `update()` する | 演出（時刻と天気から決まるので誰の画面でも同じ） |
 | `townKit.ts` | 石積みや箱をまとめて1つのメッシュにする道具（`Batch`、`colliderBox()`・`colliderCyl()`、面に沿って置く `Face` の関数） | — |
 | `npc.ts` | 住人の体と動き（`Npc`）。見た目は `NpcLook` で住人ごとに変える（`PIER_LOOK`・`FARMER_LOOK`・`MAP_LOOK`。`brim` が 0 なら帽子なし、`glasses` で丸めがね） | 固定 |
 
 ## 書くときの決まり
 
 - 配置・形は固定シードの乱数（`mulberry32`）か ID から決め、誰の画面でも同じにする。`Math.random()` は雨・風・しぶきなど自分の画面だけの演出にだけ使う
-- 自分の島と街は別々の場面で、どちらも `WORLD_SIZE` 四方・中心が原点。今いない場所の物はレイヤーを変えて隠し（描画にもレイキャストにも映らない）、剛体は `physics.park()` で止める
+- 自分の島・街・海図に載せた島は別々の場面で、どれも `WORLD_SIZE` 四方・中心が原点。今いない場所の物はレイヤーを変えて隠し（描画にもレイキャストにも映らない）、剛体は `physics.within()` の中で作って、今いない場所なら止めておく（場所を移るときは `physics.moveTo()`）
 - 街の岸壁・突堤・石段・屋台・家の当たり判定は、見た目のメッシュでなく見えない箱（`colliderBox()` など）で付ける。中に入れる建物（地図屋）は、壁を戸口の左右と上に分けて箱を置く
 - 街のメッシュはなるべく `townKit.ts` の `Batch` でまとめて、描く回数を減らす
-- 新しい場所を足すときは `location.ts` の `LocationId` と `LOCATIONS`、地形の `HeightField`、`main.ts` の `goTo()` を合わせて直す
+- 決まった場所（街のような）を足すときは `location.ts` の `LocationId` と `FIXED`、地形の `HeightField`、`main.ts` の `placeOf()` を合わせて直す。海図に載せた島は `isles.ts` が足す
+- 海図に載せた島に新しい地形を足すときは、地面の形なら `isle.ts`、置く物なら `isles.ts` の数と `props.ts` の `buildIsleProps()` を直す（今はまだ激流・笹・水流・空洞は島に出ない）
 - 共有の状態を持つクラス（`WorldClock`・`Weather`・`BeachPebbles`）は `serialize()` / `restore()` を持ち、`main.ts` の `snapshot()` に入っている。形を変えたら `core/save.ts` の `SAVE_VERSION` を上げる

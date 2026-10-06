@@ -1,8 +1,8 @@
 import { PALETTE } from '../core/palette.js';
-import { LOCATIONS, type LocationId } from '../world/location.js';
+import { allLocations, type LocationId } from '../world/location.js';
 import { keyGuide } from './keyGuide.js';
 
-// 海図：船で世界の端まで漕いでいくと開き、ほかの場所（島・街）を選んで船ごと渡る。
+// 海図：船で世界の端まで漕いでいくと開き、ほかの場所（自分の島・街・島の地図から書き写した島）を選んで船ごと渡る。
 // 開くのも選ぶのも自分だけの UI。渡るのは main が船のワールドコマンド（sailBoat）にする
 
 const css = (c: number) => '#' + c.toString(16).padStart(6, '0');
@@ -59,7 +59,7 @@ export class SeaMap {
 
   private render(): void {
     this.chart.replaceChildren(
-      ...Object.values(LOCATIONS).map((loc) => {
+      ...allLocations().map((loc) => {
         const here = loc.id === this.here;
         const spot = document.createElement('button');
         spot.className = 'seamap-spot' + (here ? ' here' : '');

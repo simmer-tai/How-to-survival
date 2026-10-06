@@ -55,9 +55,55 @@ export class Physics {
     terrainCollider = null;
     links = new Map();
     floaters = [];
+    /** プレイヤーが今いる場所（world/location.ts の LocationId）。ほかの場所の剛体は止めておく */
+    here = 'island';
+    /** within() の中で、今作っている剛体がどの場所の物か（null なら今いる場所） */
+    scope = null;
+    /** 場所ごとの、止めている剛体 */
+    parkedAt = new Map();
     static async create() {
         await RAPIER.init();
         return new Physics();
+    }
+    constructor() {
+        // 今いない場所の剛体として作られた物は、作ったその場で止める（その場所へ移ったときに動かし直す）。
+        // ほかの人が別の島で切った木の丸太・落とした物などが、今いる場所の物とぶつからないように
+        const create = this.world.createRigidBody.bind(this.world);
+        this.world.createRigidBody = (desc) => {
+            const body = create(desc);
+            const loc = this.scope ?? this.here;
+            if (loc !== this.here && body.isEnabled()) {
+                body.setEnabled(false);
+                this.parked(loc).push(body);
+            }
+            return body;
+        };
+    }
+    /** fn の中で作った剛体を、場所 loc の物にする（今いない場所なら止めておく） */
+    within(loc, fn) {
+        const prev = this.scope;
+        this.scope = loc;
+        try {
+            return fn();
+        }
+        finally {
+            this.scope = prev;
+        }
+    }
+    /** プレイヤーが場所 loc へ移る。今の場所の剛体を止め（keep に当てはまる物は残す）、loc で止めていた剛体を動かし直す */
+    moveTo(loc, keep) {
+        if (loc === this.here)
+            return;
+        this.parked(this.here).push(...this.park(keep));
+        this.unpark(this.parked(loc));
+        this.parkedAt.delete(loc);
+        this.here = loc;
+    }
+    parked(loc) {
+        let list = this.parkedAt.get(loc);
+        if (!list)
+            this.parkedAt.set(loc, (list = []));
+        return list;
     }
     /**
      * 描画している地形の三角形そのものを当たり判定にする。body は付ける剛体（街など別の場所の物は、その場所の剛体に付ける）。

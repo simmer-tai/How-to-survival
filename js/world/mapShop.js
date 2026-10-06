@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ACCENT, BALL, BARK, BOX, Batch, CYL, GRASS, LEAF, ROCK, SAND, TRUNK, WATER, colliderBox, colliderCyl, faceBox, facePoint3, } from './townKit.js';
 import { BAND, BEAM, EAVE_OVER, GABLE_OVER, GF_H, PLASTER, UNDER_ROOF, gable, gableRoof, mulberry32, quoins, stoneWall, windowPane, } from './house.js';
+import { glassMesh } from './lamps.js';
 // 街の地図屋。石積みの平屋に石板ぶきの切妻屋根がのり、正面の戸口には扉が無く、そのまま中へ入れる。
 // 中は板張りの床と天井、漆喰の壁。奥に売り台があり、その後ろに地図売りが立つ。奥の壁には大きな海図と、巻いた地図を並べた棚がある。
 // 家の中の座標で組み立て（原点は床の真ん中、戸口のある正面が +Z、棟は Z に沿う）、置く位置と向きは buildMapShop に渡す。
@@ -24,10 +25,13 @@ const SHELF_DEPTH = 0.32; // 奥の壁の棚の奥行き
 const SHELF_FROM = 1.0; // 棚を置く X の範囲（真ん中から左右へ。真ん中には海図を掛ける）
 const SHELF_TO = 2.75;
 const SHELF_LEVELS = [0.55, 1.15, 1.75, 2.35]; // 棚板の高さ
+const LANTERN_INTENSITY = 3.5; // 中のランタンが灯っているときの明かりの強さ
+const LANTERN_RANGE = 7; // 中のランタンの明かりがとどく距離
 const SHOP_SEED = 2024; // 石や板の大きさ・色のばらつきを決める乱数のシード
 const PAPER = SAND.clone().multiplyScalar(1.04); // 地図の紙
 const SEA_INK = WATER.clone().lerp(SAND, 0.55); // 地図に描いた海
 const FLOOR = TRUNK.clone().multiplyScalar(0.95); // 床板
+const LIT_PANE = WATER.clone().lerp(BARK, 0.55).multiplyScalar(0.45); // 外から見た窓ガラス（昼は暗く、夜は中の明かりで光る）
 /** 巻いた地図を1本置く。c は真ん中、dir は巻きの軸の向き（単位ベクトル）、len は長さ */
 function roll(b, c, dir, len, r, color) {
     // 円柱の Y を dir に向ける
@@ -90,13 +94,14 @@ function deskMap(b, x, y, z, w, d, rotY) {
         b.add(BALL, px, y + 0.03, pz, 0.04, 0.03, 0.04, ROCK.clone().multiplyScalar(0.85));
     }
 }
-/** 地図屋を1つ建てて group に入れる。当たり判定の見えない箱は solids に足す */
-export function buildMapShop(group, solids, spot) {
+/** 地図屋を1つ建てて group に入れる。当たり判定の見えない箱は solids に、中のランタンの明かりは lamps に足す */
+export function buildMapShop(group, solids, lamps, spot) {
     const g = new THREE.Group();
     g.position.set(spot.x, spot.y, spot.z);
     g.rotation.y = spot.yaw;
     group.add(g);
     const b = new Batch();
+    const glass = new Batch(); // 灯ると光る物（ランタンのガラスと、外から見た窓）
     const rand = mulberry32(SHOP_SEED);
     const hx = W / 2;
     const hz = D / 2;
@@ -119,8 +124,13 @@ export function buildMapShop(group, solids, spot) {
         [{ axis: 'x', fixed: -hx, from: -hz, to: hz, out: -1 }, [win(-0.5, 0.5)]],
         [{ axis: 'x', fixed: hx, from: -hz, to: hz, out: 1 }, [win(-0.5, 0.5)]],
     ];
-    for (const [f, openings] of outside)
+    for (const [f, openings] of outside) {
         stoneWall(b, rand, f, openings);
+        // 窓ガラスの外に、夜は中の明かりで光る面を重ねる（窓の桟はその手前に出ている）
+        for (const o of openings)
+            if (!o.door)
+                faceBox(glass, f, o.a, o.e, o.y0, o.y1, 0.016, 0.022, LIT_PANE);
+    }
     quoins(b, rand, hx, hz);
     // 戸口の中の、壁の厚みの面（わき柱）
     for (const s of [-1, 1])
@@ -247,7 +257,10 @@ export function buildMapShop(group, solids, spot) {
     b.box(-0.75, 0.055, cz1 + 0.5, 0.75, 0.06, iz - 0.35, SAND.clone().lerp(ACCENT, 0.3), ['ny']);
     const lz = (cz1 + iz) / 2;
     b.add(CYL, 0, GF_H - 0.32, lz, 0.012, 0.16, 0.012, BARK);
-    b.box(-0.11, GF_H - 0.64, lz - 0.11, 0.11, GF_H - 0.42, lz + 0.11, SAND.clone().multiplyScalar(1.08)); // 明かりの窓
+    glass.box(-0.11, GF_H - 0.64, lz - 0.11, 0.11, GF_H - 0.42, lz + 0.11, SAND.clone().multiplyScalar(1.08)); // 明かりの窓
+    for (const [cx, cz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]])
+        b.box(cx * 0.11 - 0.015, GF_H - 0.64, lz + cz * 0.11 - 0.015, cx * 0.11 + 0.015, GF_H - 0.42, lz + cz * 0.11 + 0.015, BEAM); // 窓の枠の柱
+    lamps.add(g, new THREE.Vector3(0, GF_H - 0.53, lz), LANTERN_INTENSITY, LANTERN_RANGE);
     b.box(-0.14, GF_H - 0.44, lz - 0.14, 0.14, GF_H - 0.39, lz + 0.14, BEAM);
     b.box(-0.13, GF_H - 0.68, lz - 0.13, 0.13, GF_H - 0.63, lz + 0.13, BEAM);
     // ---- 正面の看板：戸口の右に下げた、巻いた地図と方位の印の板 ----
@@ -267,6 +280,7 @@ export function buildMapShop(group, solids, spot) {
         faceBox(b, sf, x - 0.005, x + 0.005, 1.87, 1.89, 0.64, 0.8, BARK);
     }
     g.add(b.mesh());
+    g.add(glassMesh(glass));
     // ---- 当たり判定：壁（正面は戸口の左右と上） ----
     colliderBox(g, solids, -hx - 0.12, 0, -hz - 0.12, hx + 0.12, GF_H, -iz);
     colliderBox(g, solids, -hx - 0.12, 0, -iz, -ix, GF_H, iz);

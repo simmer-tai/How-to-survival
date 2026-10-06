@@ -2,8 +2,14 @@
 // 入力側は「頼み（リクエスト）」を作るだけにし、ホストがそれを確かめて ID などを決めた「コマンド」にして、
 // 全員がそのコマンドを同じように適用する。ひとりで遊ぶときは自分がホストなので、その場で確かめて適用する
 
-import type { LocationId } from '../world/location.js';
+import type { IsleId, LocationId } from '../world/location.js';
 import type { WeatherKind, WeatherValues } from '../world/weather.js';
+
+/**
+ * 木・茂み・岩・落とし物のコマンドが、どの島の物か。海図に載せた島の物なら loc にその島を入れる（自分の島の物なら省く）。
+ * 番号（木の番号など）は島ごとに別々
+ */
+export interface OnIsle { loc?: IsleId }
 
 /** 部材を置く。pid はホストが発行する部材の通し番号、p は底面中央の位置、r は 90° 単位の向き */
 export interface PlacePiece { type: 'placePiece'; pid: number; id: string; p: [number, number, number]; r: number }
@@ -19,20 +25,20 @@ export interface HitPiece { type: 'hitPiece'; pid: number; damage: number }
 
 /**
  * アイテムを地面に落とす。did はホストが発行する落とし物の通し番号、p は出てくる位置、v は投げ出す速さ。
- * dmg は使いかけの道具の減った耐久値（拾い直しても耐久値が戻らないように、落とし物にも持たせる）。
+ * dmg は使いかけの道具の減った耐久値（拾い直しても耐久値が戻らないように、落とし物にも持たせる）。chart は島の地図の中身。
  * q は出てくるときの向き（丸太をばらした木材など。省くと落とし物の番号から決める）
  */
-export interface DropItem { type: 'dropItem'; did: number; item: string; count: number; dmg?: number; p: [number, number, number]; v: [number, number, number]; q?: [number, number, number, number] }
+export interface DropItem extends OnIsle { type: 'dropItem'; did: number; item: string; count: number; dmg?: number; chart?: number; p: [number, number, number]; v: [number, number, number]; q?: [number, number, number, number] }
 
 /** 落ちている物を count 個拾う（全部拾うと消える） */
-export interface PickDrop { type: 'pickDrop'; did: number; count: number }
+export interface PickDrop extends OnIsle { type: 'pickDrop'; did: number; count: number }
 
 /**
  * 斧で木を1回叩く。tree は木の番号（props の生成順）。立っている木は耐久値が 0 になると away の向きへ倒れ、
  * 倒れた丸太は 0 になるとばらけて木材の落とし物になる（木材はホストが dropItem で出す）。
  * p は叩いた所（木くずを出す）、away は叩いた水平の向き [x, z]
  */
-export interface ChopTree { type: 'chopTree'; tree: number; p: [number, number, number]; away: [number, number] }
+export interface ChopTree extends OnIsle { type: 'chopTree'; tree: number; p: [number, number, number]; away: [number, number] }
 
 /** 茂みを叩くのに使った物。knife（石のナイフ）で叩くとツルも採れる */
 export type HarvestTool = 'fist' | 'knife' | 'axe';
@@ -41,10 +47,10 @@ export type HarvestTool = 'fist' | 'knife' | 'axe';
  * 茂みを1回叩いて耐久値を damage だけ減らす。bush は茂みの番号。
  * items はその1回で採れる物と個数（減った耐久値の割合で少しずつ出る）。damage と items は道具からホストが決める
  */
-export interface HarvestBush { type: 'harvestBush'; bush: number; damage: number; items: [string, number][] }
+export interface HarvestBush extends OnIsle { type: 'harvestBush'; bush: number; damage: number; items: [string, number][] }
 
 /** 茂みになっている実を1つ摘む */
-export interface PickBerry { type: 'pickBerry'; bush: number }
+export interface PickBerry extends OnIsle { type: 'pickBerry'; bush: number }
 
 /** 岩を叩くのに使った物 */
 export type MineTool = 'pickaxe';
@@ -53,7 +59,7 @@ export type MineTool = 'pickaxe';
  * 岩を1回叩いて耐久値を damage だけ減らす（0 になったら崩れてなくなる）。rock は岩の番号。
  * items はその1回で採れる物と個数（叩くたびに少しずつ、壊したときにまとめて出る）。damage と items は道具からホストが決める
  */
-export interface MineRock { type: 'mineRock'; rock: number; damage: number; items: [string, number][] }
+export interface MineRock extends OnIsle { type: 'mineRock'; rock: number; damage: number; items: [string, number][] }
 
 /** 地面を掘るのに使った物 */
 export type DigTool = 'shovel';
@@ -133,18 +139,24 @@ export interface BurnFuel { type: 'burnFuel'; pid: number }
 
 export type FireCommand = AddFuel | TakeFuel | BurnFuel;
 
-export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | GrowTree | BoatCommand | SpearCommand | SetWeather | FireCommand;
+/**
+ * 島の地図を海図に書き写して、島を海図に載せる（誰の海図にも載り、船で渡れるようになる）。
+ * iid はホストが発行する島の番号（isle0, isle1 …）、chart は島の地図の中身。書き写した地図は、書き写した人のインベントリから減らす
+ */
+export interface ChartIsle { type: 'chartIsle'; iid: number; chart: number }
+
+export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | GrowTree | BoatCommand | SpearCommand | SetWeather | FireCommand | ChartIsle;
 
 /** 参加者からホストへの頼み。新しく増える物の ID はホストが付けるので、まだ持たない */
 export type PieceRequest = Omit<PlacePiece, 'pid'> | RemovePiece | { type: 'hitPiece'; pid: number; tool: StrikeTool };
 export type DropRequest = Omit<DropItem, 'did'> | PickDrop;
-export type BushRequest = { type: 'harvestBush'; bush: number; tool: HarvestTool } | PickBerry;
-export type RockRequest = { type: 'mineRock'; rock: number; tool: MineTool };
+export type BushRequest = ({ type: 'harvestBush'; bush: number; tool: HarvestTool } & OnIsle) | PickBerry;
+export type RockRequest = { type: 'mineRock'; rock: number; tool: MineTool } & OnIsle;
 export type HoleRequest = { type: 'digHole'; p: [number, number]; tool: DigTool } | FillHole | PlantSeed;
 export type BoatRequest = Omit<PlaceBoat, 'bid'> | PickBoat | BoardBoat | LeaveBoat | Omit<SailBoat, 'p' | 'yaw'>;
 export type SpearRequest = Omit<ThrowSpear, 'sid' | 't' | 'hit'> | PickSpear;
 export type WeatherRequest = Pick<SetWeather, 'type' | 'kind'>;
-export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | GrowTree | BoatRequest | SpearRequest | WeatherRequest | FireCommand;
+export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | GrowTree | BoatRequest | SpearRequest | WeatherRequest | FireCommand | Omit<ChartIsle, 'iid'>;
 
 /**
  * 頼みを出す関数（main の requestWorld）。by は頼んだ人の番号で、省くと自分。

@@ -27,7 +27,9 @@ import { WorldClock } from '../world/clock.js';
 // 21 → 22：掘った穴が、掘ってからたった時間（holes.list[].t）を持つようになった
 // 22 → 23：焚火の燃料と火（fires）が入った
 // 23 → 24：種から育てた木（planted）が入った。穴は木の種を置いたか（holes.list[].s）を持つようになった
-export const SAVE_VERSION = 24;
+// 24 → 25：インベントリ・落とし物の島の地図が、地図の中身（chart）を持つようになった
+// 25 → 26：島の地図から海図に載せた島（isles）が入った。プレイヤー・船の場所（loc）に isle0 などが入るようになった
+export const SAVE_VERSION = 26;
 /** 自分だけの状態（マルチでは各自のブラウザに残す） */
 export const PERSONAL_KEYS = ['player', 'inventory', 'vitals', 'guide', 'recipes'];
 /** 1 → 2：部材に並び順で ID を付ける */
@@ -159,6 +161,14 @@ function fromV22(old) {
 function fromV23(old) {
     return { ...old, version: 24, planted: { list: [] } };
 }
+/** 24 → 25：島の地図はまだ1枚もないので、形はそのまま */
+function fromV24(old) {
+    return { ...old, version: 25 };
+}
+/** 25 → 26：海図に載せた島はまだない */
+function fromV25(old) {
+    return { ...old, version: 26, isles: { list: [] } };
+}
 const INDEX_KEY = 'warfarming:worlds';
 const dataKey = (id) => `warfarming:world:${id}`;
 /** 最後に遊んだ順 */
@@ -232,6 +242,10 @@ export function loadWorld(id) {
         data = fromV22(data);
     if (data.version === 23)
         data = fromV23(data);
+    if (data.version === 24)
+        data = fromV24(data);
+    if (data.version === 25)
+        data = fromV25(data);
     if (data.version !== SAVE_VERSION)
         throw new Error(`unknown save version: ${data.version}`);
     return data;

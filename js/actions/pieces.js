@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { PALETTE } from '../core/palette.js';
 import { flat, flatVertex } from '../core/materials.js';
 // 建築部材の形。ハンマーで素材から建てる（素材は items/recipes.ts の BUILD_PLANS）。
-// 作業台と焚火はアイテムとしてクラフトし、手に持って設置する（id はアイテムの id と同じ）
+// 作業台・製図台・焚火はアイテムとしてクラフトし、手に持って設置する（id はアイテムの id と同じ）
 export const CELL = 2; // 建築グリッドの1マス（床1枚の大きさ）
 const WALL_H = 2.4;
 const WALL_T = 0.2; // 壁の厚み
@@ -12,10 +12,14 @@ const DOOR_W = 1; // 入口の幅
 const DOOR_H = 2; // 入口の高さ（プレイヤーの背丈は 1.8）
 export const BENCH_W = 1.6; // 作業台の天板の幅
 export const BENCH_D = 0.9; // 作業台の天板の奥行き
-export const BENCH_H = 1; // 作業台の高さ（天板の上面）
+export const BENCH_H = 1; // 作業台の高さ（天板の上面）。製図台も同じ大きさ
 const BLUEPRINT_W = 1; // 天板に敷く設計図の幅
 const BLUEPRINT_D = 0.62; // 設計図の奥行き
 const BLUEPRINT_TURN = 0.12; // 設計図を天板に対して少し斜めに置く（rad）
+const CHART_W = 1.3; // 製図台の天板に敷く海図の幅
+const CHART_D = 0.7; // 海図の奥行き
+const CHART_TURN = -0.06; // 海図を天板に対して少し斜めに置く（rad）
+const SCROLLS = 3; // 製図台の棚に寝かせる、巻いた地図の数
 const FOUNDATION_LEGS = 2; // 土台の下に伸ばす脚の長さ。斜面に置いても下が浮かないように地面に埋める
 const PLANK_W = 0.3; // 壁に横に張る板の幅（この幅に近い枚数に分ける）
 const PLANK_T = 0.05; // 板の厚み
@@ -59,7 +63,7 @@ const FIRE_LOG_LEAN = 0.5; // 薪を真ん中へ倒す角度（rad）
 const FIRE_H = 0.3; // 焚火の当たり判定の高さ
 const FIRE_STONE_DETAIL = 1; // 焚火の石の丸さ（多面体を細かく割る回数。0 だと角ばる）
 const FIRE_STONE_SINK = 0.3; // 焚火の石を地面に埋める割合（高さに対して）
-export const PIECE_IDS = ['workbench', 'floor', 'wall', 'doorway', 'fence', 'stairs', 'foundation', 'campfire'];
+export const PIECE_IDS = ['workbench', 'draftingTable', 'floor', 'wall', 'doorway', 'fence', 'stairs', 'foundation', 'campfire'];
 /** 底面が y = 0 になる箱 */
 function box([w, h, d, x, y, z]) {
     return new THREE.BoxGeometry(w, h, d).translate(x, y + h / 2, z);
@@ -392,8 +396,57 @@ function blueprint() {
     g.rotation.y = BLUEPRINT_TURN;
     return g;
 }
+/**
+ * 製図台の天板の飾り：生成りの海図（海の中に島が2つ、方位の印、島をつなぐ航路）と、角に置いたインク壺と羽ペン、
+ * 棚に寝かせた巻いた地図
+ */
+function draftingDetails() {
+    const sheet = 0.008;
+    const ink = (w, d, x, z, ry = 0) => new THREE.BoxGeometry(w, 0.002, d).rotateY(ry).translate(x, sheet + 0.001, z);
+    const paper = new THREE.Mesh(new THREE.BoxGeometry(CHART_W, sheet, CHART_D).translate(0, sheet / 2, 0), flat(PALETTE.sand));
+    const sea = new THREE.Mesh(new THREE.BoxGeometry(CHART_W - 0.12, 0.002, CHART_D - 0.12).translate(0, sheet + 0.0005, 0), flat(PALETTE.sky));
+    const isle = (rx, rz, x, z) => new THREE.CylinderGeometry(1, 1, 0.003, 12).scale(rx, 1, rz).translate(x, sheet + 0.002, z);
+    const land = new THREE.Mesh(mergeGeometries([isle(0.16, 0.1, -0.3, 0.05), isle(0.1, 0.08, 0.28, -0.12)]), flat(PALETTE.grass));
+    const lines = new THREE.Mesh(mergeGeometries([
+        // 島から島への航路（点線）
+        ...[0, 1, 2, 3, 4].map((i) => ink(0.05, 0.012, -0.14 + i * 0.075, 0.02 - i * 0.03, 0.38)),
+        // 方位の印（十字）
+        ink(0.16, 0.012, 0.42, 0.18),
+        ink(0.012, 0.16, 0.42, 0.18),
+    ]), flat(PALETTE.bark));
+    const top = new THREE.Group();
+    for (const m of [paper, sea, land, lines]) {
+        m.receiveShadow = true;
+        top.add(m);
+    }
+    top.position.set(0, BENCH_H, 0);
+    top.rotation.y = CHART_TURN;
+    // インク壺と羽ペン（天板の右奥の角）
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.08, 10).translate(0, 0.04, 0), flat(PALETTE.bark));
+    const quill = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.26, 0.05).translate(0, 0.13, 0), flat(PALETTE.sand));
+    quill.rotation.z = -0.35;
+    quill.position.set(0.01, 0.05, 0);
+    const pen = new THREE.Group();
+    pen.add(pot, quill);
+    pen.position.set(BENCH_W / 2 - 0.12, BENCH_H, -BENCH_D / 2 + 0.1);
+    for (const m of [pot, quill])
+        m.castShadow = true;
+    // 棚に寝かせた、巻いた地図
+    const rolls = new THREE.Group();
+    for (let i = 0; i < SCROLLS; i++) {
+        const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, BENCH_W * 0.6, 10).rotateZ(Math.PI / 2), flat(i === 1 ? PALETTE.sky : PALETTE.sand));
+        roll.position.set((i - 1) * 0.06, 0.43, (i - 1) * 0.12);
+        roll.rotation.y = (i - 1) * 0.08;
+        roll.castShadow = true;
+        rolls.add(roll);
+    }
+    const g = new THREE.Group();
+    g.add(top, pen, rolls);
+    return g;
+}
 export const PIECES = [
     define({ id: 'workbench', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: blueprint }),
+    define({ id: 'draftingTable', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: draftingDetails }),
     define({ id: 'floor', snap: 'cell', color: PALETTE.trunk, look: floorLook, collision: [[CELL, FLOOR_H, CELL, 0, 0, 0]], platform: true, hp: 8 }),
     define({ id: 'wall', snap: 'edge', color: PALETTE.trunk, look: wallLook, collision: [[CELL, WALL_H, WALL_T, 0, 0, 0]], platform: false, hp: 10 }),
     define({ id: 'doorway', snap: 'edge', color: PALETTE.trunk, look: doorwayLook, collision: doorwayParts(), platform: false, hp: 10 }),

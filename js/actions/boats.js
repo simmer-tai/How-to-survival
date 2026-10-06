@@ -6,7 +6,7 @@ import { waveOffset } from '../core/waves.js';
 import { BOAT_H, BOAT_SEAT, buildBoatModel, buildBoatOpening } from '../items/itemModels.js';
 import { WORLD_SIZE, islandField, terrainHeight } from '../world/terrain.js';
 import { townField } from '../world/town.js';
-import { LOCATIONS, toLocation } from '../world/location.js';
+import { locationDef, toLocation } from '../world/location.js';
 const BOAT_SCALE = 3.2; // アイテムのモデル（長さ 1）を何倍にして浮かべるか（長さ約 3.2、人が2人乗れるくらい）
 const DRAFT = 0.28; // 船底が水面より沈む深さ
 const MIN_DEPTH = 0.45; // 船の下の水の深さがこれ以上ないと浮かべられない（波の谷で底に着かないように）
@@ -47,8 +47,6 @@ const SIZE = (() => {
     model.traverse((o) => o.geometry?.dispose());
     return { halfL: size.x / 2, halfW: size.z / 2, height: size.y, centerY: center.y };
 })();
-/** 場所ごとの地形（今いない場所の浅瀬を調べるのに使う） */
-const FIELDS = { island: islandField, town: townField };
 /** 水面から、船のモデルの原点までの高さ（船底が DRAFT だけ沈む） */
 const FLOAT_Y = SIZE.height / 2 - SIZE.centerY - DRAFT;
 /** 船の局所座標（舳先が +X、右舷が +Z）の点を、世界の水平位置にする */
@@ -130,6 +128,8 @@ export class Boats {
     request = () => false;
     /** 自分の乗っている船が別の場所へ渡り終えたときに呼ばれる（main がプレイヤーの場所を切り替える） */
     onSail = () => { };
+    /** 場所ごとの地形（今いない場所の浅瀬を調べるのに使う。海図に載せた島は main が引く） */
+    fieldOf = (loc) => (loc === 'town' ? townField : islandField);
     constructor(world, camera, physics, 
     /** 視線をさえぎる物（地形・岩・桟橋・建てた部材など） */
     targets, inventory) {
@@ -382,7 +382,7 @@ export class Boats {
      */
     check(loc, x, z, yaw) {
         if (loc !== this.location)
-            return this.shallowAt(FIELDS[loc], x, z, yaw, MIN_DEPTH) ? 'shallow' : null;
+            return this.shallowAt(this.fieldOf(loc), x, z, yaw, MIN_DEPTH) ? 'shallow' : null;
         // 岩・桟橋・ほかの船・部材・プレイヤーとぶつからないか（波で上下しても当たらないよう、水面の上まで高く調べる）
         return this.blockedAt(x, z, yaw, MIN_DEPTH, CHECK_H, COLLIDE.boatQuery);
     }
@@ -422,8 +422,8 @@ export class Boats {
      * 着いた所にほかの船があれば、横へずらす
      */
     arrival(b, to) {
-        const [fx, fz] = LOCATIONS[b.loc].chart;
-        const [tx, tz] = LOCATIONS[to].chart;
+        const [fx, fz] = locationDef(b.loc).chart;
+        const [tx, tz] = locationDef(to).chart;
         const dir = new THREE.Vector2(fx - tx, fz - tz).normalize(); // 海図の右が +X、下が +Z
         const yaw = Math.atan2(dir.y, -dir.x); // 中心へ（-dir の向きへ）舳先を向ける
         const others = [...this.boats.values()].filter((o) => o !== b && o.loc === to);

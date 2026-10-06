@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { WORLD_SIZE, type HeightField } from '../world/terrain.js';
 import type { Platform } from '../world/props.js';
-import { LOCATIONS, type LocationId } from '../world/location.js';
+import { locationDef, type LocationId } from '../world/location.js';
 import { keyGuide } from './keyGuide.js';
 
 // 地図：地図（アイテム）を持って右クリックすると広げ、今いる場所（島・街）を真上から見た図に、自分の位置と向きを描く。
@@ -94,7 +94,7 @@ export class AreaMap {
   /** here の地図を広げる */
   open(here: LocationId, view: MapView): void {
     this.here = here;
-    this.titleEl.textContent = `${LOCATIONS[here].name}の地図`;
+    this.titleEl.textContent = `${locationDef(here).name}の地図`;
     this.setOpen(true);
     this.update(view);
   }

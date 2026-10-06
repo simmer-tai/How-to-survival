@@ -3,7 +3,7 @@ import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import type { Tree } from '../world/props.js';
 import { RAPIER, COLLIDE, hullDesc, type Physics } from '../core/physics.js';
-import type { ChopTree, Requester } from '../core/commands.js';
+import type { ChopTree, OnIsle, Requester } from '../core/commands.js';
 
 const REACH = 3.2; // 斧が届く距離
 const LOG_REACH = 4.2; // 地面に横たわる丸太は少し遠くまで届く
@@ -71,6 +71,8 @@ export class TreeChopper {
   request: Requester = () => false;
   /** 丸太をばらし終えて、木がなくなったときに呼ばれる（木の番号） */
   onRemove: (id: number) => void = () => {};
+  /** どの島の物か（海図に載せた島なら { loc }。頼みとコマンドに入れて、main がその島へ振り分ける） */
+  at: OnIsle = {};
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -137,7 +139,7 @@ export class TreeChopper {
     if (!target) return false;
     const { obj, s, hit, away } = target;
     if (s.phase === 'standing' && hit.distance > REACH) return false;
-    return this.request({ type: 'chopTree', tree: this.idOf.get(obj)!, p: hit.point.toArray(), away: [away.x, away.z] });
+    return this.request({ type: 'chopTree', tree: this.idOf.get(obj)!, p: hit.point.toArray(), away: [away.x, away.z], ...this.at });
   }
 
   // ---- ホスト側：頼みを確かめてコマンドにする ----
@@ -148,7 +150,7 @@ export class TreeChopper {
     const s = obj && this.states.get(obj);
     const wellFormed = req.p.length === 3 && req.away.length === 2 && [...req.p, ...req.away].every(Number.isFinite);
     if (!s || !wellFormed || (s.phase !== 'standing' && s.phase !== 'log')) return null;
-    return { type: 'chopTree', tree: req.tree, p: [...req.p], away: [...req.away] };
+    return { type: 'chopTree', tree: req.tree, p: [...req.p], away: [...req.away], ...this.at };
   }
 
   // ---- 適用側：コマンドの値だけで木を変える（カメラや入力は見ない） ----

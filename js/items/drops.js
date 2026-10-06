@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { RAPIER, COLLIDE } from '../core/physics.js';
-import { ITEMS, validDmg } from './inventory.js';
+import { ITEMS, makeStack } from './inventory.js';
 import { disposeModel, itemModel } from './itemIcons.js';
 const PICKUP_REACH = 3.6; // 視線の先、この距離までの落とし物を拾える
 const FLY_TIME = 0.22; // 拾ったときに吸い寄せられる時間
@@ -45,6 +45,8 @@ function dropModel(item) {
     const half = size.multiplyScalar(scale / 2).max(new THREE.Vector3(DROP_MIN_HALF, DROP_MIN_HALF, DROP_MIN_HALF));
     return { model: g, half };
 }
+/** スタックが1つずつ持つ値（減った耐久値・島の地図の中身）のうち、あるものだけ */
+const tags = (s) => ({ ...(s.dmg ? { dmg: s.dmg } : {}), ...(s.chart !== undefined ? { chart: s.chart } : {}) });
 /**
  * 地面に落ちている物（物理で転がる）。木をばらしたときの木材や、プレイヤーが G で落とした物。
  * 視線を合わせて F で拾う。落とす・拾うはワールドコマンドにして apply で適用する
@@ -57,10 +59,12 @@ export class ItemDrops {
     raycaster = new THREE.Raycaster();
     target = new THREE.Vector3();
     nextDid = 0;
-    /** 拾った物が手元に届いたときに呼ばれる（dmg は使いかけの道具の減った耐久値） */
+    /** 拾った物が手元に届いたときに呼ばれる（dmg は使いかけの道具の減った耐久値、chart は島の地図の中身） */
     onCollect = () => { };
     /** 共有ワールドへの頼みを出す（main が設定する）。適用できたら true */
     request = () => false;
+    /** どの島の物か（海図に載せた島なら { loc }。頼みとコマンドに入れて、main がその島へ振り分ける） */
+    at = {};
     constructor(world, physics) {
         this.world = world;
         this.physics = physics;
@@ -84,7 +88,7 @@ export class ItemDrops {
                 out.set(Math.random() - 0.5, 0, Math.random() - 0.5);
             out.normalize().multiplyScalar(1 + Math.random() * 1.5);
             const v = [out.x + (Math.random() - 0.5), 3 + Math.random() * 2, out.z + (Math.random() - 0.5)];
-            this.request({ type: 'dropItem', item: 'wood', count: 1, p: pos.toArray(), v, q: rotation.toArray() }, null);
+            this.request({ type: 'dropItem', item: 'wood', count: 1, p: pos.toArray(), v, q: rotation.toArray(), ...this.at }, null);
         }
     }
     /** 条件に合う落とし物の数（位置はホストの物理で計算したもの） */
@@ -118,16 +122,16 @@ export class ItemDrops {
         const count = Math.min(d.count, room(d.item));
         if (count <= 0)
             return true;
-        this.request({ type: 'pickDrop', did: d.did, count });
+        this.request({ type: 'pickDrop', did: d.did, count, ...this.at });
         return true;
     }
-    /** eye（目の位置）から look の向きへアイテムを投げ出す頼みを出す。落とせたら true */
-    throw(item, count, dmg, eye, look) {
+    /** eye（目の位置）から look の向きへスタック s を投げ出す頼みを出す。落とせたら true */
+    throw(s, eye, look) {
         const p = eye.clone().addScaledVector(look, 0.5);
         p.y -= 0.3;
         const v = look.clone().multiplyScalar(3.5);
         v.y += 1.5;
-        return this.request({ type: 'dropItem', item, count, ...(dmg ? { dmg } : {}), p: p.toArray(), v: v.toArray() });
+        return this.request({ type: 'dropItem', item: s.item, count: s.count, ...tags(s), p: p.toArray(), v: v.toArray(), ...this.at });
     }
     // ---- ホスト側：頼みを確かめてコマンドにする ----
     /** 頼みを確かめ、ID を付けたコマンドにする。できない頼みなら null（マルチではホストだけが呼ぶ） */
@@ -137,17 +141,19 @@ export class ItemDrops {
             const wellFormed = [...req.p, ...req.v].every(Number.isFinite) && Number.isInteger(req.count);
             if (!def || !wellFormed || req.count < 1 || req.count > def.maxStack)
                 return null;
-            if (req.dmg !== undefined && validDmg(req.item, req.dmg) === undefined)
+            // 減った耐久値・島の地図の中身は、正しい値でなければ断る
+            const checked = makeStack(req.item, req.count, req.dmg, req.chart);
+            if (checked.dmg !== req.dmg || checked.chart !== req.chart)
                 return null;
             if (req.q !== undefined && (req.q.length !== 4 || !req.q.every(Number.isFinite)))
                 return null;
-            return { ...req, did: this.nextDid++ };
+            return { ...req, did: this.nextDid++, ...this.at };
         }
         // 同じ物を2人が拾おうとしたら、先に届いた方だけが拾える（残りの個数を超える分は拾えない）
         const d = this.drops.get(req.did);
         if (!d || !Number.isInteger(req.count) || req.count < 1)
             return null;
-        return { ...req, count: Math.min(req.count, d.count) };
+        return { ...req, count: Math.min(req.count, d.count), ...this.at };
     }
     // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
     /** mine は自分の頼みか（自分が拾ったときだけ、手元へ吸い寄せてインベントリに入れる） */
@@ -158,7 +164,7 @@ export class ItemDrops {
             const rand = seeded(cmd.did);
             const euler = new THREE.Euler(rand() * 6.3, rand() * 6.3, rand() * 6.3);
             const rotation = cmd.q ? new THREE.Quaternion(...cmd.q).normalize() : new THREE.Quaternion().setFromEuler(euler);
-            const body = this.add(cmd.did, cmd.item, cmd.count, new THREE.Vector3(...cmd.p), rotation, cmd.dmg);
+            const body = this.add(cmd.did, makeStack(cmd.item, cmd.count, cmd.dmg, cmd.chart), new THREE.Vector3(...cmd.p), rotation);
             body.setLinvel({ x: cmd.v[0], y: cmd.v[1], z: cmd.v[2] }, true);
             body.setAngvel({ x: (rand() - 0.5) * 6, y: (rand() - 0.5) * 6, z: (rand() - 0.5) * 6 }, true);
             return;
@@ -171,13 +177,13 @@ export class ItemDrops {
             d.count -= count;
             // 一部だけ拾ったときは、拾った分の見た目を別に作って吸い寄せる
             if (mine)
-                this.fly(d.item, count, d.dmg, this.buildMesh(d.item).mesh, d.mesh.position);
+                this.fly({ ...d, count }, this.buildMesh(d.item).mesh, d.mesh.position);
             return;
         }
         this.drops.delete(cmd.did);
         this.physics.removeBody(d.body);
         if (mine) {
-            this.fly(d.item, count, d.dmg, d.mesh, d.mesh.position);
+            this.fly({ ...d, count }, d.mesh, d.mesh.position);
         }
         else {
             d.mesh.removeFromParent();
@@ -212,12 +218,11 @@ export class ItemDrops {
     // ---- セーブ ----
     serialize() {
         const pose = ({ position: p, quaternion: q }) => [p.x, p.y, p.z, q.x, q.y, q.z, q.w];
-        const dmg = (d) => (d.dmg ? { dmg: d.dmg } : {});
-        const list = [...this.drops.values()].map((d) => ({ did: d.did, item: d.item, count: d.count, ...dmg(d), p: pose(d.mesh) }));
+        const list = [...this.drops.values()].map((d) => ({ did: d.did, item: d.item, count: d.count, ...tags(d), p: pose(d.mesh) }));
         // 吸い寄せ中のものはまだインベントリに入っていないので、その場に落ちているものとして保存する
         let next = this.nextDid;
         for (const f of this.flyers)
-            list.push({ did: next++, item: f.item, count: f.count, ...dmg(f), p: [...f.from.toArray(), 0, 0, 0, 1] });
+            list.push({ did: next++, item: f.item, count: f.count, ...tags(f), p: [...f.from.toArray(), 0, 0, 0, 1] });
         return { next, list };
     }
     restore(save) {
@@ -227,10 +232,10 @@ export class ItemDrops {
             disposeModel(d.mesh);
         }
         this.drops.clear();
-        for (const { did, item, count, dmg, p: [x, y, z, qx, qy, qz, qw] } of save.list) {
+        for (const { did, item, count, dmg, chart, p: [x, y, z, qx, qy, qz, qw] } of save.list) {
             if (!(item in ITEMS) || count < 1)
                 continue;
-            this.add(did, item, count, new THREE.Vector3(x, y, z), new THREE.Quaternion(qx, qy, qz, qw), validDmg(item, dmg));
+            this.add(did, makeStack(item, count, dmg, chart), new THREE.Vector3(x, y, z), new THREE.Quaternion(qx, qy, qz, qw));
         }
         this.nextDid = Math.max(this.nextDid, save.next);
     }
@@ -241,7 +246,8 @@ export class ItemDrops {
         const { model, half } = dropModel(item);
         return { mesh: model, collider: RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z), radius: Math.min(half.x, half.y, half.z) };
     }
-    add(did, item, count, pos, rotation, dmg) {
+    add(did, s, pos, rotation) {
+        const { item } = s;
         const { mesh, collider, radius } = this.buildMesh(item);
         mesh.traverse((o) => {
             o.castShadow = true;
@@ -260,15 +266,16 @@ export class ItemDrops {
             this.physics.addFloater(body, radius);
         mesh.position.copy(pos);
         mesh.quaternion.copy(rotation);
-        this.drops.set(did, { did, item, count, dmg, mesh, body });
+        this.drops.set(did, { did, ...s, mesh, body });
         this.nextDid = Math.max(this.nextDid, did + 1);
         return body;
     }
-    fly(item, count, dmg, mesh, from) {
+    /** s は拾った分（種類・個数・減った耐久値・島の地図の中身） */
+    fly(s, mesh, from) {
         if (!mesh.parent)
             this.world.add(mesh);
         mesh.position.copy(from);
-        this.flyers.push({ item, count, dmg, mesh, from: from.clone(), time: 0 });
+        this.flyers.push({ item: s.item, count: s.count, ...tags(s), mesh, from: from.clone(), time: 0 });
     }
     /** player はカメラ（目）の位置 */
     update(dt, player) {
@@ -284,7 +291,7 @@ export class ItemDrops {
                 f.mesh.removeFromParent();
                 disposeModel(f.mesh);
                 this.flyers.splice(i, 1);
-                this.onCollect(f.item, f.count, f.dmg);
+                this.onCollect(f.item, f.count, f.dmg, f.chart);
             }
         }
     }

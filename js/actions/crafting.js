@@ -4,8 +4,10 @@ import { flatTransparent } from '../core/materials.js';
 import { RAPIER } from '../core/physics.js';
 import { VIEW_LAYER } from '../player/hand.js';
 import { disposeModel, itemIcon, itemModel } from '../items/itemIcons.js';
-import { ITEMS } from '../items/inventory.js';
+import { ITEMS, makeStack } from '../items/inventory.js';
 import { candidates, ingredients, totals } from '../items/recipes.js';
+import { LAND_INFO_IDS, LAND_KINDS, landInfoId } from '../items/landInfo.js';
+import { CHART_MAX_TOLD, newChart } from '../items/islandChart.js';
 import { BENCH_D, BENCH_H, BENCH_W } from './pieces.js';
 import { FISH_IDS } from '../items/fishKinds.js';
 import { keyGuide } from '../ui/keyGuide.js';
@@ -27,7 +29,7 @@ const ZOOM_TIME = 0.35; // 作業台に寄る時間
 const MAX_ITEMS = 40; // 台に置ける素材の数
 const HOVER_SCALE = 1.12;
 /** 寝かせて置く素材（道具や枝・葉は立てると不自然なので、アイコンの正面を上に向ける） */
-const FLAT_ITEMS = ['stick', 'leaf', 'vine', 'hoe', 'axe', 'sword', 'stoneKnife', 'spear', 'hammer', 'pickaxe', 'shovel', 'fishingRod', ...FISH_IDS, 'boatBlueprint', 'map'];
+const FLAT_ITEMS = ['stick', 'leaf', 'vine', 'hoe', 'axe', 'sword', 'stoneKnife', 'spear', 'hammer', 'pickaxe', 'shovel', 'fishingRod', ...FISH_IDS, 'boatBlueprint', 'pickaxeBlueprint', 'spearBlueprint', 'hammerBlueprint', 'fishingRodBlueprint', 'draftingTableBlueprint', 'map', 'islandMap', ...LAND_INFO_IDS];
 const UP = new THREE.Vector3(0, 1, 0);
 // ---- 台の上の物理演算 ----
 // 台ごとに小さな物理ワールドを別に作る（本編の物理とは混ぜない）。
@@ -62,8 +64,10 @@ export class Crafting {
     camera;
     inventory;
     isOpen = false;
-    /** 使っている作業台（手元の台なら null） */
+    /** 使っている作業台か製図台（手元の台なら null） */
     bench = null;
+    /** 使っている台の種類（手元の台なら null） */
+    station = null;
     surface = null;
     handSurface;
     items = [];
@@ -111,9 +115,10 @@ export class Crafting {
         canvas.addEventListener('mousedown', (e) => this.onDown(e));
         canvas.addEventListener('mousemove', (e) => this.onMove(e));
     }
-    /** 作業台を使う（インベントリを開くと、その天板に寄る） */
-    useBench(info) {
+    /** 作業台か製図台を使う（インベントリを開くと、その天板に寄る） */
+    useBench(info, station) {
         this.bench = info;
+        this.station = station;
         this.inventory.setOpen(true);
     }
     /** インベントリの開閉に合わせて呼ぶ */
@@ -128,7 +133,7 @@ export class Crafting {
             // 前に入りきらず台に残した素材があれば、また落とす
             for (const t of this.items)
                 this.spawn(t, { x: (Math.random() - 0.5) * s.halfW, z: (Math.random() - 0.5) * s.halfD });
-            this.titleEl.textContent = this.bench ? '作業台' : '手元';
+            this.titleEl.textContent = this.station === 'draftingTable' ? '製図台' : this.station === 'workbench' ? '作業台' : '手元';
             this.candKey = null;
             this.render();
             if (this.bench) {
@@ -147,7 +152,7 @@ export class Crafting {
             for (const s of this.stacks()) {
                 const left = this.inventory.putBack(s);
                 for (let i = 0; i < (left?.count ?? 0); i++)
-                    rest.push({ item: s.item, dmg: s.dmg, obj: null, body: null, pop: 1 });
+                    rest.push({ item: s.item, dmg: s.dmg, chart: s.chart, obj: null, body: null, pop: 1 });
             }
             this.items = rest;
             for (const f of this.puffs)
@@ -163,6 +168,7 @@ export class Crafting {
                 this.camera.quaternion.copy(this.savedQuat); // 視線を元に戻す
             this.surface = null;
             this.bench = null;
+            this.station = null;
             this.setHovered(null);
         }
         this.headEl.classList.toggle('open', open);
@@ -250,12 +256,12 @@ export class Crafting {
             return;
         // 1つつまむ。そのままインベントリのマスで離すと戻せる
         this.removeItem(t);
-        this.inventory.hold(t.dmg ? { item: t.item, count: 1, dmg: t.dmg } : { item: t.item, count: 1 }, true);
+        this.inventory.hold(makeStack(t.item, 1, t.dmg, t.chart), true);
         this.render();
     }
     /** 台の上の素材をインベントリに返す（いっぱいで入らなければ台に残す） */
     returnItem(t) {
-        if (!t || this.inventory.add(t.item, 1, t.dmg) > 0)
+        if (!t || this.inventory.add(t.item, 1, t.dmg, t.chart) > 0)
             return;
         this.removeItem(t);
         this.render();
@@ -266,7 +272,7 @@ export class Crafting {
         const at = this.surfacePoint();
         if (!at || this.items.length >= MAX_ITEMS)
             return;
-        const t = { item: held.item, dmg: held.dmg, obj: null, body: null, pop: 1 };
+        const t = { item: held.item, dmg: held.dmg, chart: held.chart, obj: null, body: null, pop: 1 };
         this.items.push(t);
         this.spawn(t, at);
         held.count -= 1;
@@ -378,10 +384,11 @@ export class Crafting {
         if (this.hovered === t)
             this.setHovered(null);
     }
-    /** 台の上の素材を、アイテムごとのスタックにまとめる（使いかけの道具は1つずつ別にする） */
+    /** 台の上の素材を、アイテムごとのスタックにまとめる（使いかけの道具と島の地図は1つずつ別にする） */
     stacks() {
-        const worn = this.items.filter((t) => t.dmg).map((t) => ({ item: t.item, count: 1, dmg: t.dmg }));
-        const fresh = totals(this.items.filter((t) => !t.dmg).map(({ item }) => ({ item, count: 1 })));
+        const single = (t) => t.dmg || t.chart !== undefined;
+        const worn = this.items.filter(single).map((t) => makeStack(t.item, 1, t.dmg, t.chart));
+        const fresh = totals(this.items.filter((t) => !single(t)).map(({ item }) => ({ item, count: 1 })));
         return [...[...fresh].map(([item, count]) => ({ item, count })), ...worn];
     }
     have() {
@@ -409,6 +416,26 @@ export class Crafting {
                 this.spawn(t, { x: 0, z: 0 }, true);
             }
         } while (e.shiftKey && canMake());
+        this.puff(0, 0, 1);
+        this.render();
+    }
+    /**
+     * 島の地図を作る：台の上の白紙の地図1枚と、メモを種類ごとに1枚ずつ使う。
+     * 中身（種）はここで決めて、完成した地図に持たせる（items/islandChart.ts）
+     */
+    craftChart(recipe, told, e) {
+        e.preventDefault();
+        if (!ingredients(recipe).every(([item, n]) => (this.have().get(item) ?? 0) >= n))
+            return;
+        this.consume(recipe);
+        const t = { item: 'islandMap', chart: newChart(told), obj: null, body: null, pop: 1 };
+        if (this.items.length >= MAX_ITEMS) {
+            this.inventory.add(t.item, 1, undefined, t.chart);
+        }
+        else {
+            this.items.push(t);
+            this.spawn(t, { x: 0, z: 0 }, true);
+        }
         this.puff(0, 0, 1);
         this.render();
     }
@@ -473,29 +500,78 @@ export class Crafting {
         this.candKey = key;
         this.hintEl.innerHTML = keyGuide(have.size > 0
             ? '候補を [左] で作る（[Shift]+[左]：作れるだけ） ／ 台の素材は [右] でインベントリに戻る'
-            : '素材をドラッグして台に1つずつ置くと、作れる物が出てくる' + (this.bench ? '' : '（作業台を置いて [F] で使うと、もっといろいろ作れる）'));
+            : this.station === 'draftingTable'
+                ? `白紙の地図と、地形のメモ（${CHART_MAX_TOLD}種類まで）を台に置くと、島の地図を作れる`
+                : '素材をドラッグして台に1つずつ置くと、作れる物が出てくる' + (this.bench ? '' : '（作業台を置いて [F] で使うと、もっといろいろ作れる）'));
         this.candEl.innerHTML = '';
-        const list = candidates(this.bench ? 'workbench' : null, have, this.knows);
-        if (have.size > 0 && list.length === 0) {
+        // 素材を置くまでは一覧の枠ごと隠す
+        this.candEl.classList.toggle('empty', have.size === 0);
+        if (have.size === 0)
+            return;
+        const list = candidates(this.station, have, this.knows);
+        const ready = list.filter((c) => c.times > 0);
+        const lack = list.filter((c) => c.times === 0);
+        const chart = this.station === 'draftingTable' ? this.chartCandidate(have) : null;
+        const title = el('div', 'craft-cands-title');
+        title.textContent = '作れる物';
+        this.candEl.append(title);
+        if (ready.length === 0 && !chart?.ok) {
             const note = el('div', 'craft-note');
-            note.textContent = 'この素材で作れる物はない';
+            note.textContent = chart?.note ?? (list.length === 0 && !chart ? 'この素材で作れる物はない' : '素材が足りない');
             this.candEl.append(note);
         }
-        for (const { recipe, times } of list) {
-            const row = el('div', 'craft-cand' + (times > 0 ? '' : ' lack'));
-            const cost = ingredients(recipe)
-                .map(([item, n]) => {
-                const got = have.get(item) ?? 0;
-                return `<span class="craft-cost${got < n ? ' short' : ''}"><img src="${itemIcon(item)}" alt="" draggable="false">${got}/${n}</span>`;
-            })
-                .join('');
-            const count = recipe.count > 1 ? ` ×${recipe.count}` : '';
-            row.innerHTML =
-                `<img class="craft-icon" src="${itemIcon(recipe.result)}" alt="" draggable="false">` +
-                    `<div><div class="craft-name">${ITEMS[recipe.result].name}${count}</div><div>${cost}<span class="craft-times">${times > 0 ? `${times}回作れる` : '素材が足りない'}</span></div></div>`;
-            row.addEventListener('mousedown', (e) => this.craft(recipe, e));
-            this.candEl.append(row);
+        if (chart?.ok)
+            this.candEl.append(chart.row);
+        for (const c of ready)
+            this.candEl.append(this.candRow(c.recipe, c.times, have));
+        if (lack.length > 0 || (chart && !chart.ok)) {
+            const sub = el('div', 'craft-cands-sub');
+            sub.textContent = 'あと少しで作れる物';
+            this.candEl.append(sub);
+            if (chart && !chart.ok)
+                this.candEl.append(chart.row);
+            for (const c of lack)
+                this.candEl.append(this.candRow(c.recipe, 0, have));
         }
+    }
+    /**
+     * 製図台の、島の地図の候補。台に白紙の地図かメモがあれば出す。
+     * メモは種類ごとに1枚ずつ使い、CHART_MAX_TOLD 種類より多いと作れない（note にわけを入れる）
+     */
+    chartCandidate(have) {
+        const told = LAND_KINDS.filter((k) => have.has(landInfoId(k)));
+        if (told.length === 0 && !have.has('map'))
+            return null;
+        const cost = { map: 1 };
+        for (const k of told)
+            cost[landInfoId(k)] = 1;
+        const recipe = { result: 'islandMap', count: 1, cost, station: 'draftingTable' };
+        const tooMany = told.length > CHART_MAX_TOLD;
+        const ok = told.length > 0 && !tooMany && have.has('map');
+        const row = this.candRow(recipe, ok ? 1 : 0, have, false);
+        if (ok)
+            row.addEventListener('mousedown', (e) => this.craftChart(recipe, told, e));
+        const note = tooMany ? `メモは${CHART_MAX_TOLD}種類までしか組み合わせられない` : told.length === 0 ? '地形のメモを置くと、島の地図を作れる' : undefined;
+        return { ok, row, note };
+    }
+    /** 候補1つの行：完成品のアイコンと名前、作れる回数、必要な素材（持っている数/いる数）。clickable なら押すと作る */
+    candRow(recipe, times, have, clickable = true) {
+        const row = el('div', 'craft-cand' + (times > 0 ? '' : ' lack'));
+        const cost = ingredients(recipe)
+            .map(([item, n]) => {
+            const got = have.get(item) ?? 0;
+            return `<span class="craft-cost${got < n ? ' short' : ''}" title="${ITEMS[item].name}"><img src="${itemIcon(item)}" alt="" draggable="false">${got}/${n}</span>`;
+        })
+            .join('');
+        const count = recipe.count > 1 ? `<span class="craft-count">×${recipe.count}</span>` : '';
+        const badge = times > 0 ? `<span class="craft-times">${times}回</span>` : '';
+        row.innerHTML =
+            `<span class="craft-iconbox"><img class="craft-icon" src="${itemIcon(recipe.result)}" alt="" draggable="false"></span>` +
+                `<div class="craft-body"><div class="craft-top"><span class="craft-name">${ITEMS[recipe.result].name}${count}</span>${badge}</div>` +
+                `<div class="craft-costs">${cost}</div></div>`;
+        if (times > 0 && clickable)
+            row.addEventListener('mousedown', (e) => this.craft(recipe, e));
+        return row;
     }
     // ---- 台 ----
     /** 手元の台：カメラの前に浮かぶ半透明のグリッド。手や持ち物と同じく、世界の上に重ねて描く */
@@ -599,25 +675,49 @@ function injectStyle() {
     .craft-title { font-size: calc(20 * var(--u)); font-weight: 700; letter-spacing: 0.15em; }
     .craft-hint { font-size: calc(13 * var(--u)); opacity: 0.9; margin-top: calc(2 * var(--u)); }
     .craft-cands {
-      right: calc(24 * var(--u)); top: calc(90 * var(--u)); width: calc(250 * var(--u));
+      right: calc(24 * var(--u)); top: calc(90 * var(--u)); width: calc(270 * var(--u)); box-sizing: border-box;
       max-height: calc(100vh - 360 * var(--u)); overflow-y: auto;
+      padding: calc(8 * var(--u)); border-radius: calc(10 * var(--u)); background: rgba(43, 38, 51, 0.7);
     }
-    .craft-cand { display: flex; align-items: center; gap: calc(10 * var(--u)); padding: calc(4 * var(--u)) 0; cursor: pointer; }
+    .craft-cands.empty { display: none; }
+    .craft-cands-title { font-size: calc(14 * var(--u)); font-weight: 700; letter-spacing: 0.1em; margin: 0 calc(2 * var(--u)) calc(6 * var(--u)); }
+    .craft-cands-sub {
+      font-size: calc(12 * var(--u)); font-weight: 700; opacity: 0.75; margin: calc(10 * var(--u)) calc(2 * var(--u)) calc(6 * var(--u));
+      padding-top: calc(8 * var(--u)); border-top: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .craft-cand {
+      display: flex; align-items: center; gap: calc(8 * var(--u)); padding: calc(6 * var(--u)); margin-bottom: calc(4 * var(--u));
+      border-radius: calc(8 * var(--u)); background: rgba(255, 255, 255, 0.14); cursor: pointer;
+      box-shadow: inset 0 0 0 calc(2 * var(--u)) rgba(255, 255, 255, 0.12); transition: background 0.1s;
+    }
+    .craft-cand:hover { background: rgba(255, 255, 255, 0.28); box-shadow: inset 0 0 0 calc(2 * var(--u)) ${css(PALETTE.sand)}; }
+    .craft-iconbox {
+      flex: none; display: flex; align-items: center; justify-content: center;
+      width: calc(46 * var(--u)); height: calc(46 * var(--u)); border-radius: calc(6 * var(--u)); background: rgba(43, 38, 51, 0.45);
+    }
     .craft-icon {
-      width: calc(54 * var(--u)); height: calc(54 * var(--u)); transition: transform 0.12s;
+      width: calc(42 * var(--u)); height: calc(42 * var(--u)); transition: transform 0.12s;
       filter: drop-shadow(0 calc(2 * var(--u)) calc(2 * var(--u)) rgba(43, 38, 51, 0.6));
     }
-    .craft-cand:hover .craft-icon { transform: scale(1.15) rotate(-4deg); }
+    .craft-cand:hover .craft-icon { transform: scale(1.12) rotate(-4deg); }
     .craft-cand:hover .craft-name { color: ${css(PALETTE.sand)}; }
-    .craft-cand.lack { cursor: default; opacity: 0.5; }
+    .craft-cand.lack { cursor: default; background: rgba(255, 255, 255, 0.06); box-shadow: none; }
+    .craft-cand.lack .craft-iconbox, .craft-cand.lack .craft-name { opacity: 0.6; }
     .craft-cand.lack:hover .craft-icon { transform: none; }
     .craft-cand.lack:hover .craft-name { color: #fff; }
+    .craft-body { flex: 1; min-width: 0; }
+    .craft-top { display: flex; align-items: center; justify-content: space-between; gap: calc(6 * var(--u)); }
     .craft-name { font-size: calc(15 * var(--u)); font-weight: 700; }
-    .craft-cost { display: inline-flex; align-items: center; gap: calc(2 * var(--u)); margin-right: calc(6 * var(--u)); font-size: calc(12 * var(--u)); font-weight: 700; }
+    .craft-count { font-size: calc(12 * var(--u)); margin-left: calc(4 * var(--u)); opacity: 0.85; }
+    .craft-times {
+      flex: none; font-size: calc(11 * var(--u)); font-weight: 700; color: #2b2633; text-shadow: none;
+      padding: calc(1 * var(--u)) calc(6 * var(--u)); border-radius: calc(8 * var(--u)); background: ${css(PALETTE.grass)};
+    }
+    .craft-costs { display: flex; flex-wrap: wrap; gap: calc(2 * var(--u)) calc(8 * var(--u)); margin-top: calc(3 * var(--u)); }
+    .craft-cost { display: inline-flex; align-items: center; gap: calc(2 * var(--u)); font-size: calc(12 * var(--u)); font-weight: 700; }
     .craft-cost img { width: calc(18 * var(--u)); height: calc(18 * var(--u)); }
     .craft-cost.short { color: ${css(PALETTE.accent)}; }
-    .craft-times { font-size: calc(11 * var(--u)); opacity: 0.85; }
-    .craft-note { font-size: calc(13 * var(--u)); opacity: 0.85; }
+    .craft-note { font-size: calc(13 * var(--u)); opacity: 0.85; margin: 0 calc(2 * var(--u)) calc(4 * var(--u)); }
     .craft-label {
       position: fixed; left: 0; top: 0; z-index: 4; pointer-events: none; color: #fff; white-space: nowrap;
       font-size: calc(14 * var(--u)); font-weight: 700; text-shadow: 0 1px 0 #2b2633, 0 0 calc(3 * var(--u)) #2b2633;

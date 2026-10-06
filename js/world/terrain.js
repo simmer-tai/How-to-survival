@@ -95,6 +95,17 @@ let activeField = islandField;
 export function setActiveField(field) {
     activeField = field;
 }
+/** fn の間だけ field を今の地形にする（今いない島の木や草を、その島の地形に合わせて置くとき） */
+export function withField(field, fn) {
+    const prev = activeField;
+    activeField = field;
+    try {
+        return fn();
+    }
+    finally {
+        activeField = prev;
+    }
+}
 /** 今いる場所の、描画されている三角形そのものの高さを返す */
 export function terrainHeight(x, z) {
     return activeField.height(x, z);

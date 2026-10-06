@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { RAPIER, COLLIDE, type Physics } from '../core/physics.js';
-import type { DropCommand, DropRequest, Requester } from '../core/commands.js';
-import { ITEMS, validDmg, type ItemId } from './inventory.js';
+import type { DropCommand, DropRequest, OnIsle, Requester } from '../core/commands.js';
+import { ITEMS, makeStack, type ItemId, type Stack } from './inventory.js';
 import { disposeModel, itemModel } from './itemIcons.js';
 
 const PICKUP_REACH = 3.6; // 視線の先、この距離までの落とし物を拾える
@@ -51,8 +51,11 @@ function dropModel(item: ItemId): { model: THREE.Object3D; half: THREE.Vector3 }
   return { model: g, half };
 }
 
-/** セーブデータ上の落とし物1つ。p は位置・向き [x, y, z, qx, qy, qz, qw]。dmg は使いかけの道具の減った耐久値 */
-export interface DropSave { did: number; item: ItemId; count: number; dmg?: number; p: number[] }
+/** セーブデータ上の落とし物1つ。p は位置・向き [x, y, z, qx, qy, qz, qw]。dmg は使いかけの道具の減った耐久値、chart は島の地図の中身 */
+export interface DropSave { did: number; item: ItemId; count: number; dmg?: number; chart?: number; p: number[] }
+
+/** スタックが1つずつ持つ値（減った耐久値・島の地図の中身）のうち、あるものだけ */
+const tags = (s: { dmg?: number; chart?: number }) => ({ ...(s.dmg ? { dmg: s.dmg } : {}), ...(s.chart !== undefined ? { chart: s.chart } : {}) });
 export interface DropsSave { next: number; list: DropSave[] }
 
 interface Drop {
@@ -60,6 +63,7 @@ interface Drop {
   item: ItemId;
   count: number;
   dmg?: number;
+  chart?: number;
   mesh: THREE.Object3D;
   body: RAPIER.RigidBody;
 }
@@ -69,6 +73,7 @@ interface Flyer {
   item: ItemId;
   count: number;
   dmg?: number;
+  chart?: number;
   mesh: THREE.Object3D;
   from: THREE.Vector3;
   time: number;
@@ -85,10 +90,12 @@ export class ItemDrops {
   private readonly target = new THREE.Vector3();
   private nextDid = 0;
 
-  /** 拾った物が手元に届いたときに呼ばれる（dmg は使いかけの道具の減った耐久値） */
-  onCollect: (item: ItemId, count: number, dmg?: number) => void = () => {};
+  /** 拾った物が手元に届いたときに呼ばれる（dmg は使いかけの道具の減った耐久値、chart は島の地図の中身） */
+  onCollect: (item: ItemId, count: number, dmg?: number, chart?: number) => void = () => {};
   /** 共有ワールドへの頼みを出す（main が設定する）。適用できたら true */
   request: Requester = () => false;
+  /** どの島の物か（海図に載せた島なら { loc }。頼みとコマンドに入れて、main がその島へ振り分ける） */
+  at: OnIsle = {};
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -114,7 +121,7 @@ export class ItemDrops {
       if (out.lengthSq() < 1e-4) out.set(Math.random() - 0.5, 0, Math.random() - 0.5);
       out.normalize().multiplyScalar(1 + Math.random() * 1.5);
       const v: [number, number, number] = [out.x + (Math.random() - 0.5), 3 + Math.random() * 2, out.z + (Math.random() - 0.5)];
-      this.request({ type: 'dropItem', item: 'wood', count: 1, p: pos.toArray(), v, q: rotation.toArray() as [number, number, number, number] }, null);
+      this.request({ type: 'dropItem', item: 'wood', count: 1, p: pos.toArray(), v, q: rotation.toArray() as [number, number, number, number], ...this.at }, null);
     }
   }
 
@@ -148,17 +155,17 @@ export class ItemDrops {
     if (!d) return false;
     const count = Math.min(d.count, room(d.item));
     if (count <= 0) return true;
-    this.request({ type: 'pickDrop', did: d.did, count });
+    this.request({ type: 'pickDrop', did: d.did, count, ...this.at });
     return true;
   }
 
-  /** eye（目の位置）から look の向きへアイテムを投げ出す頼みを出す。落とせたら true */
-  throw(item: ItemId, count: number, dmg: number | undefined, eye: THREE.Vector3, look: THREE.Vector3): boolean {
+  /** eye（目の位置）から look の向きへスタック s を投げ出す頼みを出す。落とせたら true */
+  throw(s: Stack, eye: THREE.Vector3, look: THREE.Vector3): boolean {
     const p = eye.clone().addScaledVector(look, 0.5);
     p.y -= 0.3;
     const v = look.clone().multiplyScalar(3.5);
     v.y += 1.5;
-    return this.request({ type: 'dropItem', item, count, ...(dmg ? { dmg } : {}), p: p.toArray(), v: v.toArray() });
+    return this.request({ type: 'dropItem', item: s.item, count: s.count, ...tags(s), p: p.toArray(), v: v.toArray(), ...this.at });
   }
 
   // ---- ホスト側：頼みを確かめてコマンドにする ----
@@ -169,14 +176,16 @@ export class ItemDrops {
       const def = ITEMS[req.item as ItemId];
       const wellFormed = [...req.p, ...req.v].every(Number.isFinite) && Number.isInteger(req.count);
       if (!def || !wellFormed || req.count < 1 || req.count > def.maxStack) return null;
-      if (req.dmg !== undefined && validDmg(req.item as ItemId, req.dmg) === undefined) return null;
+      // 減った耐久値・島の地図の中身は、正しい値でなければ断る
+      const checked = makeStack(req.item as ItemId, req.count, req.dmg, req.chart);
+      if (checked.dmg !== req.dmg || checked.chart !== req.chart) return null;
       if (req.q !== undefined && (req.q.length !== 4 || !req.q.every(Number.isFinite))) return null;
-      return { ...req, did: this.nextDid++ };
+      return { ...req, did: this.nextDid++, ...this.at };
     }
     // 同じ物を2人が拾おうとしたら、先に届いた方だけが拾える（残りの個数を超える分は拾えない）
     const d = this.drops.get(req.did);
     if (!d || !Number.isInteger(req.count) || req.count < 1) return null;
-    return { ...req, count: Math.min(req.count, d.count) };
+    return { ...req, count: Math.min(req.count, d.count), ...this.at };
   }
 
   // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
@@ -188,7 +197,7 @@ export class ItemDrops {
       const rand = seeded(cmd.did);
       const euler = new THREE.Euler(rand() * 6.3, rand() * 6.3, rand() * 6.3);
       const rotation = cmd.q ? new THREE.Quaternion(...cmd.q).normalize() : new THREE.Quaternion().setFromEuler(euler);
-      const body = this.add(cmd.did, cmd.item as ItemId, cmd.count, new THREE.Vector3(...cmd.p), rotation, cmd.dmg);
+      const body = this.add(cmd.did, makeStack(cmd.item as ItemId, cmd.count, cmd.dmg, cmd.chart), new THREE.Vector3(...cmd.p), rotation);
       body.setLinvel({ x: cmd.v[0], y: cmd.v[1], z: cmd.v[2] }, true);
       body.setAngvel({ x: (rand() - 0.5) * 6, y: (rand() - 0.5) * 6, z: (rand() - 0.5) * 6 }, true);
       return;
@@ -199,13 +208,13 @@ export class ItemDrops {
     if (count < d.count) {
       d.count -= count;
       // 一部だけ拾ったときは、拾った分の見た目を別に作って吸い寄せる
-      if (mine) this.fly(d.item, count, d.dmg, this.buildMesh(d.item).mesh, d.mesh.position);
+      if (mine) this.fly({ ...d, count }, this.buildMesh(d.item).mesh, d.mesh.position);
       return;
     }
     this.drops.delete(cmd.did);
     this.physics.removeBody(d.body);
     if (mine) {
-      this.fly(d.item, count, d.dmg, d.mesh, d.mesh.position);
+      this.fly({ ...d, count }, d.mesh, d.mesh.position);
     } else {
       d.mesh.removeFromParent();
       disposeModel(d.mesh);
@@ -242,11 +251,10 @@ export class ItemDrops {
 
   serialize(): DropsSave {
     const pose = ({ position: p, quaternion: q }: THREE.Object3D) => [p.x, p.y, p.z, q.x, q.y, q.z, q.w];
-    const dmg = (d: { dmg?: number }) => (d.dmg ? { dmg: d.dmg } : {});
-    const list: DropSave[] = [...this.drops.values()].map((d) => ({ did: d.did, item: d.item, count: d.count, ...dmg(d), p: pose(d.mesh) }));
+    const list: DropSave[] = [...this.drops.values()].map((d) => ({ did: d.did, item: d.item, count: d.count, ...tags(d), p: pose(d.mesh) }));
     // 吸い寄せ中のものはまだインベントリに入っていないので、その場に落ちているものとして保存する
     let next = this.nextDid;
-    for (const f of this.flyers) list.push({ did: next++, item: f.item, count: f.count, ...dmg(f), p: [...f.from.toArray(), 0, 0, 0, 1] });
+    for (const f of this.flyers) list.push({ did: next++, item: f.item, count: f.count, ...tags(f), p: [...f.from.toArray(), 0, 0, 0, 1] });
     return { next, list };
   }
 
@@ -257,9 +265,9 @@ export class ItemDrops {
       disposeModel(d.mesh);
     }
     this.drops.clear();
-    for (const { did, item, count, dmg, p: [x, y, z, qx, qy, qz, qw] } of save.list) {
+    for (const { did, item, count, dmg, chart, p: [x, y, z, qx, qy, qz, qw] } of save.list) {
       if (!(item in ITEMS) || count < 1) continue;
-      this.add(did, item, count, new THREE.Vector3(x, y, z), new THREE.Quaternion(qx, qy, qz, qw), validDmg(item, dmg));
+      this.add(did, makeStack(item, count, dmg, chart), new THREE.Vector3(x, y, z), new THREE.Quaternion(qx, qy, qz, qw));
     }
     this.nextDid = Math.max(this.nextDid, save.next);
   }
@@ -272,7 +280,8 @@ export class ItemDrops {
     return { mesh: model, collider: RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z), radius: Math.min(half.x, half.y, half.z) };
   }
 
-  private add(did: number, item: ItemId, count: number, pos: THREE.Vector3, rotation: THREE.Quaternion, dmg?: number): RAPIER.RigidBody {
+  private add(did: number, s: Stack, pos: THREE.Vector3, rotation: THREE.Quaternion): RAPIER.RigidBody {
+    const { item } = s;
     const { mesh, collider, radius } = this.buildMesh(item);
     mesh.traverse((o) => {
       o.castShadow = true;
@@ -296,15 +305,16 @@ export class ItemDrops {
     if (!SINKS.has(item)) this.physics.addFloater(body, radius);
     mesh.position.copy(pos);
     mesh.quaternion.copy(rotation);
-    this.drops.set(did, { did, item, count, dmg, mesh, body });
+    this.drops.set(did, { did, ...s, mesh, body });
     this.nextDid = Math.max(this.nextDid, did + 1);
     return body;
   }
 
-  private fly(item: ItemId, count: number, dmg: number | undefined, mesh: THREE.Object3D, from: THREE.Vector3): void {
+  /** s は拾った分（種類・個数・減った耐久値・島の地図の中身） */
+  private fly(s: Stack, mesh: THREE.Object3D, from: THREE.Vector3): void {
     if (!mesh.parent) this.world.add(mesh);
     mesh.position.copy(from);
-    this.flyers.push({ item, count, dmg, mesh, from: from.clone(), time: 0 });
+    this.flyers.push({ item: s.item, count: s.count, ...tags(s), mesh, from: from.clone(), time: 0 });
   }
 
   /** player はカメラ（目）の位置 */
@@ -321,7 +331,7 @@ export class ItemDrops {
         f.mesh.removeFromParent();
         disposeModel(f.mesh);
         this.flyers.splice(i, 1);
-        this.onCollect(f.item, f.count, f.dmg);
+        this.onCollect(f.item, f.count, f.dmg, f.chart);
       }
     }
   }

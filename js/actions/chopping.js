@@ -46,6 +46,8 @@ export class TreeChopper {
     request = () => false;
     /** 丸太をばらし終えて、木がなくなったときに呼ばれる（木の番号） */
     onRemove = () => { };
+    /** どの島の物か（海図に載せた島なら { loc }。頼みとコマンドに入れて、main がその島へ振り分ける） */
+    at = {};
     constructor(world, trees, physics) {
         this.world = world;
         this.physics = physics;
@@ -103,7 +105,7 @@ export class TreeChopper {
         const { obj, s, hit, away } = target;
         if (s.phase === 'standing' && hit.distance > REACH)
             return false;
-        return this.request({ type: 'chopTree', tree: this.idOf.get(obj), p: hit.point.toArray(), away: [away.x, away.z] });
+        return this.request({ type: 'chopTree', tree: this.idOf.get(obj), p: hit.point.toArray(), away: [away.x, away.z], ...this.at });
     }
     // ---- ホスト側：頼みを確かめてコマンドにする ----
     /** 立っている木か、倒れきった丸太なら叩ける（倒れている途中は叩けない）。できなければ null（マルチではホストだけが呼ぶ） */
@@ -113,7 +115,7 @@ export class TreeChopper {
         const wellFormed = req.p.length === 3 && req.away.length === 2 && [...req.p, ...req.away].every(Number.isFinite);
         if (!s || !wellFormed || (s.phase !== 'standing' && s.phase !== 'log'))
             return null;
-        return { type: 'chopTree', tree: req.tree, p: [...req.p], away: [...req.away] };
+        return { type: 'chopTree', tree: req.tree, p: [...req.p], away: [...req.away], ...this.at };
     }
     // ---- 適用側：コマンドの値だけで木を変える（カメラや入力は見ない） ----
     /** 耐久値を1減らす。立っている木は 0 で叩いた向きの奥へ倒れ、丸太は 0 でばらけて木材になる（木材は onSplit でホストが出す） */

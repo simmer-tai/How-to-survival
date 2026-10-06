@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { buildAxe, buildFishingRod, buildHammer, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
-import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildSeedModel, buildDirtModel } from './itemModels.js';
+import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
 import { FISH_KINDS } from './fishKinds.js';
+import { perLandInfo } from './landInfo.js';
 const ICON_SIZE = 128; // 描画解像度（px）。表示はこれより小さく縮める
 const FOV = 24;
 function part(geometry, color, x = 0, y = 0, z = 0) {
@@ -209,18 +210,27 @@ function buildBoatIcon() {
     return g;
 }
 /** 設計図：紙の表（図面）をこちらへ向けて、少し傾ける */
-function buildBlueprintIcon() {
+function buildBlueprintIcon(kind) {
     const g = new THREE.Group();
-    const sheet = buildBlueprintModel();
+    const sheet = buildBlueprintModel(kind);
     sheet.rotation.x = Math.PI / 2 - 0.35;
     g.add(sheet);
     g.rotation.set(0, -0.25, 0.1);
     return g;
 }
-/** 地図：紙の表をこちらへ向けて、少し傾ける */
-function buildMapIcon() {
+/** 地形のメモ：設計図と同じように、紙の表をこちらへ向けて少し傾ける */
+function buildLandInfoIcon(kind) {
     const g = new THREE.Group();
-    const sheet = buildMapModel();
+    const sheet = buildLandInfoModel(kind);
+    sheet.rotation.x = Math.PI / 2 - 0.35;
+    g.add(sheet);
+    g.rotation.set(0, -0.15, 0.06);
+    return g;
+}
+/** 地図（白紙の地図・島の地図）：紙の表をこちらへ向けて、少し傾ける */
+function buildMapIcon(build) {
+    const g = new THREE.Group();
+    const sheet = build();
     sheet.rotation.x = Math.PI / 2 - 0.35;
     g.add(sheet);
     g.rotation.set(0, 0.2, -0.08);
@@ -257,8 +267,15 @@ const MODELS = {
     flounder: () => buildFishIcon('flounder'),
     bonito: () => buildFishIcon('bonito'),
     coin: buildCoinIcon,
-    boatBlueprint: buildBlueprintIcon,
-    map: buildMapIcon,
+    boatBlueprint: () => buildBlueprintIcon('boat'),
+    pickaxeBlueprint: () => buildBlueprintIcon('pickaxe'),
+    spearBlueprint: () => buildBlueprintIcon('spear'),
+    hammerBlueprint: () => buildBlueprintIcon('hammer'),
+    fishingRodBlueprint: () => buildBlueprintIcon('fishingRod'),
+    draftingTableBlueprint: () => buildBlueprintIcon('draftingTable'),
+    map: () => buildMapIcon(buildMapModel),
+    islandMap: () => buildMapIcon(buildIslandMapModel),
+    ...perLandInfo((k) => () => buildLandInfoIcon(k)),
     boat: buildBoatIcon,
     hoe: () => tools(buildHoe()),
     axe: () => tools(sideView(buildAxe())),
@@ -271,6 +288,7 @@ const MODELS = {
     shovel: () => tools(frontView(buildShovel())),
     fishingRod: () => tools(sideView(buildFishingRod())),
     workbench: () => pieceIconModel('workbench'),
+    draftingTable: () => pieceIconModel('draftingTable'),
     campfire: () => pieceIconModel('campfire'),
 };
 /** 道具は斜めに置いて、少し奥行きが見える角度から見る */

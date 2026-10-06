@@ -3,7 +3,9 @@ import { PALETTE } from './core/palette.js';
 import { createTerrain, islandField, setActiveField, terrainHeight } from './world/terrain.js';
 import { buildProps } from './world/props.js';
 import { buildTown, townField } from './world/town.js';
-import { LOCATIONS, toLocation } from './world/location.js';
+import { locationDef, toLocation } from './world/location.js';
+import { Isles } from './world/isles.js';
+import { readChart } from './items/islandChart.js';
 import { Player } from './player/player.js';
 import { Inventory, ITEMS } from './items/inventory.js';
 import { RecipeBook } from './items/recipeBook.js';
@@ -17,6 +19,7 @@ import { GroundDigger } from './actions/digging.js';
 import { Saplings } from './actions/planting.js';
 import { Fisher } from './actions/fishing.js';
 import { FISH_IDS } from './items/fishKinds.js';
+import { LAND_INFO_IDS } from './items/landInfo.js';
 import { COLLIDE, Physics, RAPIER, WATER_LEVEL } from './core/physics.js';
 import { Sea, bakeSeabed } from './world/water.js';
 import { Grass } from './world/grass.js';
@@ -48,6 +51,7 @@ import { Shop } from './story/shop.js';
 import { FINISH_TOAST } from './story/quests.js';
 import { SeaMap, travelFade } from './ui/seaMap.js';
 import { AreaMap } from './ui/areaMap.js';
+import { IslandChartView } from './ui/islandChartView.js';
 import { Avatar, AVATAR_LAYER, loadLook } from './player/avatar.js';
 import { AvatarMenu } from './ui/avatarEditor.js';
 import { CommandMenu } from './ui/commandMenu.js';
@@ -136,10 +140,10 @@ physics.addStatic(npc.collider);
 const grass = new Grass(props.rocks, props.platforms);
 scene.add(grass.mesh);
 // ---- 街（船で世界の端まで行くと海図が開き、そこから渡る別の場所。今は石造りの港だけ） ----
-// 街の当たり判定は1つの剛体にまとめ、街にいる間だけ動かす
+// 街の当たり判定は1つの剛体にまとめる（街の物として作るので、街にいる間だけ動く）
 const town = buildTown();
 scene.add(town.group);
-const townBody = physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setEnabled(false));
+const townBody = physics.within('town', () => physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed()));
 const townTerrainCollider = physics.addTerrain(town.terrain, townBody);
 for (const mesh of town.solids)
     physics.addStatic(mesh, townBody);
@@ -185,8 +189,8 @@ const inventory = new Inventory();
 // 手に入れた素材を右下に出す
 const pickupFeed = new PickupFeed();
 /** 拾ったり採ったりした物をインベントリに入れ、獲得ログに出す。持ちきれない分はなくなる（dmg は使いかけの道具の減った耐久値） */
-const gain = (item, count, dmg) => {
-    const lost = inventory.add(item, count, dmg);
+const gain = (item, count, dmg, chart) => {
+    const lost = inventory.add(item, count, dmg, chart);
     pickupFeed.show(item, count - lost, inventory.count(item), lost);
 };
 /** 手に持っている道具を1回使った分だけ傷める。耐久値が尽きて壊れたら知らせる */
@@ -211,10 +215,11 @@ const shovelHand = new ToolHand(camera, buildShovel());
 const ROD_LEAN = 0.45;
 const rodRig = buildFishingRodRig();
 const rodHand = new ToolHand(camera, rodRig.root, ROD_LEAN);
-// 石の槍も長いので、釣り竿と同じだけ前へ倒して構える（左クリックで前へ突き、茂みを刈る。右クリック長押しで力を溜めて投げる）
-const spearHand = new ToolHand(camera, buildSpear(), ROD_LEAN, THRUST_MOTION);
-// 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・地図・船・焚火は選んでいる間、手に持って見せる
-const materialHands = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'boatBlueprint', 'map', 'boat', 'campfire'].map((kind) => ({ kind, hand: new ItemHand(camera, kind) }));
+// 石の槍は穂先を前へ向け、水平近くまで倒してまっすぐ構える（左クリックで前へ突き、茂みを刈る。右クリック長押しで力を溜めて投げる）
+const SPEAR_LEAN = 1.4;
+const spearHand = new ToolHand(camera, buildSpear(), SPEAR_LEAN, THRUST_MOTION);
+// 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・白紙の地図・島の地図・地形のメモ・船・焚火は選んでいる間、手に持って見せる
+const materialHands = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'boatBlueprint', 'pickaxeBlueprint', 'spearBlueprint', 'hammerBlueprint', 'fishingRodBlueprint', 'draftingTableBlueprint', 'map', 'islandMap', ...LAND_INFO_IDS, 'boat', 'campfire'].map((kind) => ({ kind, hand: new ItemHand(camera, kind) }));
 // 何も持っていない（空のスロットを選んでいる）ときは素手を見せる
 const emptyHand = new EmptyHand(camera);
 const chopper = new TreeChopper(props.group, props.trees, physics);
@@ -255,7 +260,8 @@ fisher.onCatch = (item, count) => {
 // 道具は何かに当てるたびに自分の耐久値も 1 減る（空振りでは減らない）
 const AXE_REACH = 3.2; // 斧で部材を叩ける距離
 hand.onImpact = () => {
-    if (builder.strike('axe', AXE_REACH) || forager.harvest(camera, 'axe', AXE_REACH) || chopper.chop(camera))
+    const k = kit();
+    if (builder.strike('axe', AXE_REACH) || (k && (k.forager.harvest(camera, 'axe', AXE_REACH) || k.chopper.chop(camera))))
         wearTool('axe');
 };
 // 素手で殴ると、木なら木くずが少し飛ぶ（木は倒れず、何も採れない）。茂みは耐久値が減る
@@ -264,7 +270,7 @@ const PUNCH_REACH = 2.2;
 const KNIFE_REACH = 2.6;
 const PICK_REACH = 3.2;
 pickaxeHand.onImpact = () => {
-    if (miner.mine(camera, 'pickaxe', PICK_REACH))
+    if (kit()?.miner.mine(camera, 'pickaxe', PICK_REACH))
         wearTool('pickaxe');
 };
 const SHOVEL_REACH = 3; // スコップで掘れる距離・土で穴を埋められる距離
@@ -289,18 +295,19 @@ shovelHand.onImpact = () => {
         wearTool('shovel');
 };
 knifeHand.onImpact = () => {
-    if (forager.harvest(camera, 'knife', KNIFE_REACH))
+    if (kit()?.forager.harvest(camera, 'knife', KNIFE_REACH))
         wearTool('stoneKnife');
 };
 // 石の槍は先に石のナイフが付いているので、ナイフと同じく茂みを刈れる（ツルも採れる）。柄が長い分だけ遠くまで届く
 const SPEAR_REACH = 3.4;
 spearHand.onImpact = () => {
-    if (forager.harvest(camera, 'knife', SPEAR_REACH))
+    if (kit()?.forager.harvest(camera, 'knife', SPEAR_REACH))
         wearTool('spear');
 };
 emptyHand.onImpact = () => {
-    if (!builder.strike('fist', PUNCH_REACH) && !forager.harvest(camera, 'fist', PUNCH_REACH))
-        chopper.punch(camera, PUNCH_REACH);
+    const k = kit();
+    if (!builder.strike('fist', PUNCH_REACH) && k && !k.forager.harvest(camera, 'fist', PUNCH_REACH))
+        k.chopper.punch(camera, PUNCH_REACH);
 };
 // ---- 建築（ハンマーを持って右クリックで部材を選び、左クリックで視線の先に建てる。X で壊す。作業台はアイテムを持って置く） ----
 const blockers = [...props.trees.map((t) => t.object), ...props.bushes]; // 木や茂みの奥には置けない
@@ -310,24 +317,16 @@ const digger = new GroundDigger(props.group, terrain, aimTargets, blockers);
 digger.onHarvest = gain;
 digger.canDigAt = (x, z) => !builder.covers(x, islandField.height(x, z), z) &&
     !saplings.occupied(x, z, SAPLING_CLEARANCE) &&
-    !(here === 'island' ? props.platforms : islandPlatforms).some((p) => x > p.minX - 0.3 && x < p.maxX + 0.3 && z > p.minZ - 0.3 && z < p.maxZ + 0.3);
+    !(here === 'island' ? props.platforms : platformStash.get('island') ?? []).some((p) => x > p.minX - 0.3 && x < p.maxX + 0.3 && z > p.minZ - 0.3 && z < p.maxZ + 0.3);
 // 穴に木の種を置いて土で埋めると苗が生え、時間がたつと斧で切れる木に育つ（ほかの木のそばには植えられない）
 const SAPLING_CLEARANCE = 0.8; // 植えた木の根元とこれより近い所は掘れない
 const saplings = new Saplings(props.group, chopper, props.trees.map((t) => t.object));
 digger.canPlantAt = (x, z) => saplings.canPlantAt(x, z);
 digger.onSprout = (hid, x, z) => saplings.sprout(hid, x, z);
+// ほかの人が島で植えた・育てた木は、ほかの場所にいる間は隠して止めておく（applyWorld が隠し、剛体は physics が止める）
 saplings.onAdd = (obj, body) => {
     if (!body)
         blockers.push(obj); // 苗の奥にも建てたり掘ったりできない
-    if (here === 'island')
-        return;
-    // ほかの人が島で植えた・育てた木は、街にいる間は隠して止めておく（島へ戻ると見える）
-    if (body) {
-        body.setEnabled(false);
-        parkedIsland.push(body);
-    }
-    else
-        setShown(obj, false);
 };
 // 建てた床などの下や、掘った穴の中から草が生えないようにする
 const coverGrass = () => grass.setCovered((x, y, z) => builder.covers(x, y, z) || digger.covers(x, z));
@@ -368,45 +367,69 @@ const setShown = (root, shown) => {
 setShown(town.group, false);
 /** プレイヤーが今いる場所（自分だけの状態。セーブに入れる） */
 let here = 'island';
-/** 街にいる間に止めている、島の剛体 */
-let parkedIsland = [];
-/** 街にいる間に預かっている、島の上に乗れる所（桟橋・床など） */
-const islandPlatforms = [];
+// ---- 島の地図から海図に載せた島（共有ワールド）。木・茂み・岩・落とし物の仕組みを島ごとに1組ずつ持つ ----
+const isles = new Isles({
+    scene,
+    physics,
+    aimTargets,
+    request: (req, by) => requestWorld(req, by),
+    gain,
+    sway: (o) => wind.addSwaying(o),
+    // 今いない島は隠す（剛体は physics が止めている）
+    built: (isle) => {
+        if (isle.id !== here)
+            setShown(isle.group, false);
+    },
+});
+const homePlace = { roots: [terrain, props.group, grass.mesh], field: islandField, collider: islandTerrainCollider, seabed: islandSeabed, platforms: [] };
+const townPlace = { roots: [town.group], field: townField, collider: townTerrainCollider, seabed: townSeabed, platforms: town.platforms };
+const placeOf = (loc) => {
+    if (loc === 'island')
+        return homePlace;
+    const isle = isles.get(loc);
+    if (!isle)
+        return townPlace;
+    return { roots: [isle.group], field: isle.shape.field, collider: isle.terrainCollider, seabed: isle.seabed, platforms: isle.props.platforms };
+};
+/** ほかの場所にいる間に預かっている、その場所の上に乗れる所（自分の島の桟橋・床など） */
+const platformStash = new Map();
 /** プレイヤーを別の場所へ移す（自分の画面の切り替え。船で渡るときは先に sailBoat を適用しておく） */
 const goTo = (loc) => {
     if (loc === here)
         return;
-    const island = loc === 'island';
-    for (const o of [terrain, props.group, grass.mesh])
-        setShown(o, island);
-    setShown(town.group, !island);
-    if (island) {
-        physics.unpark(parkedIsland);
-        parkedIsland = [];
-        townBody.setEnabled(false);
-        props.platforms.splice(0, props.platforms.length, ...islandPlatforms);
-    }
-    else {
-        // 島の物（地形・岩・木・部材・落とし物など）の剛体を止める。プレイヤーと船は残す（船は場所ごとに Boats が切り替える）
-        parkedIsland = physics.park((b) => b === player.rigidBody || b === townBody || boats.owns(b));
-        townBody.setEnabled(true);
-        islandPlatforms.splice(0, islandPlatforms.length, ...props.platforms);
-        props.platforms.splice(0, props.platforms.length, ...town.platforms);
-    }
-    physics.terrainCollider = island ? islandTerrainCollider : townTerrainCollider;
-    setActiveField(island ? islandField : townField);
-    sea.setSeabed(island ? islandSeabed : townSeabed);
+    const from = placeOf(here);
+    const to = placeOf(loc);
+    const isle = isles.get(loc);
+    if (isle)
+        isles.grow(isle); // 初めて行く島なら草を生やす
+    for (const o of from.roots)
+        setShown(o, false);
+    for (const o of to.roots)
+        setShown(o, true);
+    // 今いた場所の剛体（地形・岩・木・部材・落とし物など）を止め、行き先の剛体を動かす。プレイヤーと船は残す（船は場所ごとに Boats が切り替える）
+    physics.moveTo(loc, (b) => b === player.rigidBody || boats.owns(b));
+    platformStash.set(here, [...props.platforms]);
+    props.platforms.splice(0, props.platforms.length, ...(platformStash.get(loc) ?? to.platforms));
+    physics.terrainCollider = to.collider;
+    setActiveField(to.field);
+    sea.setSeabed(to.seabed);
     boats.setLocation(loc);
-    builder.disabled = !island; // 建てた部材は自分の島にだけ置ける
+    builder.disabled = loc !== 'island'; // 建てた部材は自分の島にだけ置ける
     here = loc;
 };
+const homeKit = { chopper, forager, miner, drops };
+/** 場所 loc の木・茂み・岩・落とし物の仕組み（loc を省くと自分の島。街やない島なら null） */
+const kitAt = (loc) => (loc === undefined || loc === 'island' ? homeKit : isles.get(loc) ?? null);
+/** 今いる場所の木・茂み・岩・落とし物の仕組み */
+const kit = () => kitAt(here);
 // 船で世界の端まで漕いでいくと海図を開き、ほかの場所を選ぶと暗転して船ごと渡る
 const seaMap = new SeaMap();
 boats.onEdge = () => seaMap.open(here);
+boats.fieldOf = (loc) => (loc === 'town' ? townField : isles.get(loc)?.shape.field ?? islandField);
 seaMap.onTravel = (to) => {
     if (to === here)
         return;
-    travelFade(LOCATIONS[to].name, () => boats.sail(to));
+    travelFade(locationDef(to).name, () => boats.sail(to));
 };
 // 渡り終えたら（マルチではホストが渡る先を決めて配ってから）、プレイヤーもその場所へ移る
 boats.onSail = (to) => {
@@ -415,7 +438,7 @@ boats.onSail = (to) => {
     if (heading !== null)
         player.face(heading); // 着いた場所の島のほうを向く
 };
-/** 自分の島でしかできないこと（落とし物や刺さった槍などは、まだ場所を持たない）をしようとしたら知らせる。島にいれば true */
+/** 自分の島でしかできないこと（刺さった槍などは、まだ場所を持たない）をしようとしたら知らせる。島にいれば true */
 const onIsland = () => {
     if (here === 'island')
         return true;
@@ -425,9 +448,9 @@ const onIsland = () => {
 // ---- 槍を投げる（槍を持って右クリック長押しで力を溜め、離すと視線の向きへ投げる。刺さった槍は F で拾う） ----
 const SPEAR_CHARGE_TIME = 0.9; // いっぱいまで溜まる時間（秒）
 const SPEAR_MIN_CHARGE = 0.15; // これより溜まる前に離したら投げない（右クリックを押しただけで投げてしまわないように）
-// 溜めている間の構え：槍を肩の上へ持ち上げて後ろへ引き、穂先を前へ水平近くまで倒す
+// 溜めている間の構え：槍を肩の上へ持ち上げて後ろへ引き、穂先を少し上へ向ける（構えのときから水平近くに倒してある）
 const SPEAR_AIM_POS = [0.04, 0.16, 0.24];
-const SPEAR_AIM_ROT = [-0.95, 0, 0.06];
+const SPEAR_AIM_ROT = [0.1, 0, 0.06];
 const spears = new Spears(props.group, physics);
 spears.onCollect = gain;
 spears.onBreak = () => showToast(`${ITEMS.spear.name}が壊れた`);
@@ -454,16 +477,19 @@ const releaseSpear = () => {
 /** 頼みを確かめ、ホストが決める値を入れたコマンドにする（by は頼んだ人）。できない頼みなら null */
 const authorizeWorld = (req, by) => {
     switch (req.type) {
+        // 木・茂み・岩・落とし物は、その物がある島の仕組みが確かめる（ない島なら断る）
         case 'dropItem':
         case 'pickDrop':
-            return drops.authorize(req);
+            return kitAt(req.loc)?.drops.authorize(req) ?? null;
         case 'chopTree':
-            return chopper.authorize(req);
+            return kitAt(req.loc)?.chopper.authorize(req) ?? null;
         case 'harvestBush':
         case 'pickBerry':
-            return forager.authorize(req);
+            return kitAt(req.loc)?.forager.authorize(req) ?? null;
         case 'mineRock':
-            return miner.authorize(req);
+            return kitAt(req.loc)?.miner.authorize(req) ?? null;
+        case 'chartIsle':
+            return isles.authorize(req);
         case 'digHole':
         case 'fillHole':
         case 'plantSeed':
@@ -489,9 +515,47 @@ const authorizeWorld = (req, by) => {
             return builder.authorize(req);
     }
 };
-/** コマンドを適用する（by は頼んだ人。自分の頼みなら、採れた物などを自分のインベントリに入れる）。マルチではホストから届いたコマンドもここで適用する */
+/**
+ * コマンドがどの場所の物を変えるか。船・天気・海図は場所をまたぐので null（自分で場所を扱う）。
+ * 木・茂み・岩・落とし物は loc の島（省けば自分の島）、ほかは自分の島の物
+ */
+const scopeOf = (cmd) => {
+    switch (cmd.type) {
+        case 'placeBoat':
+        case 'pickBoat':
+        case 'boardBoat':
+        case 'leaveBoat':
+        case 'sailBoat':
+        case 'setWeather':
+        case 'chartIsle':
+            return null;
+        case 'dropItem':
+        case 'pickDrop':
+        case 'chopTree':
+        case 'harvestBush':
+        case 'pickBerry':
+        case 'mineRock':
+            return cmd.loc ?? 'island';
+        default:
+            return 'island';
+    }
+};
+/**
+ * コマンドを適用する（by は頼んだ人。自分の頼みなら、採れた物などを自分のインベントリに入れる）。マルチではホストから届いたコマンドもここで適用する。
+ * 今いない場所の物を変えたときは、その場所で作った剛体を止め（physics.within）、増えた見た目を隠す
+ */
 const applyWorld = (cmd, by) => {
+    const scope = scopeOf(cmd);
+    if (scope === null)
+        return applyCommand(cmd, by);
+    physics.within(scope, () => applyCommand(cmd, by));
+    if (scope !== here)
+        for (const o of placeOf(scope).roots)
+            setShown(o, false);
+};
+const applyCommand = (cmd, by) => {
     const mine = by !== null && by === net.myId;
+    const k = 'loc' in cmd && scopeOf(cmd) !== null ? kitAt(cmd.loc) : homeKit;
     switch (cmd.type) {
         case 'placePiece':
         case 'removePiece':
@@ -500,17 +564,20 @@ const applyWorld = (cmd, by) => {
             break;
         case 'dropItem':
         case 'pickDrop':
-            drops.apply(cmd, mine);
+            k?.drops.apply(cmd, mine);
             break;
         case 'chopTree':
-            chopper.apply(cmd);
+            k?.chopper.apply(cmd);
             break;
         case 'harvestBush':
         case 'pickBerry':
-            forager.apply(cmd, mine);
+            k?.forager.apply(cmd, mine);
             break;
         case 'mineRock':
-            miner.apply(cmd, mine);
+            k?.miner.apply(cmd, mine);
+            break;
+        case 'chartIsle':
+            isles.apply(cmd);
             break;
         case 'digHole':
         case 'fillHole':
@@ -552,7 +619,10 @@ const undoRequest = (req) => {
             break;
         case 'dropItem':
             if (req.item in ITEMS)
-                gain(req.item, req.count, req.dmg);
+                gain(req.item, req.count, req.dmg, req.chart);
+            break;
+        case 'chartIsle':
+            gain('islandMap', 1, undefined, req.chart); // 書き写せなかった地図を返す
             break;
         case 'throwSpear':
             gain('spear', 1, req.dmg);
@@ -586,10 +656,12 @@ const net = new Multiplayer({
     apply: applyWorld,
     undo: undoRequest,
     shared: () => sharedSnapshot(),
-    motion: () => ({ drops: drops.motion(), trees: chopper.motion() }),
+    motion: () => ({ drops: drops.motion(), trees: chopper.motion(), isles: isles.motion() }),
     setMotion: (m) => {
         drops.setMotion(m.drops ?? []);
         chopper.setMotion(m.trees ?? []);
+        if (Array.isArray(m.isles))
+            isles.setMotion(m.isles);
     },
     minutes: () => clock.minutes,
     setMinutes: (minutes) => (clock.minutes = minutes),
@@ -623,13 +695,18 @@ crafting.benchExists = (pid) => builder.has(pid);
 // 設計図で覚えるレシピは、覚えるまで候補に出さない（覚えたレシピは自分だけの状態）
 const recipeBook = new RecipeBook();
 crafting.knows = (recipe) => !recipe.locked || recipeBook.knows(recipe.result);
-/** 設計図なら、右クリックで作り方を覚える（設計図は減らない）。設計図だったら true */
+/** 設計図なら、右クリックで作り方を覚え、手に持つ設計図を1枚使う（もう覚えていたら減らさない）。設計図だったら true */
 const learnFrom = (item) => {
     const result = ITEMS[item].teaches;
     if (!result)
         return false;
     const name = ITEMS[result].name;
-    showToast(recipeBook.learn(result) ? `「${name}」の作り方を覚えた` : `「${name}」の作り方はもう覚えている`);
+    if (recipeBook.learn(result)) {
+        inventory.removeSelected(1);
+        showToast(`「${name}」の作り方を覚えた`);
+    }
+    else
+        showToast(`「${name}」の作り方はもう覚えている`);
     return true;
 };
 // ---- 桟橋の住人の頼みごと（最初の手順の案内。進み具合は自分だけの状態） ----
@@ -648,6 +725,7 @@ guide.onFinish = () => showToast(FINISH_TOAST);
 const shop = new Shop(inventory);
 shop.onGain = gain;
 // ---- 地図（地図屋で買える。持って右クリックで、今いる場所の地図を広げる。自分だけの UI） ----
+// 今いる場所を真上から見る地図は、ひとまずどのアイテムからも開かない（島の地図に渡れるようになったら使い道を決める）
 const areaMap = new AreaMap();
 areaMap.addSource('island', {
     field: islandField,
@@ -669,10 +747,12 @@ const mapView = () => {
 };
 // ---- F：話しかける・拾う・茂みの実を摘む・船に乗り降りする・作業台や焚火を使う・水を飲む ----
 const USE_REACH = 3.5; // 作業台や焚火を使える距離
-/** 視線の先にある、使える作業台 */
+// 島の地図を持って右クリックで広げる、メモから描いた予想図
+const chartView = new IslandChartView();
+/** 視線の先にある、使える作業台か製図台 */
 const aimedWorkbench = () => {
     const piece = builder.aimedPiece(USE_REACH);
-    return piece?.id === 'workbench' ? piece : null;
+    return piece?.id === 'workbench' || piece?.id === 'draftingTable' ? { info: piece, station: piece.id } : null;
 };
 /** 視線の先にある焚火の番号（低いので、炎のあたりを見ても狙える） */
 const aimedCampfire = () => campfires.aimed(camera, USE_REACH, aimTargets);
@@ -695,12 +775,13 @@ addEventListener('keydown', (e) => {
             return shop.open('mapmaker');
         if (guide.talking || npc.aimed(camera, aimTargets, TALK_REACH))
             return guide.speak();
-        if (spears.collect(camera, (item) => inventory.room(item)) || drops.collect(camera, (item) => inventory.room(item)) || forager.pick(camera) || boats.board())
+        const k = kit();
+        if (spears.collect(camera, (item) => inventory.room(item)) || k?.drops.collect(camera, (item) => inventory.room(item)) || k?.forager.pick(camera) || boats.board())
             return;
         const bench = aimedWorkbench();
         const fire = bench ? null : aimedCampfire();
         if (bench)
-            crafting.useBench(bench);
+            crafting.useBench(bench.info, bench.station);
         else if (fire !== null)
             campfireMenu.open(fire);
         else
@@ -732,12 +813,16 @@ addEventListener('keydown', (e) => {
     if (!player.controls.isLocked && !inventory.isOpen)
         return;
     e.preventDefault(); // Ctrl+G（ブラウザの「次を検索」）を止める
-    if (!onIsland())
+    // 落とし物は、自分の島と海図に載せた島に落とせる（街にはまだ落とせない）
+    const k = kit();
+    if (!k) {
+        showToast('ここではまだできない');
         return;
+    }
     const stack = inventory.take(e.ctrlKey);
     if (!stack)
         return;
-    if (!drops.throw(stack.item, stack.count, stack.dmg, camera.position, camera.getWorldDirection(new THREE.Vector3())))
+    if (!k.drops.throw(stack, camera.position, camera.getWorldDirection(new THREE.Vector3())))
         inventory.putBack(stack);
 });
 renderer.domElement.addEventListener('mousedown', (e) => {
@@ -781,8 +866,12 @@ renderer.domElement.addEventListener('mousedown', (e) => {
             return;
         else if (held?.item === 'seed' && plantSeed())
             return;
-        else if (held?.item === 'map')
-            areaMap.open(here, mapView());
+        else if (held?.item === 'islandMap') {
+            if (held.chart !== undefined)
+                chartView.open(held.chart);
+            else
+                showToast('この地図は、にじんでいて読めない');
+        }
         else if (held && learnFrom(held.item))
             return;
         else if (held && eater.start(held.item))
@@ -831,6 +920,7 @@ const sharedSnapshot = () => ({
     built: builder.serialize(),
     fires: campfires.serialize(),
     planted: saplings.serialize(),
+    isles: isles.serialize(),
     boats: boats.serialize(),
     spears: spears.serialize(),
     clock: clock.serialize(),
@@ -839,17 +929,20 @@ const sharedSnapshot = () => ({
 const snapshot = () => ({ version: SAVE_VERSION, ...personalSnapshot(), ...sharedSnapshot() });
 /** 共有ワールドを戻す（床などの足場を先に置いてから、restorePersonal でプレイヤーを戻す） */
 const restoreShared = (data) => {
-    builder.restore(data.built);
-    campfires.restore(data.fires); // 焚火の部材を置いてから、燃料と火を戻す
-    boats.restore(data.boats);
-    spears.restore(data.spears);
-    chopper.restore(data.trees);
-    forager.restore(data.bushes);
-    miner.restore(data.rocks);
-    digger.restore(data.holes);
-    saplings.restore(data.planted); // 最初からある木を戻してから、植えた木を戻す
-    drops.restore(data.drops);
-    pebbles.restore(data.pebbles); // 落とし物を戻してから（まだ小石を置いていないワールドなら置く）
+    isles.restore(data.isles); // 船やプレイヤーがいる島を読めるように、先に海図に載せた島を作る
+    physics.within('island', () => {
+        builder.restore(data.built);
+        campfires.restore(data.fires); // 焚火の部材を置いてから、燃料と火を戻す
+        boats.restore(data.boats);
+        spears.restore(data.spears);
+        chopper.restore(data.trees);
+        forager.restore(data.bushes);
+        miner.restore(data.rocks);
+        digger.restore(data.holes);
+        saplings.restore(data.planted); // 最初からある木を戻してから、植えた木を戻す
+        drops.restore(data.drops);
+        pebbles.restore(data.pebbles); // 落とし物を戻してから（まだ小石を置いていないワールドなら置く）
+    });
     clock.restore(data.clock);
     weather.restore(data.weather);
 };
@@ -953,7 +1046,7 @@ addEventListener('keydown', (e) => {
         return;
     commandMenu.setOpen(true);
 });
-const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || areaMap.isOpen || avatarMenu.isOpen || commandMenu.isOpen;
+const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || areaMap.isOpen || chartView.isOpen || avatarMenu.isOpen || commandMenu.isOpen;
 document.getElementById('to-title').addEventListener('click', (e) => {
     e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
     save();
@@ -1033,6 +1126,7 @@ inventory.onToggle = (open, resume) => {
         shop.setOpen(false, false);
         seaMap.setOpen(false, false);
         areaMap.setOpen(false, false);
+        chartView.setOpen(false, false);
         avatarMenu.setOpen(false, false);
         commandMenu.setOpen(false, false);
     }
@@ -1046,6 +1140,24 @@ builder.menu.onToggle = onMenuToggle;
 shop.onToggle = onMenuToggle;
 seaMap.onToggle = onMenuToggle;
 areaMap.onToggle = onMenuToggle;
+chartView.onToggle = onMenuToggle;
+// 島の地図を海図に書き写すと、誰の海図にもその島が載り、船で渡れるようになる（書き写した地図はなくなる）
+chartView.onCopy = (chart) => {
+    const held = inventory.selectedStack;
+    if (held?.item !== 'islandMap' || held.chart !== chart)
+        return;
+    if (isles.charted(chart)) {
+        showToast('この島は、もう海図に載っている');
+        return;
+    }
+    inventory.removeSelected(1);
+    if (requestWorld({ type: 'chartIsle', chart }))
+        showToast(`海図に「${readChart(chart).name}」を書き写した。船で世界の端まで漕いでいけば渡れる`);
+    else {
+        gain('islandMap', 1, undefined, chart);
+        showToast('これ以上は海図に書き写せない');
+    }
+};
 avatarMenu.onToggle = onMenuToggle;
 commandMenu.onToggle = onMenuToggle;
 addEventListener('resize', () => {
@@ -1057,6 +1169,7 @@ addEventListener('resize', () => {
 function applySky(underwater, dt) {
     sky.update(clock.minutes, weather, camera, dt);
     sky.visible = !underwater;
+    town.lamps.update(sky.daylight, performance.now() / 1000); // 街灯と地図屋の明かりは、暗くなると灯る
     sea.setDaylight(THREE.MathUtils.lerp(0.25, 1, sky.daylight));
     if (!underwater) {
         fog.color.copy(sky.color);
@@ -1106,6 +1219,7 @@ renderer.setAnimationLoop(() => {
     sea.update(t);
     wind.update(dt, weather.wind);
     grass.update(camera.position, fog.far);
+    isles.get(here)?.grass?.update(camera.position, fog.far);
     if (world)
         player.update(dt);
     else
@@ -1173,6 +1287,7 @@ renderer.setAnimationLoop(() => {
     emptyHand.visible = !!world && !held && !builder.active && !crafting.isOpen;
     emptyHand.update(dt, player.walking);
     chopper.update(dt);
+    isles.update(dt, camera.position);
     boats.update(dt); // 漕いだり波に揺れたりする船の当たり判定は、物理を進める前に動かしておく
     if (boats.riding)
         player.sitAt(boats.seatEye(seatEye)); // 船に乗っている間は、座り板に座った目の位置にする
@@ -1214,7 +1329,7 @@ renderer.setAnimationLoop(() => {
     applySky(seeingUnderwater, dt);
     rainColor.copy(sky.color).multiplyScalar(RAIN_BRIGHT);
     rain.update(t, dt, camera.position, seeingUnderwater ? 0 : weather.rain, rainColor, rainSurface);
-    rain.renderOcclusion(renderer, scene, [sky.object, grass.mesh]); // 屋根などの下に雨が降りこまないように
+    rain.renderOcclusion(renderer, scene, [sky.object, grass.mesh, ...isles.all.flatMap((i) => (i.grass ? [i.grass.mesh] : []))]); // 屋根などの下に雨が降りこまないように
     clockHud.visible = !!world && !death.isOpen;
     clockHud.update(clock.day, clock.hour, clock.isNight, weather.kind);
     // 一時停止中やメニューを開いている間は案内を出さないので、視線の判定もしない
@@ -1259,14 +1374,14 @@ function keyHint(held) {
             ? boats.rideHint
             : talkHint
                 ? talkHint
-                : spears.isAiming(camera) || drops.isAiming(camera)
+                : spears.isAiming(camera) || kit()?.drops.isAiming(camera)
                     ? '[F]：拾う'
-                    : forager.canPick(camera)
+                    : kit()?.forager.canPick(camera)
                         ? '[F]：実を摘む'
                         : boats.isAiming()
                             ? '[F]：船に乗る ／ [Q]：船をしまう'
                             : aimedWorkbench()
-                                ? '[F]：作業台を使う'
+                                ? `[F]：${aimedWorkbench().station === 'draftingTable' ? '製図台' : '作業台'}を使う`
                                 : aimedCampfire() !== null
                                     ? '[F]：焚火に燃料を入れる'
                                     : boats.holding // 船を持っているときは、水を狙っても飲む案内より浮かべる案内を出す
@@ -1283,11 +1398,11 @@ function keyHint(held) {
                                                             ? '[右]：穴を埋める'
                                                             : held?.item === 'seed' && digger.canPlant(camera, SHOVEL_REACH)
                                                                 ? '[右]：種を植える'
-                                                                : held?.item === 'map'
+                                                                : held?.item === 'islandMap'
                                                                     ? '[右]：地図を広げる'
                                                                     : '';
     // 傷ついた部材を見ているときは、のこりの耐久値も出す
-    const durability = builder.durability(AXE_REACH) ?? (held?.item === 'pickaxe' ? miner.durability(camera, PICK_REACH) : null);
+    const durability = builder.durability(AXE_REACH) ?? (held?.item === 'pickaxe' ? kit()?.miner.durability(camera, PICK_REACH) ?? null : null);
     return [rodHand.visible && (fisher.busy || !pickup) ? fisher.hint : pickup, durability ? `耐久 ${durability.hp}/${durability.max}` : ''].filter(Boolean).join(' ／ ');
 }
 const eyePos = new THREE.Vector3();

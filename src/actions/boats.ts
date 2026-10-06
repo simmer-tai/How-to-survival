@@ -8,7 +8,7 @@ import type { Inventory } from '../items/inventory.js';
 import { BOAT_H, BOAT_SEAT, buildBoatModel, buildBoatOpening } from '../items/itemModels.js';
 import { WORLD_SIZE, islandField, terrainHeight, type HeightField } from '../world/terrain.js';
 import { townField } from '../world/town.js';
-import { LOCATIONS, toLocation, type LocationId } from '../world/location.js';
+import { locationDef, toLocation, type LocationId } from '../world/location.js';
 
 const BOAT_SCALE = 3.2; // アイテムのモデル（長さ 1）を何倍にして浮かべるか（長さ約 3.2、人が2人乗れるくらい）
 const DRAFT = 0.28; // 船底が水面より沈む深さ
@@ -51,8 +51,6 @@ const SIZE = (() => {
   model.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
   return { halfL: size.x / 2, halfW: size.z / 2, height: size.y, centerY: center.y };
 })();
-/** 場所ごとの地形（今いない場所の浅瀬を調べるのに使う） */
-const FIELDS: Record<LocationId, HeightField> = { island: islandField, town: townField };
 
 /** 水面から、船のモデルの原点までの高さ（船底が DRAFT だけ沈む） */
 const FLOAT_Y = SIZE.height / 2 - SIZE.centerY - DRAFT;
@@ -164,6 +162,8 @@ export class Boats {
   request: Requester = () => false;
   /** 自分の乗っている船が別の場所へ渡り終えたときに呼ばれる（main がプレイヤーの場所を切り替える） */
   onSail: (loc: LocationId) => void = () => {};
+  /** 場所ごとの地形（今いない場所の浅瀬を調べるのに使う。海図に載せた島は main が引く） */
+  fieldOf: (loc: LocationId) => HeightField = (loc) => (loc === 'town' ? townField : islandField);
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -416,7 +416,7 @@ export class Boats {
    * ほかの場所なら調べない（マルチでは、頼んだ参加者が自分のいる場所で先に調べている）
    */
   private check(loc: LocationId, x: number, z: number, yaw: number): Blocked {
-    if (loc !== this.location) return this.shallowAt(FIELDS[loc], x, z, yaw, MIN_DEPTH) ? 'shallow' : null;
+    if (loc !== this.location) return this.shallowAt(this.fieldOf(loc), x, z, yaw, MIN_DEPTH) ? 'shallow' : null;
     // 岩・桟橋・ほかの船・部材・プレイヤーとぶつからないか（波で上下しても当たらないよう、水面の上まで高く調べる）
     return this.blockedAt(x, z, yaw, MIN_DEPTH, CHECK_H, COLLIDE.boatQuery);
   }
@@ -466,8 +466,8 @@ export class Boats {
    * 着いた所にほかの船があれば、横へずらす
    */
   private arrival(b: Boat, to: LocationId): { p: [number, number]; yaw: number } {
-    const [fx, fz] = LOCATIONS[b.loc].chart;
-    const [tx, tz] = LOCATIONS[to].chart;
+    const [fx, fz] = locationDef(b.loc).chart;
+    const [tx, tz] = locationDef(to).chart;
     const dir = new THREE.Vector2(fx - tx, fz - tz).normalize(); // 海図の右が +X、下が +Z
     const yaw = Math.atan2(dir.y, -dir.x); // 中心へ（-dir の向きへ）舳先を向ける
     const others = [...this.boats.values()].filter((o) => o !== b && o.loc === to);

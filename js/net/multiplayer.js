@@ -173,10 +173,11 @@ export class Multiplayer {
         this.motionTimer += dt;
         if (this.motionTimer >= MOTION_INTERVAL) {
             this.motionTimer = 0;
-            const { drops, trees } = this.hooks.motion();
+            const { drops, trees, isles = [] } = this.hooks.motion();
             const pack = (list) => list.map((row) => row.map((v, i) => (i === 0 ? v : round(v, 3))));
-            if (drops.length > 0 || trees.length > 0)
-                this.toAll({ t: 'motion', drops: pack(drops), trees: pack(trees) });
+            const moving = isles.filter(([, d, t]) => d.length > 0 || t.length > 0).map(([i, d, t]) => [i, pack(d), pack(t)]);
+            if (drops.length > 0 || trees.length > 0 || moving.length > 0)
+                this.toAll({ t: 'motion', drops: pack(drops), trees: pack(trees), isles: moving });
         }
         this.clockTimer += dt;
         if (this.clockTimer >= CLOCK_INTERVAL) {

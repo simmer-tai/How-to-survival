@@ -537,3 +537,93 @@ export function buildProps() {
         pierFoot: new THREE.Vector3(pierX, pierTop, pierStart),
     };
 }
+const ISLE_SPREAD = 140; // 海図に載せた島の物を置く範囲（中心からの四角の一辺。島は中心から 70m に収まる）
+/**
+ * 海図に載せた島の木・茂み・岩。seed（島の地図の種）から置き方を決めるので、誰の画面でも同じになる。
+ * 木・茂み・岩の番号は、自分の島と同じくそれぞれの生成順。地面の高さは terrainHeight を見るので、world/terrain.ts の withField でその島の地形にしてから呼ぶ
+ */
+export function buildIsleProps(seed, counts) {
+    const group = new THREE.Group();
+    const solids = [];
+    const trees = [];
+    const bushes = [];
+    const rocks = [];
+    const rand = mulberry32(seed);
+    const placed = [];
+    const shapeRand = (id) => mulberry32(seed + 7000 + id);
+    const isFree = (x, z, spacing) => placed.every((p) => Math.hypot(p.x - x, p.y - z) > spacing);
+    const spot = () => [(rand() - 0.5) * ISLE_SPREAD, (rand() - 0.5) * ISLE_SPREAD];
+    // ヤシ（浜辺）
+    for (let n = 0, tries = 0; n < counts.palms && tries < 4000; tries++) {
+        const [x, z] = spot();
+        const y = terrainHeight(x, z);
+        if (y < 0.4 || y > 1.4 || !isFree(x, z, 5))
+            continue;
+        const { group: palm, trunk, leaves, sway } = palmTree(new THREE.Vector2(x, z).normalize(), rand, shapeRand(trees.length));
+        palm.position.set(x, y - 0.1, z);
+        group.add(palm);
+        trees.push({ object: palm, trunk, leaves, crown: addCrown(palm, leaves, sway), wood: 3 });
+        placed.push(new THREE.Vector2(x, z));
+        n++;
+    }
+    // 森
+    for (let n = 0, tries = 0; n < counts.trees && tries < 8000; tries++) {
+        const [x, z] = spot();
+        const y = terrainHeight(x, z);
+        if (y < 1.8 || slopeAt(x, z) > 0.9 || !isFree(x, z, 4))
+            continue;
+        const s = 0.8 + rand() * 0.6;
+        const shape = shapeRand(trees.length);
+        const { group: tree, trunk, leaves, sway } = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
+        tree.position.set(x, y - 0.2, z);
+        tree.rotation.y = rand() * Math.PI * 2;
+        group.add(tree);
+        trees.push({ object: tree, trunk, leaves, crown: addCrown(tree, leaves, sway), wood: Math.round(3 * s) + 1 });
+        placed.push(new THREE.Vector2(x, z));
+        n++;
+    }
+    // 茂み
+    for (let n = 0, tries = 0; n < counts.bushes && tries < 4000; tries++) {
+        const [x, z] = spot();
+        const y = terrainHeight(x, z);
+        if (y < 1.7 || slopeAt(x, z) > 0.8 || !isFree(x, z, 2.5))
+            continue;
+        const bush = new THREE.Mesh(bushGeometry(mulberry32(seed + 9000 + bushes.length)), flatVertex());
+        bush.castShadow = true;
+        bush.receiveShadow = true;
+        const s = 0.7 + rand() * 0.7;
+        bush.scale.set(s * 1.3, s, s * 1.3);
+        bush.rotation.y = rand() * Math.PI;
+        bush.position.set(x, y + 0.3 * s, z);
+        group.add(bush);
+        bushes.push(bush);
+        placed.push(new THREE.Vector2(x, z));
+        n++;
+    }
+    // 岩（陸と浅瀬）と、沖の浅瀬に突き出た岩（船喰い）
+    const addRock = (x, z, y, size) => {
+        const r = rock(rand, size);
+        r.position.set(x, y + size * 0.2, z);
+        group.add(r);
+        solids.push(r);
+        rocks.push(r);
+        placed.push(new THREE.Vector2(x, z));
+    };
+    for (let n = 0, tries = 0; n < counts.rocks && tries < 4000; tries++) {
+        const [x, z] = spot();
+        const y = terrainHeight(x, z);
+        if (y < -3 || !isFree(x, z, 3))
+            continue;
+        addRock(x, z, y, (y < 0.5 ? 1.2 + rand() * 1.6 : 0.6 + rand() * 1.2) * counts.big);
+        n++;
+    }
+    for (let n = 0, tries = 0; n < counts.reef && tries < 4000; tries++) {
+        const [x, z] = spot();
+        const y = terrainHeight(x, z);
+        if (y < -4 || y > -1 || !isFree(x, z, 5))
+            continue;
+        addRock(x, z, y, 2 + rand() * 1.5);
+        n++;
+    }
+    return { group, solids, trees, bushes, rocks, platforms: [] };
+}

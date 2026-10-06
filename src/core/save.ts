@@ -17,6 +17,7 @@ import type { WeatherSave } from '../world/weather.js';
 import type { HolesSave } from '../actions/digging.js';
 import type { PlantingSave } from '../actions/planting.js';
 import type { FireSave } from '../actions/campfire.js';
+import type { IslesSave } from '../world/isles.js';
 
 // ワールドはブラウザの localStorage に保存する（ページの URL のオリジンごとに別々になる）。
 // 地形や木・茂みの配置は固定シードで毎回同じに生成されるので、変化した状態だけを持つ
@@ -44,7 +45,9 @@ import type { FireSave } from '../actions/campfire.js';
 // 21 → 22：掘った穴が、掘ってからたった時間（holes.list[].t）を持つようになった
 // 22 → 23：焚火の燃料と火（fires）が入った
 // 23 → 24：種から育てた木（planted）が入った。穴は木の種を置いたか（holes.list[].s）を持つようになった
-export const SAVE_VERSION = 24;
+// 24 → 25：インベントリ・落とし物の島の地図が、地図の中身（chart）を持つようになった
+// 25 → 26：島の地図から海図に載せた島（isles）が入った。プレイヤー・船の場所（loc）に isle0 などが入るようになった
+export const SAVE_VERSION = 26;
 
 export interface WorldData {
   version: number;
@@ -81,6 +84,8 @@ export interface WorldData {
   fires: FireSave[];
   /** 種から育てた木（育つ途中の苗も） */
   planted: PlantingSave;
+  /** 島の地図から海図に載せた島（島の番号順） */
+  isles: IslesSave;
 }
 
 /** 自分だけの状態（マルチでは各自のブラウザに残す） */
@@ -301,11 +306,27 @@ function fromV22(old: WorldDataV22): WorldDataV23 {
 }
 
 /** バージョン 23 のセーブデータ（植えた木がない） */
-type WorldDataV23 = Omit<WorldData, 'version' | 'planted'> & { version: 23 };
+type WorldDataV23 = Omit<WorldDataV24, 'version' | 'planted'> & { version: 23 };
 
 /** 23 → 24：木はまだ1本も植えていない（s がない穴は種を置いていないとして読める） */
-function fromV23(old: WorldDataV23): WorldData {
+function fromV23(old: WorldDataV23): WorldDataV24 {
   return { ...old, version: 24, planted: { list: [] } };
+}
+
+/** バージョン 24 のセーブデータ（島の地図がない） */
+type WorldDataV24 = Omit<WorldDataV25, 'version'> & { version: 24 };
+
+/** 24 → 25：島の地図はまだ1枚もないので、形はそのまま */
+function fromV24(old: WorldDataV24): WorldDataV25 {
+  return { ...old, version: 25 };
+}
+
+/** バージョン 25 のセーブデータ（海図に載せた島がない） */
+type WorldDataV25 = Omit<WorldData, 'version' | 'isles'> & { version: 25 };
+
+/** 25 → 26：海図に載せた島はまだない */
+function fromV25(old: WorldDataV25): WorldData {
+  return { ...old, version: 26, isles: { list: [] } };
 }
 
 export interface WorldMeta {
@@ -343,7 +364,7 @@ export function createWorld(name: string): WorldMeta {
 export function loadWorld(id: string): WorldData | null {
   const json = localStorage.getItem(dataKey(id));
   if (json === null) return null;
-  let data = JSON.parse(json) as WorldData | WorldDataV1 | WorldDataV2 | WorldDataV3 | WorldDataV4 | WorldDataV5 | WorldDataV6 | WorldDataV7 | WorldDataV8 | WorldDataV9 | WorldDataV10 | WorldDataV11 | WorldDataV12 | WorldDataV13 | WorldDataV14 | WorldDataV15 | WorldDataV16 | WorldDataV17 | WorldDataV18 | WorldDataV19 | WorldDataV20 | WorldDataV21 | WorldDataV22 | WorldDataV23;
+  let data = JSON.parse(json) as WorldData | WorldDataV1 | WorldDataV2 | WorldDataV3 | WorldDataV4 | WorldDataV5 | WorldDataV6 | WorldDataV7 | WorldDataV8 | WorldDataV9 | WorldDataV10 | WorldDataV11 | WorldDataV12 | WorldDataV13 | WorldDataV14 | WorldDataV15 | WorldDataV16 | WorldDataV17 | WorldDataV18 | WorldDataV19 | WorldDataV20 | WorldDataV21 | WorldDataV22 | WorldDataV23 | WorldDataV24 | WorldDataV25;
   if (data.version === 1) data = fromV1(data as WorldDataV1);
   if (data.version === 2) data = fromV2(data as WorldDataV2);
   if (data.version === 3) data = fromV3(data as WorldDataV3);
@@ -367,6 +388,8 @@ export function loadWorld(id: string): WorldData | null {
   if (data.version === 21) data = fromV21(data as WorldDataV21);
   if (data.version === 22) data = fromV22(data as WorldDataV22);
   if (data.version === 23) data = fromV23(data as WorldDataV23);
+  if (data.version === 24) data = fromV24(data as WorldDataV24);
+  if (data.version === 25) data = fromV25(data as WorldDataV25);
   if (data.version !== SAVE_VERSION) throw new Error(`unknown save version: ${data.version}`);
   return data as WorldData;
 }

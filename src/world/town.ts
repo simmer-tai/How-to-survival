@@ -7,6 +7,7 @@ import {
 } from './townKit.js';
 import { buildHouse } from './house.js';
 import { buildMapShop } from './mapShop.js';
+import { Lamps, glassMesh } from './lamps.js';
 
 // 街の島。西（-X。自分の島から船で来る側）に石造りの港がある。広場には農家の屋台と、木組みの家が1軒、中に入れる地図屋が1軒ある（ほかの家や住人はこれから足す）。
 // 港は、石積みの岸壁に囲まれた石畳の広場と、海へ突き出た石の突堤、水面へ下りる石段、木の桟橋でできている。
@@ -66,6 +67,10 @@ const ROOF_OVER = 0.45; // 日よけが売り台より前へ張り出す長さ
 const AWNING_STRIPES = 6; // 日よけの縞の数
 const FARMER_BACK = 0.55; // 農家が売り台の後ろの面からどれだけ下がって立つか
 
+// ---- 街灯の明かり ----
+const LAMP_INTENSITY = 5; // 灯っているときの明かりの強さ
+const LAMP_RANGE = 12; // 明かりがとどく距離
+
 const PIER_SEED = 31337; // 桟橋の板のばらつきを決める乱数のシード
 const STONE_SEED = 4242; // 石の大きさ・色のばらつきを決める乱数のシード
 
@@ -107,6 +112,8 @@ export interface Town {
   buildings: THREE.Vector3[][];
   /** 地図に名前を書く所 */
   marks: { name: string; x: number; z: number }[];
+  /** 街灯と地図屋の明かり（暗くなると灯る。毎フレーム update する） */
+  lamps: Lamps;
 }
 
 function mulberry32(seed: number): () => number {
@@ -214,8 +221,8 @@ function barrel(b: Batch, rand: () => number, group: THREE.Group, solids: THREE.
   colliderCyl(group, solids, x, QUAY_TOP, z, 0.36, h);
 }
 
-/** 街灯。腕を arm（[x, z] の向き）へ出して、ランタンを吊るす */
-function lamp(b: Batch, group: THREE.Group, solids: THREE.Mesh[], x: number, z: number, arm: [number, number]): void {
+/** 街灯。腕を arm（[x, z] の向き）へ出して、ランタンを吊るす。ランタンのガラスは glass にまとめ、明かりを lamps に足す */
+function lamp(b: Batch, glass: Batch, lamps: Lamps, group: THREE.Group, solids: THREE.Mesh[], x: number, z: number, arm: [number, number]): void {
   const pole = BARK.clone().multiplyScalar(0.8);
   const H = 3.2;
   b.add(CYL, x, QUAY_TOP + 0.15, z, 0.2, 0.3, 0.2, ROCK.clone().multiplyScalar(0.8)); // 石の台
@@ -224,7 +231,9 @@ function lamp(b: Batch, group: THREE.Group, solids: THREE.Mesh[], x: number, z: 
   b.add(BOX, x + ax * 0.3, QUAY_TOP + H - 0.12, z + az * 0.3, 0.06 + Math.abs(ax) * 0.55, 0.06, 0.06 + Math.abs(az) * 0.55, pole);
   const lx = x + ax * 0.52;
   const lz = z + az * 0.52;
-  b.add(BOX, lx, QUAY_TOP + H - 0.42, lz, 0.26, 0.34, 0.26, SAND.clone().multiplyScalar(1.05)); // 明かりの窓
+  glass.add(BOX, lx, QUAY_TOP + H - 0.42, lz, 0.26, 0.34, 0.26, SAND.clone().multiplyScalar(1.05)); // 明かりの窓
+  for (const [cx, cz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) b.add(BOX, lx + cx * 0.13, QUAY_TOP + H - 0.42, lz + cz * 0.13, 0.035, 0.36, 0.035, pole); // 窓の枠の柱
+  lamps.add(group, new THREE.Vector3(lx, QUAY_TOP + H - 0.42, lz), LAMP_INTENSITY, LAMP_RANGE);
   b.add(BOX, lx, QUAY_TOP + H - 0.22, lz, 0.32, 0.06, 0.32, pole); // 屋根
   b.add(BOX, lx, QUAY_TOP + H - 0.62, lz, 0.3, 0.05, 0.3, pole); // 底
   colliderCyl(group, solids, x, QUAY_TOP, z, 0.2, H);
@@ -351,6 +360,8 @@ export function buildTown(): Town {
   const rand = mulberry32(STONE_SEED);
   const ground = (x: number, z: number) => townField.height(x, z);
   const b = new Batch();
+  const glass = new Batch(); // 灯ると光るランタンのガラス
+  const lamps = new Lamps();
 
   // 石畳の広場と、それを囲む岸壁
   const jetty = { minX: JETTY_END, maxX: QUAY_X, minZ: JETTY_Z - JETTY_HALF, maxZ: JETTY_Z + JETTY_HALF };
@@ -402,20 +413,22 @@ export function buildTown(): Town {
   crate(b, rand, group, solids, -33, QUAY_TOP, JETTY_Z - 1.2, 0.9, 0.4);
   barrel(b, rand, group, solids, -31.8, JETTY_Z - 1.5);
 
-  // 街灯：岸壁ぞいと、突堤の先
-  for (const z of [-20, -2, 10, 21]) lamp(b, group, solids, QUAY_X + 2.2, z, [-1, 0]);
-  lamp(b, group, solids, JETTY_END + 1.2, JETTY_Z + JETTY_HALF - 1, [0, 1]);
-  lamp(b, group, solids, JETTY_END + 1.2, JETTY_Z - JETTY_HALF + 1, [0, -1]);
+  // 街灯：岸壁ぞいと、突堤の先と、広場の屋台の南北
+  for (const z of [-20, -2, 10, 21]) lamp(b, glass, lamps, group, solids, QUAY_X + 2.2, z, [-1, 0]);
+  lamp(b, glass, lamps, group, solids, JETTY_END + 1.2, JETTY_Z + JETTY_HALF - 1, [0, 1]);
+  lamp(b, glass, lamps, group, solids, JETTY_END + 1.2, JETTY_Z - JETTY_HALF + 1, [0, -1]);
+  for (const z of [-4, 9]) lamp(b, glass, lamps, group, solids, -1.5, z, [1, 0]);
 
   // 広場の農家の屋台
   const farmerSpot = stall(b, rand, group, solids);
 
   group.add(b.mesh());
+  group.add(glassMesh(glass));
 
   // 広場の北東の家（正面の戸口と妻が港を向く）
   const house = buildHouse(group, solids, { x: HOUSE_X, y: QUAY_TOP, z: HOUSE_Z, yaw: -Math.PI / 2 });
   // 広場の南東の地図屋（戸口が港を向く。中に入ると、売り台の後ろに地図売りがいる）
-  const mapShop = buildMapShop(group, solids, { x: MAP_SHOP_X, y: QUAY_TOP, z: MAP_SHOP_Z, yaw: -Math.PI / 2 });
+  const mapShop = buildMapShop(group, solids, lamps, { x: MAP_SHOP_X, y: QUAY_TOP, z: MAP_SHOP_Z, yaw: -Math.PI / 2 });
   const stallBox = [[STALL_X - ROOF_OVER, STALL_Z - STALL_W / 2], [STALL_X + STALL_DEPTH, STALL_Z - STALL_W / 2], [STALL_X + STALL_DEPTH, STALL_Z + STALL_W / 2], [STALL_X - ROOF_OVER, STALL_Z + STALL_W / 2]]
     .map(([x, z]) => new THREE.Vector3(x, QUAY_TOP, z));
 
@@ -430,5 +443,6 @@ export function buildTown(): Town {
       { name: '地図屋', x: MAP_SHOP_X, z: MAP_SHOP_Z - 5.5 }, // 名前は建物の北に書く（中にいると自分の矢印に隠れるので）
       { name: '港', x: QUAY_X + 4, z: JETTY_Z },
     ],
+    lamps,
   };
 }

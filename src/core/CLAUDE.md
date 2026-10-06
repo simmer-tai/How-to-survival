@@ -11,9 +11,9 @@
 |---|---|
 | `palette.ts` | `PALETTE`。**色はここにある色だけを使う**（UI の濃い文字色・縁取りの `#2b2633` は例外） |
 | `materials.ts` | ローポリ用のフラットシェーディングのマテリアル（`flat()`・`flatVertex()`・`flatTransparent()`・`solid()`） |
-| `physics.ts` | Rapier のラッパー `Physics`。`GRAVITY`・`WATER_LEVEL`、浮力・水の抵抗、衝突グループ `COLLIDE`、凸包コライダーを作る `hullDesc()`。今いない場所の剛体は `physics.park()` で止める |
+| `physics.ts` | Rapier のラッパー `Physics`。`GRAVITY`・`WATER_LEVEL`、浮力・水の抵抗、衝突グループ `COLLIDE`、凸包コライダーを作る `hullDesc()`。剛体は場所ごとに止める：`within(loc, fn)` の中で作った剛体は loc の物になり、今いない場所なら作ったその場で止まる。場所を移るときは `moveTo(loc, keep)` |
 | `waves.ts` | 海の波の式。水面のシェーダー（`WAVE_GLSL`）と CPU 側の浮力・泳ぎ（`waveOffset()`）で**同じ式**を使う。嵐では `setWaveScale()` で波を高くする |
-| `commands.ts` | ワールドコマンドの型。入力側が作る「頼み」（`WorldRequest`）と、ホストが確かめて ID などを決めた「コマンド」（`WorldCommand`）。頼みを出す関数の型 `Requester` |
+| `commands.ts` | ワールドコマンドの型。木・茂み・岩・落とし物のコマンドは、海図に載せた島の物なら `loc`（`OnIsle`）を持つ。島の地図を海図に書き写す `chartIsle`。入力側が作る「頼み」（`WorldRequest`）と、ホストが確かめて ID などを決めた「コマンド」（`WorldCommand`）。頼みを出す関数の型 `Requester` |
 | `save.ts` | ワールドのセーブ（localStorage）。`WorldData` の形、`SAVE_VERSION` と版ごとの変換、`listWorlds`・`createWorld`・`loadWorld`・`saveWorld`・`deleteWorld`。自分だけの状態 `PersonalData` と共有ワールド `SharedWorld` の分け方。マルチの参加者の自分だけの状態（`loadGuest`・`saveGuest`。ホストのワールドの id ごと） |
 
 ## ワールドコマンドの流れ（`commands.ts`）
@@ -34,6 +34,7 @@
 
 - 衝突グループは `COLLIDE` にまとめる。新しい種類の物や問い合わせを足すときは、何とぶつかるかをコメントに書いてここに足す
 - 物理で動く物（丸太・落とし物）はマルチではホストだけが計算する。Rapier の結果はブラウザごとにずれるので、共有の結果を各自の物理で決めない
+- 物理のワールドは1つで、場所（自分の島・街・海図に載せた島）はどれも原点のまわりに重なっている。今いない場所の剛体がぶつからないように、場所の物の剛体は `within(loc, …)` の中で作る（`main.ts` の `applyWorld()` はコマンドの場所で包む）。剛体を手で `setEnabled(true)` しない（船だけは `Boats` が場所ごとに切り替える）
 
 ## セーブ（`save.ts`）
 

@@ -484,23 +484,73 @@ function drawLine(g, x1, z1, x2, z2, color) {
     line.rotation.y = -Math.atan2(z2 - z1, x2 - x1);
     g.add(line);
 }
-/** 木製の船の設計図。青い紙に、船を横から見た図面。紙の表が +Y、原点は紙の中心。奥の端は少し巻いている */
-export function buildBlueprintModel() {
+/** 設計図の図面。[x1, z1, x2, z2] の線を並べる（紙の中心が原点、紙は x が ±0.21・z が ±0.15） */
+const BLUEPRINT_DRAWINGS = {
+    // 船を横から見た形（船べり・底・舳先・艫）と、座る板
+    boat: [
+        [-0.15, -0.03, 0.16, -0.03], // 船べり
+        [-0.09, 0.06, 0.08, 0.06], // 底
+        [0.08, 0.06, 0.16, -0.03], // 舳先
+        [-0.09, 0.06, -0.15, -0.03], // 艫
+        [-0.05, -0.03, -0.05, 0.02], // 座る板
+        [0.05, -0.03, 0.05, 0.02],
+    ],
+    // 縦の柄と、両側がとがった頭
+    pickaxe: [
+        [0, 0.08, 0, -0.07], // 柄
+        [-0.13, -0.03, -0.05, -0.08], // 頭（左の先）
+        [-0.05, -0.08, 0.05, -0.08],
+        [0.05, -0.08, 0.13, -0.03], // 頭（右の先）
+        [-0.02, -0.05, 0.02, -0.05], // 縛ったツル
+    ],
+    // 横に長い柄と、先の石の刃
+    spear: [
+        [-0.17, 0.02, 0.07, 0.02], // 柄
+        [0.07, -0.01, 0.16, 0.02], // 刃
+        [0.16, 0.02, 0.07, 0.05],
+        [0.07, 0.05, 0.07, -0.01],
+        [0.04, -0.005, 0.04, 0.045], // 縛ったツル
+    ],
+    // 縦の柄と、四角い頭
+    hammer: [
+        [0, 0.08, 0, -0.04], // 柄
+        [-0.08, -0.04, 0.08, -0.04], // 頭
+        [0.08, -0.04, 0.08, -0.1],
+        [0.08, -0.1, -0.08, -0.1],
+        [-0.08, -0.1, -0.08, -0.04],
+    ],
+    // 斜めの竿と、垂らした糸の先の浮き
+    fishingRod: [
+        [-0.16, 0.08, 0.11, -0.1], // 竿
+        [0.11, -0.1, 0.11, 0.03], // 糸
+        [0.09, 0.03, 0.13, 0.03], // 浮き
+        [0.13, 0.03, 0.11, 0.06],
+        [0.11, 0.06, 0.09, 0.03],
+    ],
+    // 横から見た台（天板・2本の脚・棚）と、天板に広げた地図
+    draftingTable: [
+        [-0.15, -0.02, 0.15, -0.02], // 天板
+        [-0.12, -0.02, -0.12, 0.09], // 脚
+        [0.12, -0.02, 0.12, 0.09],
+        [-0.12, 0.05, 0.12, 0.05], // 棚
+        [-0.09, -0.04, 0.07, -0.04], // 広げた地図
+        [-0.09, -0.04, -0.11, -0.07], // 地図の巻いた端
+        [0.1, -0.04, 0.1, -0.1], // 羽ペン
+    ],
+};
+/** 設計図。青い紙に、作り方を覚える物の図面と寸法線。紙の表が +Y、原点は紙の中心。奥の端は少し巻いている */
+export function buildBlueprintModel(kind = 'boat') {
     const g = new THREE.Group();
     g.add(new THREE.Mesh(new THREE.BoxGeometry(SHEET_W, 0.004, SHEET_D), flat(PALETTE.water)));
     const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, SHEET_W, 10), flat(PALETTE.water));
     roll.rotation.z = Math.PI / 2;
     roll.position.set(0, 0.02, -SHEET_D / 2);
     g.add(roll);
-    // 図面：船を横から見た形（船べり・底・舳先・艫）と、座る板、寸法線
     const ink = PALETTE.sky;
-    drawLine(g, -0.15, -0.03, 0.16, -0.03, ink); // 船べり
-    drawLine(g, -0.09, 0.06, 0.08, 0.06, ink); // 底
-    drawLine(g, 0.08, 0.06, 0.16, -0.03, ink); // 舳先
-    drawLine(g, -0.09, 0.06, -0.15, -0.03, ink); // 艫
-    drawLine(g, -0.05, -0.03, -0.05, 0.02, ink); // 座る板
-    drawLine(g, 0.05, -0.03, 0.05, 0.02, ink);
-    drawLine(g, -0.15, 0.1, 0.16, 0.1, ink); // 寸法線
+    for (const [x1, z1, x2, z2] of BLUEPRINT_DRAWINGS[kind])
+        drawLine(g, x1, z1, x2, z2, ink);
+    // 寸法線
+    drawLine(g, -0.15, 0.1, 0.16, 0.1, ink);
     drawLine(g, -0.15, 0.085, -0.15, 0.115, ink);
     drawLine(g, 0.16, 0.085, 0.16, 0.115, ink);
     return g;
@@ -509,22 +559,39 @@ const MAP_W = 0.36; // 地図の紙の横
 const MAP_D = 0.28; // 地図の紙の縦
 const MAP_FOLDS = 3; // 地図の折り目で分かれる面の数（横に並ぶ）
 const MAP_FOLD_TILT = 0.05; // 折り目で面を山・谷に傾ける角度（rad）
-/** 地図。生成りの紙を三つ折りにした跡が残り、海の中に島が2つと、赤い × の印。紙の表が +Y、原点は紙の中心 */
-export function buildMapModel() {
+/** 生成りの紙を三つ折りにした跡が残る、地図の紙。sea なら紙の内側を海の色に塗る。紙の表が +Y、原点は紙の中心 */
+function mapSheet(sea) {
     const g = new THREE.Group();
     const pw = MAP_W / MAP_FOLDS;
-    const sea = new THREE.Color(PALETTE.water).lerp(new THREE.Color(PALETTE.sand), 0.55).getHex();
+    const seaColor = new THREE.Color(PALETTE.water).lerp(new THREE.Color(PALETTE.sand), 0.55).getHex();
     for (let i = 0; i < MAP_FOLDS; i++) {
         // 折り目ごとに山と谷を交互に付ける
         const panel = new THREE.Group();
         panel.position.x = -MAP_W / 2 + pw * (i + 0.5);
         panel.rotation.z = (i - (MAP_FOLDS - 1) / 2) * MAP_FOLD_TILT * (i % 2 === 0 ? 1 : -1);
         panel.add(new THREE.Mesh(new THREE.BoxGeometry(pw, 0.004, MAP_D), flat(PALETTE.sand)));
-        const ink = new THREE.Mesh(new THREE.BoxGeometry(pw - (i === 0 || i === MAP_FOLDS - 1 ? 0.02 : 0), 0.002, MAP_D - 0.03), flat(sea));
-        ink.position.set(i === 0 ? 0.01 : i === MAP_FOLDS - 1 ? -0.01 : 0, 0.003, 0);
-        panel.add(ink);
+        if (sea) {
+            const ink = new THREE.Mesh(new THREE.BoxGeometry(pw - (i === 0 || i === MAP_FOLDS - 1 ? 0.02 : 0), 0.002, MAP_D - 0.03), flat(seaColor));
+            ink.position.set(i === 0 ? 0.01 : i === MAP_FOLDS - 1 ? -0.01 : 0, 0.003, 0);
+            panel.add(ink);
+        }
         g.add(panel);
     }
+    return g;
+}
+/** 白紙の地図。三つ折りにした跡があるだけで、まだ何も描いていない紙。紙の表が +Y、原点は紙の中心 */
+export function buildMapModel() {
+    const g = mapSheet(false);
+    // 紙の縁の細い枠線だけ引いてある
+    const fx = MAP_W / 2 - 0.015;
+    const fz = MAP_D / 2 - 0.015;
+    for (const [x1, z1, x2, z2] of [[-fx, -fz, fx, -fz], [fx, -fz, fx, fz], [fx, fz, -fx, fz], [-fx, fz, -fx, -fz]])
+        drawLine(g, x1, z1, x2, z2, PALETTE.trunk);
+    return g;
+}
+/** 島の地図。海の中に島が2つと、赤い × の印、島から島への航路。紙の表が +Y、原点は紙の中心 */
+export function buildIslandMapModel() {
+    const g = mapSheet(true);
     // 島（低い楕円）と、宝の在りかのような × 印
     for (const [x, z, sx, sz, color] of [[-0.09, 0.03, 0.06, 0.045, PALETTE.grass], [0.08, -0.04, 0.07, 0.05, PALETTE.grass], [-0.09, 0.03, 0.03, 0.022, PALETTE.leaf], [0.085, -0.035, 0.035, 0.025, PALETTE.leaf]]) {
         const blob = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.004, 10), flat(color));
@@ -539,6 +606,152 @@ export function buildMapModel() {
         g.add(stroke);
     }
     drawLine(g, -0.06, 0.02, 0.07, -0.03, PALETTE.accent); // 島から島への航路
+    return g;
+}
+// ---- 地形のメモ ----
+const NOTE_W = 0.24; // メモの紙の横
+const NOTE_D = 0.18; // メモの紙の縦
+const NOTE_FRAME = 0.012; // 紙の縁から枠の線までの幅
+/** 紙の上に塗った楕円（中心 x, z・半径 rx, rz・向き ry）。layer（0〜2）が大きいほど上に重なる */
+function blot(g, x, z, rx, rz, color, layer = 0, ry = 0) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.002, 12), flat(color));
+    m.scale.set(rx, 1, rz);
+    m.rotation.y = ry;
+    m.position.set(x, 0.0025 + layer * 0.0006, z);
+    g.add(m);
+}
+/** 紙の上に塗った四角（(x1, z1) から (x2, z2) まで） */
+function patch(g, x1, z1, x2, z2, color, layer = 0) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x2 - x1), 0.002, Math.abs(z2 - z1)), flat(color));
+    m.position.set((x1 + x2) / 2, 0.0025 + layer * 0.0006, (z1 + z2) / 2);
+    g.add(m);
+}
+/** 紙の上に塗った三角。底辺の真ん中が (x, z) で、紙の奥（-Z）へ向けて高さ h・幅 w */
+function peak(g, x, z, w, h, color, layer = 0) {
+    // 外接円の半径が 1 の正三角形（幅 √3・高さ 1.5）を、頂点が -Z を向くように回して伸ばす
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.002, 3), flat(color));
+    m.rotation.y = Math.PI;
+    m.scale.set(w / Math.sqrt(3), 1, h / 1.5);
+    m.position.set(x, 0.0025 + layer * 0.0006, z - h / 3);
+    g.add(m);
+}
+/** 点をつないだ折れ線を引く */
+function polyline(g, points, color) {
+    for (let i = 1; i < points.length; i++)
+        drawLine(g, points[i - 1][0], points[i - 1][1], points[i][0], points[i][1], color);
+}
+/** 地形ごとの小さな絵（紙の上半分、x が ±0.1・z が -0.07〜0.04 の中に描く） */
+const LAND_DRAWINGS = {
+    // 木々の海：奥に薄い緑の木、手前に濃い緑の木が並ぶ
+    forest: (g) => {
+        for (const x of [-0.035, 0.035])
+            peak(g, x, 0.01, 0.045, 0.06, PALETTE.grass);
+        for (const [x, s] of [[-0.065, 0.9], [0, 1.15], [0.065, 0.95]]) {
+            drawLine(g, x, 0.04, x, 0.025, PALETTE.trunk);
+            peak(g, x, 0.028, 0.05 * s, 0.075 * s, PALETTE.leaf, 1);
+        }
+    },
+    // 風の原：低い草原の上を、風の筋が流れる
+    meadow: (g) => {
+        blot(g, 0, 0.015, 0.1, 0.03, PALETTE.grass);
+        for (const x of [-0.06, -0.02, 0.025, 0.065]) {
+            drawLine(g, x, 0.02, x - 0.008, 0.002, PALETTE.leaf);
+            drawLine(g, x, 0.02, x + 0.006, 0.004, PALETTE.leaf);
+        }
+        polyline(g, [[-0.09, -0.035], [-0.05, -0.045], [-0.01, -0.035], [0.03, -0.045]], PALETTE.water);
+        polyline(g, [[-0.04, -0.06], [0, -0.07], [0.04, -0.06], [0.08, -0.07]], PALETTE.water);
+    },
+    // 白い渚：奥に海と波、手前の砂に貝がら
+    beach: (g) => {
+        patch(g, -0.1, -0.075, 0.1, -0.02, PALETTE.water);
+        for (const [x, z] of [[-0.07, -0.02], [-0.02, -0.02], [0.03, -0.02], [0.08, -0.02]])
+            blot(g, x, z, 0.03, 0.012, PALETTE.water);
+        for (const z of [-0.06, -0.04])
+            drawLine(g, -0.08, z, 0.08, z, PALETTE.sky);
+        for (const [x, z] of [[-0.05, 0.02], [0.02, 0.03], [0.06, 0.012]])
+            blot(g, x, z, 0.008, 0.006, PALETTE.accent, 1);
+    },
+    // 灰の牙：とがった岩がぎざぎざに並ぶ
+    crag: (g) => {
+        for (const [x, w, h] of [[-0.07, 0.04, 0.06], [-0.03, 0.05, 0.1], [0.02, 0.04, 0.07], [0.065, 0.045, 0.09]])
+            peak(g, x, 0.035, w, h, PALETTE.rock);
+        drawLine(g, -0.095, 0.036, 0.095, 0.036, PALETTE.bark);
+    },
+    // 空を映す水：草地の真ん中に湖があり、空の光が映る
+    lake: (g) => {
+        blot(g, 0, -0.015, 0.1, 0.055, PALETTE.grass);
+        blot(g, 0, -0.015, 0.065, 0.032, PALETTE.water, 1);
+        blot(g, -0.02, -0.027, 0.022, 0.008, PALETTE.sky, 2);
+    },
+    // 切り立つ岸：上に草をのせた崖が、波の打つ海へまっすぐ落ちる
+    cliff: (g) => {
+        patch(g, -0.1, -0.06, 0.01, -0.045, PALETTE.grass);
+        patch(g, -0.1, -0.045, 0.01, 0.04, PALETTE.rock);
+        patch(g, 0.01, 0.0, 0.1, 0.04, PALETTE.water);
+        drawLine(g, 0.01, -0.06, 0.01, 0.04, PALETTE.bark);
+        polyline(g, [[-0.07, -0.03], [-0.06, 0], [-0.07, 0.02]], PALETTE.bark);
+        polyline(g, [[-0.03, -0.035], [-0.02, -0.01]], PALETTE.bark);
+        for (const z of [0.015, 0.03])
+            drawLine(g, 0.025, z, 0.085, z, PALETTE.sky);
+    },
+    // 激流：岩の間を水が落ち、下でしぶきが上がる
+    torrent: (g) => {
+        patch(g, -0.1, -0.07, -0.03, 0.04, PALETTE.rock);
+        patch(g, 0.03, -0.07, 0.1, 0.04, PALETTE.rock);
+        patch(g, -0.03, -0.07, 0.03, 0.03, PALETTE.water);
+        for (const x of [-0.015, 0.003, 0.018])
+            drawLine(g, x, -0.065, x, 0.02, PALETTE.sky);
+        for (const [x, r] of [[-0.03, 0.014], [-0.008, 0.017], [0.015, 0.015], [0.034, 0.012]])
+            blot(g, x, 0.033, r, r * 0.8, PALETTE.sky, 1);
+    },
+    // 笹：節のある細い茎と、斜めに伸びた葉
+    bamboo: (g) => {
+        for (const x of [-0.06, -0.02, 0.025, 0.065]) {
+            drawLine(g, x, 0.04, x, -0.07, PALETTE.leaf);
+            for (const z of [-0.04, -0.01, 0.02])
+                drawLine(g, x - 0.007, z, x + 0.007, z, PALETTE.grass);
+            blot(g, x + 0.014, -0.045, 0.016, 0.005, PALETTE.grass, 1, -0.6);
+            blot(g, x - 0.012, -0.02, 0.014, 0.005, PALETTE.grass, 1, 0.6);
+        }
+    },
+    // 船喰い：海から突き出た岩と、割れた船の残骸
+    reef: (g) => {
+        blot(g, 0, -0.012, 0.105, 0.058, PALETTE.water);
+        for (const [x, z, w, h] of [[-0.06, 0.0, 0.025, 0.035], [-0.035, 0.015, 0.03, 0.045], [0.04, -0.01, 0.025, 0.04], [0.062, 0.01, 0.02, 0.03]])
+            peak(g, x, z, w, h, PALETTE.rock, 1);
+        polyline(g, [[-0.025, -0.04], [-0.005, -0.03], [0.002, -0.035]], PALETTE.trunk);
+        polyline(g, [[0.008, -0.028], [0.02, -0.04], [0.03, -0.045]], PALETTE.trunk);
+        for (const z of [-0.055, 0.03])
+            drawLine(g, -0.02, z, 0.015, z, PALETTE.sky);
+    },
+    // 水流：草地をうねりながら流れていく川
+    stream: (g) => {
+        blot(g, 0, -0.015, 0.105, 0.06, PALETTE.grass);
+        const bends = [[-0.09, -0.05], [-0.05, -0.035], [-0.02, -0.005], [0.02, 0.005], [0.05, -0.02], [0.09, -0.005]];
+        for (const dz of [-0.006, 0, 0.006])
+            polyline(g, bends.map(([x, z]) => [x, z + dz]), PALETTE.water);
+        drawLine(g, -0.03, -0.018, 0.0, -0.002, PALETTE.sky);
+    },
+    // 空洞：岩山にぽっかり開いた暗い口
+    hollow: (g) => {
+        blot(g, 0, 0.015, 0.09, 0.075, PALETTE.rock);
+        blot(g, 0, 0.022, 0.032, 0.035, PALETTE.bark, 1);
+        patch(g, -0.1, 0.022, 0.1, 0.045, PALETTE.grass, 2);
+        polyline(g, [[-0.07, -0.01], [-0.055, -0.03], [-0.04, -0.035]], PALETTE.bark);
+        polyline(g, [[0.05, -0.04], [0.065, -0.02]], PALETTE.bark);
+    },
+};
+/** 地形のメモ。枠のある生成りの紙に、地形の小さな絵と、下に書き込みの行。紙の表が +Y、原点は紙の中心 */
+export function buildLandInfoModel(kind) {
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(NOTE_W, 0.004, NOTE_D), flat(PALETTE.sand)));
+    const fx = NOTE_W / 2 - NOTE_FRAME;
+    const fz = NOTE_D / 2 - NOTE_FRAME;
+    polyline(g, [[-fx, -fz], [fx, -fz], [fx, fz], [-fx, fz], [-fx, -fz]], PALETTE.trunk);
+    LAND_DRAWINGS[kind](g);
+    // 書き込みの行
+    for (const [z, len] of [[0.056, 0.16], [0.07, 0.11]])
+        drawLine(g, -0.08, z, -0.08 + len, z, PALETTE.bark);
     return g;
 }
 // ---- 魚 ----
