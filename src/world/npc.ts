@@ -44,8 +44,10 @@ export interface NpcLook {
   hair: number;
   /** 胸当てとつりひも付きの作業ズボン（ズボンと同じ色）。true なら胸ポケットとボタンは隠れる */
   overalls: boolean;
-  /** 麦わら帽子のつばの半径 */
+  /** 麦わら帽子のつばの半径（0 なら帽子をかぶらない） */
   brim: number;
+  /** 丸めがねをかける */
+  glasses?: boolean;
 }
 
 /** 桟橋の人：日焼けした肌、赤いシャツ、紺のズボン、麦わら帽子 */
@@ -66,6 +68,17 @@ export const FARMER_LOOK: NpcLook = {
   hair: shade(PALETTE.rock, 0.85),
   overalls: true,
   brim: 0.29,
+};
+
+/** 街の地図売り：青いシャツに茶色のズボン、帽子はかぶらず丸めがね。白髪まじり */
+export const MAP_LOOK: NpcLook = {
+  skin: mix(PALETTE.sand, PALETTE.trunk, 0.18),
+  shirt: shade(PALETTE.water, 0.85),
+  pants: shade(PALETTE.bark, 1.1),
+  hair: mix(PALETTE.rock, PALETTE.sand, 0.35),
+  overalls: false,
+  brim: 0,
+  glasses: true,
 };
 
 /** 桟橋の前に立つ位置と向き。pierFoot は桟橋の陸側の端で、桟橋は pierFoot から +Z へ伸びている */
@@ -233,16 +246,29 @@ export class Npc {
     nose.rotation.x = -0.25;
     box(this.head, 0.045, 0.01, 0.01, shade(skin, 0.55), 0, 0.058, 0.105); // 口
     // 麦わら帽子（少しあみだにかぶる）
-    const hat = joint(this.head, 0, 0.18, -0.008);
-    hat.rotation.x = -0.1;
-    const brim = solid(new THREE.CylinderGeometry(look.brim - 0.005, look.brim + 0.005, 0.012, 16), straw);
-    hat.add(brim);
-    const crown = solid(new THREE.CylinderGeometry(0.105, 0.125, 0.1, 14), straw);
-    crown.position.y = 0.05;
-    hat.add(crown);
-    const band = solid(new THREE.CylinderGeometry(0.127, 0.128, 0.025, 14), shade(PALETTE.bark, 0.9));
-    band.position.y = 0.017;
-    hat.add(band);
+    if (look.brim > 0) {
+      const hat = joint(this.head, 0, 0.18, -0.008);
+      hat.rotation.x = -0.1;
+      const brim = solid(new THREE.CylinderGeometry(look.brim - 0.005, look.brim + 0.005, 0.012, 16), straw);
+      hat.add(brim);
+      const crown = solid(new THREE.CylinderGeometry(0.105, 0.125, 0.1, 14), straw);
+      crown.position.y = 0.05;
+      hat.add(crown);
+      const band = solid(new THREE.CylinderGeometry(0.127, 0.128, 0.025, 14), shade(PALETTE.bark, 0.9));
+      band.position.y = 0.017;
+      hat.add(band);
+    }
+    // 丸めがね：目の前に細い輪を2つ、真ん中をつなぐ橋と、耳へ渡るつる
+    if (look.glasses) {
+      const rim = shade(PALETTE.bark, 0.6);
+      for (const side of [-1, 1]) {
+        const lens = solid(new THREE.TorusGeometry(0.026, 0.004, 4, 12), rim);
+        lens.position.set(side * 0.04, 0.125, 0.122);
+        this.head.add(lens);
+        box(this.head, 0.004, 0.004, 0.11, rim, side * 0.068, 0.128, 0.068); // つる
+      }
+      box(this.head, 0.03, 0.004, 0.004, rim, 0, 0.13, 0.124); // 橋
+    }
 
     this.collider = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 2, 8));
     this.collider.position.y = 1;

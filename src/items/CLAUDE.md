@@ -12,10 +12,10 @@
 | `inventory.ts` | アイテムの定義 `ITEMS`（名前・`maxStack`・`durability`・`currency`・設計図の `teaches` など）と `Inventory`。スタック `Stack` は使いかけの道具の減った耐久値を `dmg` に持つ。お金は左の「お金のマス」（`purse`）にだけ入る。開いている画面の欄（焚火の燃料の欄など）へ Shift+クリックで送るときは `quickMove` を使う | 自分だけ |
 | `recipes.ts` | クラフトのレシピ `RECIPES`（作る場所 `Station`：手元か作業台、`locked` は設計図で覚えるまで作れない）と、建築部材に使う素材 `BUILD_PLANS` | — |
 | `recipeBook.ts` | 設計図で覚えたレシピ（`RecipeBook`）。設計図を持って右クリックで覚える（設計図は減らない） | 自分だけ |
-| `trades.ts` | 住人ごとの取引の一覧 `TRADES`（`MerchantId`：`pier`・`farmer`）。住人は在庫を持たず、自分のインベントリだけが変わる | 自分だけ |
+| `trades.ts` | 住人ごとの取引の一覧 `TRADES`（`MerchantId`：`pier`・`farmer`・`mapmaker`）。住人は在庫を持たず、自分のインベントリだけが変わる | 自分だけ |
 | `drops.ts` | 落ちている物（`ItemDrops`）。落とす・拾うはワールドコマンド（`dropItem`・`pickDrop`）。物理で動くので、マルチではホストの物理の位置（`motion()`）を参加者に配る（`setMotion()`） | 共有 |
 | `fishKinds.ts` | 釣れる魚の種類 `FISH_KINDS`（見た目・場所と時間・引きの強さ）。釣りは自分だけの行動なので `Math.random()` で決めてよい | — |
-| `itemModels.ts` | アイテムの3Dモデル（`buildXxxModel()`）。船・魚・コイン・設計図など | — |
+| `itemModels.ts` | アイテムの3Dモデル（`buildXxxModel()`）。船・魚・コイン・設計図・地図など | — |
 | `itemIcons.ts` | アイテムのアイコン（`itemIcon()`。モデルから描く）と `itemModel()` | — |
 
 ## アイテムを追加するとき

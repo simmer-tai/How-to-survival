@@ -10,6 +10,8 @@ import type { LocationId } from '../world/location.js';
 export const NPC_NAME = '桟橋の人';
 /** 街の広場で屋台を出している農家の呼び名 */
 export const FARMER_NAME = '農家の人';
+/** 街の地図屋の中にいる地図売りの呼び名 */
+export const MAPMAKER_NAME = '地図売り';
 
 /**
  * 達成の条件。

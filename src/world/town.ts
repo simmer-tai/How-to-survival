@@ -6,8 +6,9 @@ import {
   backSide, colliderBox, colliderCyl, facePoint, stoneColor, type Face,
 } from './townKit.js';
 import { buildHouse } from './house.js';
+import { buildMapShop } from './mapShop.js';
 
-// 街の島。西（-X。自分の島から船で来る側）に石造りの港がある。広場には農家の屋台と、木組みの家が1軒ある（ほかの家や住人はこれから足す）。
+// 街の島。西（-X。自分の島から船で来る側）に石造りの港がある。広場には農家の屋台と、木組みの家が1軒、中に入れる地図屋が1軒ある（ほかの家や住人はこれから足す）。
 // 港は、石積みの岸壁に囲まれた石畳の広場と、海へ突き出た石の突堤、水面へ下りる石段、木の桟橋でできている。
 // 形は固定（乱数は固定シード）なので、誰の画面でも同じになる
 
@@ -48,6 +49,10 @@ const STAIR_STEPS = 9; // 石段の段数（いちばん下は水の中）
 // ---- 家（広場の北東の角。妻側の正面が西＝港のほうを向く） ----
 const HOUSE_X = 7; // 家の真ん中の X
 const HOUSE_Z = 14; // 家の真ん中の Z
+
+// ---- 地図屋（広場の南東の角。戸口が西＝港のほうを向く） ----
+const MAP_SHOP_X = 7; // 地図屋の真ん中の X
+const MAP_SHOP_Z = -12; // 地図屋の真ん中の Z
 
 // ---- 農家の屋台（売り台が西＝港のほうを向く） ----
 const STALL_X = 1; // 売り台の前（西）の面の X
@@ -96,6 +101,12 @@ export interface Town {
   platforms: Platform[];
   /** 屋台の農家が立つ位置（足元）と向き */
   farmerSpot: { position: THREE.Vector3; yaw: number };
+  /** 地図屋の中で地図売りが立つ位置（足元）と向き */
+  mapKeeperSpot: { position: THREE.Vector3; yaw: number };
+  /** 地図に描く建物の形（真上から見た四隅）。屋台・家・地図屋 */
+  buildings: THREE.Vector3[][];
+  /** 地図に名前を書く所 */
+  marks: { name: string; x: number; z: number }[];
 }
 
 function mulberry32(seed: number): () => number {
@@ -402,9 +413,22 @@ export function buildTown(): Town {
   group.add(b.mesh());
 
   // 広場の北東の家（正面の戸口と妻が港を向く）
-  buildHouse(group, solids, { x: HOUSE_X, y: QUAY_TOP, z: HOUSE_Z, yaw: -Math.PI / 2 });
+  const house = buildHouse(group, solids, { x: HOUSE_X, y: QUAY_TOP, z: HOUSE_Z, yaw: -Math.PI / 2 });
+  // 広場の南東の地図屋（戸口が港を向く。中に入ると、売り台の後ろに地図売りがいる）
+  const mapShop = buildMapShop(group, solids, { x: MAP_SHOP_X, y: QUAY_TOP, z: MAP_SHOP_Z, yaw: -Math.PI / 2 });
+  const stallBox = [[STALL_X - ROOF_OVER, STALL_Z - STALL_W / 2], [STALL_X + STALL_DEPTH, STALL_Z - STALL_W / 2], [STALL_X + STALL_DEPTH, STALL_Z + STALL_W / 2], [STALL_X - ROOF_OVER, STALL_Z + STALL_W / 2]]
+    .map(([x, z]) => new THREE.Vector3(x, QUAY_TOP, z));
 
   // 木の桟橋：岸壁の北寄りから海へ出す（岸壁の外から始め、陸側の端がちょうど岸壁に付くようにする）
   buildPier(group, solids, platforms, mulberry32(PIER_SEED), QUAY_X - PIER_LAND, PIER_Z, [-1, 0], ground);
-  return { group, terrain, solids, platforms, farmerSpot };
+  return {
+    group, terrain, solids, platforms, farmerSpot,
+    mapKeeperSpot: mapShop.keeperSpot,
+    buildings: [stallBox, house, mapShop.corners],
+    marks: [
+      { name: '農家の屋台', x: STALL_X + STALL_DEPTH / 2, z: STALL_Z },
+      { name: '地図屋', x: MAP_SHOP_X, z: MAP_SHOP_Z - 5.5 }, // 名前は建物の北に書く（中にいると自分の矢印に隠れるので）
+      { name: '港', x: QUAY_X + 4, z: JETTY_Z },
+    ],
+  };
 }

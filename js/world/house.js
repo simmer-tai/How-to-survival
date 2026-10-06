@@ -8,23 +8,23 @@ import { ACCENT, BALL, BARK, BOX, Batch, CYL, LEAF, MORTAR, PRISM, ROCK, SAND, T
 const W = 6; // 1階の幅（X）
 const D = 7.2; // 1階の奥行き（Z）
 const PLINTH_H = 0.4; // 1階の足元の、少し張り出した土台の石の高さ
-const GF_H = 2.8; // 1階の壁の高さ
+export const GF_H = 2.8; // 1階の壁の高さ
 const COURSE = 0.4; // 1階の石積みの1段の高さ
 const BLOCK_MIN = 0.55; // 1階の石の長さ（最小・最大）
 const BLOCK_MAX = 1.1;
 const JOINT = 0.05; // 石と石のすきま（目地）
-const BAND = 0.3; // 1階と2階の間の梁の帯の高さ
+export const BAND = 0.3; // 1階と2階の間の梁の帯の高さ
 const JETTY = 0.4; // 2階が1階より外へ張り出す長さ
 const UF_H = 2.4; // 2階の壁の高さ
 const GABLE_JETTY = 0.2; // 妻の三角の壁が2階よりさらに張り出す長さ
 const BAY = 1.3; // 2階の木組みの柱と柱の間隔（目安）
 const TIMBER = 0.16; // 木組みの角材の太さ
 const EAVE_TUCK = 0.14; // 軒の下の面の木組みを、壁の上端からどれだけ下で止めるか
-const UNDER_ROOF = 0.22; // 妻の三角の壁を、屋根の面からどれだけ内側に引っ込めるか（石板の間から見えないように）
+export const UNDER_ROOF = 0.22; // 妻の三角の壁を、屋根の面からどれだけ内側に引っ込めるか（石板の間から見えないように）
 // ---- 屋根 ----
-const PITCH = THREE.MathUtils.degToRad(56); // 屋根の傾き
-const EAVE_OVER = 0.45; // 軒が壁より外へ出る長さ
-const GABLE_OVER = 0.35; // 屋根が妻の壁より外へ出る長さ
+export const PITCH = THREE.MathUtils.degToRad(56); // 屋根の傾き
+export const EAVE_OVER = 0.45; // 軒が壁より外へ出る長さ
+export const GABLE_OVER = 0.35; // 屋根が妻の壁より外へ出る長さ
 const TILE_ROW = 0.34; // 石板の1段の間隔（屋根の斜面に沿って）
 const TILE_MIN = 0.34; // 石板の幅（最小・最大）
 const TILE_MAX = 0.5;
@@ -34,7 +34,7 @@ const DORMER_SET = 0.7; // 屋根窓の正面が、2階の壁からどれだけ�
 const DORMER_WALL = 1.25; // 屋根窓の正面の壁の高さ（屋根の面から）
 const DORMER_PITCH = THREE.MathUtils.degToRad(50); // 屋根窓の小さな屋根の傾き
 const HOUSE_SEED = 777; // 石や石板の大きさ・色のばらつきを決める乱数のシード
-function mulberry32(seed) {
+export function mulberry32(seed) {
     return () => {
         seed |= 0;
         seed = (seed + 0x6d2b79f5) | 0;
@@ -44,16 +44,16 @@ function mulberry32(seed) {
     };
 }
 // ---- 色 ----
-const PLASTER = SAND.clone().lerp(ROCK, 0.18); // 漆喰の壁
-const BEAM = BARK.clone().multiplyScalar(0.75); // 木組みの濃い角材
+export const PLASTER = SAND.clone().lerp(ROCK, 0.18); // 漆喰の壁
+export const BEAM = BARK.clone().multiplyScalar(0.75); // 木組みの濃い角材
 const GLASS = WATER.clone().lerp(BARK, 0.55).multiplyScalar(0.45); // 窓ガラス（暗い）
 const SHUTTER = LEAF.clone().lerp(WATER, 0.3).multiplyScalar(0.8); // 窓の板戸
-const SLATE = ROCK.clone().lerp(WATER, 0.3).multiplyScalar(0.72); // 屋根の石板
+export const SLATE = ROCK.clone().lerp(WATER, 0.3).multiplyScalar(0.72); // 屋根の石板
 const POT = ACCENT.clone().lerp(TRUNK, 0.5); // 煙突の素焼きの筒
 const UP = new THREE.Vector3(0, 1, 0);
 /** 石の色（1階の壁）。窓の縁や角の石は少し明るい */
-const wallStone = (rand, k = 0.85) => stoneColor(rand, k);
-const trimStone = (rand) => stoneColor(rand, 1.05).lerp(SAND, 0.12);
+export const wallStone = (rand, k = 0.85) => stoneColor(rand, k);
+export const trimStone = (rand) => stoneColor(rand, 1.05).lerp(SAND, 0.12);
 /** 穴のまわりで石を積まない範囲（窓台と、上のまぐさ石のぶん広い） */
 const clipOf = (o) => ({ a: o.a - 0.14, e: o.e + 0.14, y0: o.door ? 0 : o.y0 - 0.14, y1: o.y1 + 0.3 });
 /** [a, e] から cuts の範囲を除いた残りの区間 */
@@ -82,7 +82,7 @@ function stone(b, rand, f, a, e, y0, y1, color) {
     faceBox(b, f, a + JOINT / 2, e - JOINT / 2, y0 + JOINT / 2, y1 - JOINT / 2, -0.2, 0.04 + rand() * 0.06, color, [backSide(f)]);
 }
 /** 1階の壁の面に、段ごとに長さの違う石を積む。穴のまわりは空けておく */
-function stoneWall(b, rand, f, openings) {
+export function stoneWall(b, rand, f, openings) {
     const clips = openings.map(clipOf);
     // 土台：大きめの暗い石を一段、少し張り出して並べる
     const doorCuts = clips.filter((c) => c.y0 < PLINTH_H);
@@ -115,10 +115,8 @@ function stoneWall(b, rand, f, openings) {
     for (const o of openings)
         (o.door ? door : stoneWindow)(b, rand, f, o);
 }
-/** 家の四隅に、長い石と短い石を段ごとに互い違いに積む（隅石） */
-function quoins(b, rand) {
-    const hx = W / 2;
-    const hz = D / 2;
+/** 家の四隅に、長い石と短い石を段ごとに互い違いに積む（隅石）。hx・hz は1階の幅と奥行きの半分 */
+export function quoins(b, rand, hx = W / 2, hz = D / 2) {
     for (let y0 = PLINTH_H, row = 0; y0 < GF_H - 0.05; y0 += COURSE, row++) {
         const y1 = Math.min(y0 + COURSE, GF_H) - JOINT / 2;
         for (const sx of [-1, 1]) {
@@ -138,7 +136,7 @@ function quoins(b, rand) {
     }
 }
 /** 窓ガラスと、それを十字に区切る木の枠 */
-function windowPane(b, f, a, e, y0, y1, frame) {
+export function windowPane(b, f, a, e, y0, y1, frame) {
     faceBox(b, f, a, e, y0, y1, -0.05, 0.015, GLASS, [backSide(f)]);
     const t = 0.07;
     faceBox(b, f, a, a + t, y0, y1, 0, 0.06, frame, [backSide(f)]);
@@ -178,20 +176,22 @@ function stoneWindow(b, rand, f, o) {
         }
     }
 }
-/** 戸口：縦板の扉、鉄の帯、上の太い梁、前の踏み石、その上の小さなひさし */
+/** 戸口：縦板の扉、鉄の帯、上の太い梁、前の踏み石、その上の小さなひさし（open なら扉は付けない） */
 function door(b, rand, f, o) {
     const skip = [backSide(f)];
-    const n = 4;
-    for (let i = 0; i < n; i++) {
-        const a = o.a + ((o.e - o.a) * i) / n;
-        const e = o.a + ((o.e - o.a) * (i + 1)) / n;
-        faceBox(b, f, a + 0.01, e - 0.01, o.y0, o.y1, -0.05, 0.04, TRUNK.clone().multiplyScalar(0.8 + rand() * 0.15), skip);
+    if (!o.open) {
+        const n = 4;
+        for (let i = 0; i < n; i++) {
+            const a = o.a + ((o.e - o.a) * i) / n;
+            const e = o.a + ((o.e - o.a) * (i + 1)) / n;
+            faceBox(b, f, a + 0.01, e - 0.01, o.y0, o.y1, -0.05, 0.04, TRUNK.clone().multiplyScalar(0.8 + rand() * 0.15), skip);
+        }
+        const iron = BARK.clone().lerp(ROCK, 0.25).multiplyScalar(0.55);
+        for (const y of [o.y0 + 0.45, o.y1 - 0.45])
+            faceBox(b, f, o.a + 0.06, o.e - 0.2, y - 0.04, y + 0.04, 0.04, 0.06, iron, skip);
+        const knob = facePoint3(f, o.e - 0.15, o.y0 + 1.0, 0.08);
+        b.add(BALL, knob.x, knob.y, knob.z, 0.045, 0.045, 0.045, iron);
     }
-    const iron = BARK.clone().lerp(ROCK, 0.25).multiplyScalar(0.55);
-    for (const y of [o.y0 + 0.45, o.y1 - 0.45])
-        faceBox(b, f, o.a + 0.06, o.e - 0.2, y - 0.04, y + 0.04, 0.04, 0.06, iron, skip);
-    const knob = facePoint3(f, o.e - 0.15, o.y0 + 1.0, 0.08);
-    b.add(BALL, knob.x, knob.y, knob.z, 0.045, 0.045, 0.045, iron);
     // 戸の枠と上の梁
     faceBox(b, f, o.a - 0.14, o.a, o.y0, o.y1, -0.1, 0.12, BEAM, skip);
     faceBox(b, f, o.e, o.e + 0.14, o.y0, o.y1, -0.1, 0.12, BEAM, skip);
@@ -264,7 +264,7 @@ function joists(b, f) {
         b.beam(facePoint3(f, s, GF_H - 0.9, 0.12), facePoint3(f, s, GF_H - 0.08, JETTY - 0.05), along, 0.13, 0.13, BEAM);
 }
 /** 妻の三角の壁と、その木組み（2本の束、斜めの筋かい、中ほどの横木、小さな窓） */
-function gable(b, f, base, half, rise) {
+export function gable(b, f, base, half, rise) {
     const out = f.fixed; // 三角の壁の外の面（Z）
     b.oriented(PRISM, new THREE.Vector3(0, base, out - f.out * 0.25), new THREE.Vector3(1, 0, 0), UP, new THREE.Vector3(0, 0, 1), half * 2, rise, 0.5, PLASTER);
     const nrm = faceNormal(f);
@@ -324,7 +324,7 @@ function ridgeCap(b, rand, mid, dir, len) {
     }
 }
 /** 切妻屋根の2つの斜面。halfW は棟から軒先までの水平の幅（軒の出を含む）、along は棟の向き。ridge は棟の真ん中 */
-function gableRoof(b, rand, ridge, along, halfW, pitch, length) {
+export function gableRoof(b, rand, ridge, along, halfW, pitch, length) {
     const side = new THREE.Vector3().crossVectors(UP, along).normalize();
     const slopeLen = halfW / Math.cos(pitch);
     for (const s of [-1, 1]) {
@@ -343,7 +343,7 @@ function gableRoof(b, rand, ridge, along, halfW, pitch, length) {
     ridgeCap(b, rand, ridge, along, length);
 }
 // ---- 家を組み立てる ----
-/** 家を1つ建てて group に入れる。当たり判定の見えない箱は solids に足す */
+/** 家を1つ建てて group に入れる。当たり判定の見えない箱は solids に足す。真上から見た2階の四隅（置いた先の座標）を返す */
 export function buildHouse(group, solids, spot) {
     const g = new THREE.Group();
     g.position.set(spot.x, spot.y, spot.z);
@@ -445,4 +445,6 @@ export function buildHouse(group, solids, spot) {
     // 当たり判定：1階と、張り出した2階
     colliderBox(g, solids, -hx - 0.12, 0, -hz - 0.12, hx + 0.12, GF_H, hz + 0.12);
     colliderBox(g, solids, -ux, GF_H, -uz, ux, eaveY, uz);
+    g.updateMatrixWorld(true);
+    return [[-ux, -uz], [ux, -uz], [ux, uz], [-ux, uz]].map(([x, z]) => new THREE.Vector3(x, 0, z).applyMatrix4(g.matrixWorld));
 }

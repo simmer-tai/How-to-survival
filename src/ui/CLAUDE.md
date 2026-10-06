@@ -14,6 +14,7 @@
 | `death.ts` | HP が尽きたときの画面（`DeathScreen`）。リスポーンかタイトルへ戻るかを選ぶ |
 | `clock.ts` | 左上の時計（`ClockHud`。何日目か・時刻・昼か夜か・天気）。時刻そのものは `world/clock.ts` |
 | `seaMap.ts` | 海図（`SeaMap`）。船で世界の端まで行くと開き、ほかの場所へ渡る。渡るのは `main.ts` が船のワールドコマンド（`sailBoat`）にする。場面の切り替えの暗転 `travelFade()` |
+| `areaMap.ts` | 地図（`AreaMap`）。地図（アイテム）を持って右クリックで開き、右クリックか Esc でたたむ。今いる場所の地形を真上から見た画像を場所ごとに一度だけ焼き（`addSource()` で登録した地形・桟橋や広場・建物・名前）、その上に自分の位置と向き、同じ場所にいるほかの人を毎フレーム描く |
 | `avatarEditor.ts` | アバターの見た目を選ぶ画面（`AvatarEditor`・`AvatarMenu`）。タイトル画面と一時停止の画面から開く |
 | `commandMenu.ts` | コマンドメニュー（`CommandMenu`）。Enter で開き、`/weather rain` のように打つかボタンで実行する。コマンドの中身は `main.ts` で `register()` する |
 | `chargeRing.ts` | クロスヘアの周りの円形のチャージメーター（槍・釣り竿を投げる力） |

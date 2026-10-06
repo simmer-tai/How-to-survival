@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { woodPiece } from '../items/drops.js';
-import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildDirtModel } from '../items/itemModels.js';
+import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildDirtModel } from '../items/itemModels.js';
 import { FISH_KINDS, type FishId } from '../items/fishKinds.js';
 import { HandModel, type HandAnchor, type HandPoseName, type Vec3 } from './handModel.js';
 import { pieceIconModel } from '../actions/pieces.js';
@@ -765,6 +765,14 @@ const HOLD_STYLES = {
     rotation: [0.75, 0.15, 0.05],
     scale: 0.85,
     hand: { pose: 'cup', at: [0, -0.01, 0.08], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+  },
+  // 地図：設計図と同じように手のひらにのせ、紙の表が見えるようにこちらへ傾ける
+  map: {
+    build: buildMapModel,
+    slots: [[0, 0.004, 0, 0, 0, 0]],
+    rotation: [0.75, -0.1, 0.05],
+    scale: 0.75,
+    hand: { pose: 'cup', at: [0, -0.01, 0.06], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
   },
   // 木製の船：持ち物の中では小さく見せて、手のひらにのせる（舳先を左奥へ）
   boat: {

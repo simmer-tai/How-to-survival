@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { buildAxe, buildFishingRod, buildHammer, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
-import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildSeedModel, buildDirtModel } from './itemModels.js';
+import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildSeedModel, buildDirtModel } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
 import { FISH_KINDS, type FishId } from './fishKinds.js';
 import type { ItemId } from './inventory.js';
@@ -235,6 +235,16 @@ function buildBlueprintIcon(): THREE.Group {
   return g;
 }
 
+/** 地図：紙の表をこちらへ向けて、少し傾ける */
+function buildMapIcon(): THREE.Group {
+  const g = new THREE.Group();
+  const sheet = buildMapModel();
+  sheet.rotation.x = Math.PI / 2 - 0.35;
+  g.add(sheet);
+  g.rotation.set(0, 0.2, -0.08);
+  return g;
+}
+
 /** 斧やハンマーやナイフ：刃や打つ面（-Z）を画面の左へ向けて横顔を見せる */
 function sideView(tool: THREE.Group): THREE.Group {
   tool.rotation.y = Math.PI / 2;
@@ -269,6 +279,7 @@ const MODELS: Record<ItemId, () => THREE.Object3D> = {
   bonito: () => buildFishIcon('bonito'),
   coin: buildCoinIcon,
   boatBlueprint: buildBlueprintIcon,
+  map: buildMapIcon,
   boat: buildBoatIcon,
   hoe: () => tools(buildHoe()),
   axe: () => tools(sideView(buildAxe())),
