@@ -32,8 +32,11 @@ export class TreeChopper {
     world;
     physics;
     states = new Map();
-    /** セーブデータでの木の並び（props の生成順） */
-    order;
+    /** 木の番号 → 木。最初から島にある木は props の生成順の番号、種から育てた木はあとから addTree で足す */
+    byId = new Map();
+    idOf = new Map();
+    /** 最初から島にある木の数（セーブデータの trees の並び） */
+    fixedCount;
     raycaster = new THREE.Raycaster();
     chips = [];
     q = new THREE.Quaternion();
@@ -41,35 +44,55 @@ export class TreeChopper {
     onSplit = () => { };
     /** 共有ワールドを変える頼みを出す（main.ts が差し替える） */
     request = () => false;
+    /** 丸太をばらし終えて、木がなくなったときに呼ばれる（木の番号） */
+    onRemove = () => { };
     constructor(world, trees, physics) {
         this.world = world;
         this.physics = physics;
-        this.order = trees.map((t) => t.object);
-        const frame = new THREE.Matrix4();
-        for (const tree of trees) {
-            const obj = tree.object;
-            // 剛体の原点は根元。拡大率はコライダーの形に焼き込む。葉には当たり判定を付けない
-            const body = physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed()
-                .setTranslation(obj.position.x, obj.position.y, obj.position.z)
-                .setRotation(obj.quaternion)
-                .setAngularDamping(0.4));
-            frame.compose(obj.position, obj.quaternion, new THREE.Vector3(1, 1, 1)).invert();
-            physics.world.createCollider(hullDesc(tree.trunk, frame, TRUNK_FLOOR).setCollisionGroups(COLLIDE.wood).setFriction(0.9).setDensity(500), body);
-            this.states.set(obj, {
-                tree,
-                phase: 'standing',
-                body,
-                hinge: null,
-                base: obj.quaternion.clone(),
-                baseScale: obj.scale.x,
-                leafScales: tree.leaves.map((l) => l.scale.x),
-                hp: TREE_HP,
-                axis: new THREE.Vector3(),
-                time: 0,
-                shrinking: -1,
-            });
-        }
+        this.fixedCount = trees.length;
+        trees.forEach((tree, i) => this.addTree(i, tree));
         this.raycaster.far = LOG_REACH;
+    }
+    /**
+     * 立っている木を、木の番号 id で足す（種から育ちきった木もこれで足す）。木はワールドに置いてから渡す。
+     * 作った幹の剛体を返す
+     */
+    addTree(id, tree) {
+        const obj = tree.object;
+        // 剛体の原点は根元。拡大率はコライダーの形に焼き込む。葉には当たり判定を付けない
+        const body = this.physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed()
+            .setTranslation(obj.position.x, obj.position.y, obj.position.z)
+            .setRotation(obj.quaternion)
+            .setAngularDamping(0.4));
+        const frame = new THREE.Matrix4().compose(obj.position, obj.quaternion, new THREE.Vector3(1, 1, 1)).invert();
+        this.physics.world.createCollider(hullDesc(tree.trunk, frame, TRUNK_FLOOR).setCollisionGroups(COLLIDE.wood).setFriction(0.9).setDensity(500), body);
+        this.states.set(obj, {
+            tree,
+            phase: 'standing',
+            body,
+            hinge: null,
+            base: obj.quaternion.clone(),
+            baseScale: obj.scale.x,
+            leafScales: tree.leaves.map((l) => l.scale.x),
+            hp: TREE_HP,
+            axis: new THREE.Vector3(),
+            time: 0,
+            shrinking: -1,
+        });
+        this.byId.set(id, obj);
+        this.idOf.set(obj, id);
+        return body;
+    }
+    /** 木をなくす（丸太をばらし終えたとき・ばらした木をロードしたとき） */
+    forget(obj) {
+        obj.removeFromParent();
+        this.states.delete(obj);
+        const id = this.idOf.get(obj);
+        if (id === undefined)
+            return;
+        this.idOf.delete(obj);
+        this.byId.delete(id);
+        this.onRemove(id);
     }
     // ---- 入力側：視線から叩く木を決めて、頼みを出す ----
     /** 画面中央の先にある木・丸太を叩く頼みを出す。当たったら true */
@@ -80,12 +103,12 @@ export class TreeChopper {
         const { obj, s, hit, away } = target;
         if (s.phase === 'standing' && hit.distance > REACH)
             return false;
-        return this.request({ type: 'chopTree', tree: this.order.indexOf(obj), p: hit.point.toArray(), away: [away.x, away.z] });
+        return this.request({ type: 'chopTree', tree: this.idOf.get(obj), p: hit.point.toArray(), away: [away.x, away.z] });
     }
     // ---- ホスト側：頼みを確かめてコマンドにする ----
     /** 立っている木か、倒れきった丸太なら叩ける（倒れている途中は叩けない）。できなければ null（マルチではホストだけが呼ぶ） */
     authorize(req) {
-        const obj = this.order[req.tree];
+        const obj = this.byId.get(req.tree);
         const s = obj && this.states.get(obj);
         const wellFormed = req.p.length === 3 && req.away.length === 2 && [...req.p, ...req.away].every(Number.isFinite);
         if (!s || !wellFormed || (s.phase !== 'standing' && s.phase !== 'log'))
@@ -95,7 +118,7 @@ export class TreeChopper {
     // ---- 適用側：コマンドの値だけで木を変える（カメラや入力は見ない） ----
     /** 耐久値を1減らす。立っている木は 0 で叩いた向きの奥へ倒れ、丸太は 0 でばらけて木材になる（木材は onSplit でホストが出す） */
     apply(cmd) {
-        const obj = this.order[cmd.tree];
+        const obj = this.byId.get(cmd.tree);
         const s = obj && this.states.get(obj);
         if (!s || (s.phase !== 'standing' && s.phase !== 'log'))
             return;
@@ -128,7 +151,7 @@ export class TreeChopper {
      */
     motion() {
         const out = [];
-        this.order.forEach((obj, i) => {
+        this.byId.forEach((obj, i) => {
             const s = this.states.get(obj);
             if (!s || (s.phase !== 'falling' && s.phase !== 'log') || s.body.isSleeping())
                 return;
@@ -143,7 +166,7 @@ export class TreeChopper {
     /** ホストから届いた動きに合わせる（参加者が呼ぶ。あいだは自分の物理でつなぐ） */
     setMotion(list) {
         for (const [i, x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz] of list) {
-            const obj = this.order[i];
+            const obj = this.byId.get(i);
             const s = obj && this.states.get(obj);
             if (!s || (s.phase !== 'falling' && s.phase !== 'log'))
                 continue;
@@ -186,10 +209,8 @@ export class TreeChopper {
                 this.updateFalling(s, dt);
             else if (s.phase === 'breaking') {
                 const k = s.time / BREAK_TIME;
-                if (k >= 1) {
-                    obj.removeFromParent();
-                    this.states.delete(obj);
-                }
+                if (k >= 1)
+                    this.forget(obj);
                 else {
                     obj.scale.setScalar(s.baseScale * (1 - k));
                 }
@@ -209,50 +230,57 @@ export class TreeChopper {
             c.mesh.rotation.z += dt * 7;
         }
     }
+    /** 最初から島にある木（props の生成順）の状態。種から育てた木は serializeTree で植えた木と一緒に保存する */
     serialize() {
-        return this.order.map((obj) => {
-            const s = this.states.get(obj);
-            if (!s || s.phase === 'breaking')
-                return null;
-            if (s.phase === 'standing')
-                return { hp: s.hp };
-            // 倒れている途中の木は、その場で丸太になったものとして保存する
-            const t = s.body.translation();
-            const r = s.body.rotation();
-            return { hp: s.phase === 'log' ? s.hp : LOG_HP, log: [t.x, t.y, t.z, r.x, r.y, r.z, r.w] };
-        });
+        return Array.from({ length: this.fixedCount }, (_, i) => this.serializeTree(i));
+    }
+    /** 木の番号 id の木の状態（なくなった木は null） */
+    serializeTree(id) {
+        const obj = this.byId.get(id);
+        const s = obj && this.states.get(obj);
+        if (!s || s.phase === 'breaking')
+            return null;
+        if (s.phase === 'standing')
+            return { hp: s.hp };
+        // 倒れている途中の木は、その場で丸太になったものとして保存する
+        const t = s.body.translation();
+        const r = s.body.rotation();
+        return { hp: s.phase === 'log' ? s.hp : LOG_HP, log: [t.x, t.y, t.z, r.x, r.y, r.z, r.w] };
     }
     /** 生成直後（すべて立っている状態）に呼ぶ */
     restore(saves) {
-        this.order.forEach((obj, i) => {
-            const s = this.states.get(obj);
-            const save = saves[i];
-            if (!s || save === undefined)
-                return;
-            if (save === null) {
-                obj.removeFromParent();
-                this.physics.removeBody(s.body);
-                this.states.delete(obj);
-                return;
-            }
-            s.hp = save.hp;
-            if (!save.log)
-                return;
-            const [x, y, z, qx, qy, qz, qw] = save.log;
-            s.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-            s.body.setTranslation({ x, y, z }, true);
-            s.body.setRotation({ x: qx, y: qy, z: qz, w: qw }, true);
-            s.body.setLinearDamping(LOG_DAMPING.linear);
-            s.body.setAngularDamping(LOG_DAMPING.angular);
-            obj.position.set(x, y, z);
-            obj.quaternion.set(qx, qy, qz, qw);
-            s.tree.crown.removeFromParent();
-            for (const leaf of s.tree.leaves)
-                leaf.removeFromParent();
-            this.physics.link(s.body, obj);
-            this.physics.addFloater(s.body, 0.5);
-            s.phase = 'log';
-        });
+        for (let i = 0; i < this.fixedCount; i++)
+            if (saves[i] !== undefined)
+                this.restoreTree(i, saves[i]);
+    }
+    /** 立っている状態の木の番号 id の木を、セーブした状態に戻す */
+    restoreTree(id, save) {
+        const obj = this.byId.get(id);
+        const s = obj && this.states.get(obj);
+        if (!obj || !s)
+            return;
+        if (save === null) {
+            this.physics.removeBody(s.body);
+            this.forget(obj);
+            return;
+        }
+        s.hp = save.hp;
+        if (!save.log)
+            return;
+        const [x, y, z, qx, qy, qz, qw] = save.log;
+        s.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+        s.body.setTranslation({ x, y, z }, true);
+        s.body.setRotation({ x: qx, y: qy, z: qz, w: qw }, true);
+        s.body.setLinearDamping(LOG_DAMPING.linear);
+        s.body.setAngularDamping(LOG_DAMPING.angular);
+        obj.position.set(x, y, z);
+        obj.quaternion.set(qx, qy, qz, qw);
+        s.tree.crown.removeFromParent();
+        for (const leaf of s.tree.leaves)
+            leaf.removeFromParent();
+        this.physics.link(s.body, obj);
+        this.physics.addFloater(s.body, 0.5);
+        s.phase = 'log';
     }
     /** 幹の根元の、倒れる側の縁を支点にして、重力で倒れる剛体にする */
     topple(obj, s) {

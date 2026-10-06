@@ -408,6 +408,35 @@ export function buildPier(group, solids, platforms, rand, x0, z0, dir, height = 
     });
     return { foot: new THREE.Vector3(fx, PIER_TOP, fz), end: new THREE.Vector3(ex, PIER_TOP, ez) };
 }
+const PLANTED_SEED = 51017; // 植えた木の種類・大きさ・形を決める乱数の種（植えた木の番号に足す）
+const PLANTED_PALM_HEIGHT = 1.4; // 地面がこれより低い（砂浜の）所に植えた種は、ヤシになる
+/**
+ * 種から育てた木（育ちきった大きさで作る）。種類・大きさ・形は植えた木の番号 gid から決めるので、誰の画面でも同じになる。
+ * 砂浜ではヤシ、それより高い所では森と同じ針葉樹か広葉樹になる。object の原点は根元で、(x, z) の地面に立てる。scale は育ちきったときの拡大率
+ */
+export function plantedTree(gid, x, z) {
+    const rand = mulberry32(PLANTED_SEED + gid);
+    const shape = mulberry32(PLANTED_SEED + 100000 + gid);
+    const y = terrainHeight(x, z);
+    let model;
+    let wood;
+    if (y < PLANTED_PALM_HEIGHT) {
+        model = palmTree(new THREE.Vector2(x, z).normalize(), rand, shape);
+        model.group.position.set(x, y - 0.1, z);
+        wood = 3;
+    }
+    else {
+        const s = 0.8 + rand() * 0.6;
+        model = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
+        model.group.position.set(x, y - 0.2, z);
+        model.group.rotation.y = rand() * Math.PI * 2;
+        wood = Math.round(3 * s) + 1;
+    }
+    const { group, trunk, leaves, sway } = model;
+    const crown = addCrown(group, leaves, sway);
+    const swayAttr = crown.geometry.getAttribute('aSway');
+    return { tree: { object: group, trunk, leaves, crown, wood }, scale: group.scale.x, sway: Float32Array.from(swayAttr.array) };
+}
 export function buildProps() {
     const group = new THREE.Group();
     const solids = [];

@@ -64,10 +64,19 @@ export type DigTool = 'shovel';
  */
 export interface DigHole { type: 'digHole'; hid: number; p: [number, number]; items: [string, number][] }
 
-/** 穴を埋めて、もとの地面に戻す（土を1つ使って埋めたとき、時間がたってひとりでに埋まるとき。使う土は埋めた人のインベントリから減らす） */
+/** 穴を埋めて、もとの地面に戻す（土を1つ使って埋めたとき、時間がたってひとりでに埋まるとき。使う土は埋めた人のインベントリから減らす）。木の種を置いた穴なら、そこから苗が生える */
 export interface FillHole { type: 'fillHole'; hid: number }
 
-export type HoleCommand = DigHole | FillHole;
+/** 穴に木の種を1つ置く（置いた種は置いた人のインベントリから減らす）。種を置いた穴を埋めると、そこから木の苗が生える */
+export interface PlantSeed { type: 'plantSeed'; hid: number }
+
+export type HoleCommand = DigHole | FillHole | PlantSeed;
+
+/**
+ * 苗が育ちきって、斧で切れる木になる。gid は植えた木の番号（種を置いた穴の番号をそのまま使う）。
+ * 苗が育つ時間は全員が進めて見せるが、育ちきったと決めるのは時間を進めるホスト（世界の頼み）
+ */
+export interface GrowTree { type: 'growTree'; gid: number }
 
 /** 船を水に浮かべる。bid はホストが発行する船の通し番号、loc は浮かべる場所（島・街）、p は船の中心の水平位置 [x, z]、yaw は舳先の向き（rad） */
 export interface PlaceBoat { type: 'placeBoat'; bid: number; loc: LocationId; p: [number, number]; yaw: number }
@@ -124,18 +133,18 @@ export interface BurnFuel { type: 'burnFuel'; pid: number }
 
 export type FireCommand = AddFuel | TakeFuel | BurnFuel;
 
-export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | BoatCommand | SpearCommand | SetWeather | FireCommand;
+export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | GrowTree | BoatCommand | SpearCommand | SetWeather | FireCommand;
 
 /** 参加者からホストへの頼み。新しく増える物の ID はホストが付けるので、まだ持たない */
 export type PieceRequest = Omit<PlacePiece, 'pid'> | RemovePiece | { type: 'hitPiece'; pid: number; tool: StrikeTool };
 export type DropRequest = Omit<DropItem, 'did'> | PickDrop;
 export type BushRequest = { type: 'harvestBush'; bush: number; tool: HarvestTool } | PickBerry;
 export type RockRequest = { type: 'mineRock'; rock: number; tool: MineTool };
-export type HoleRequest = { type: 'digHole'; p: [number, number]; tool: DigTool } | FillHole;
+export type HoleRequest = { type: 'digHole'; p: [number, number]; tool: DigTool } | FillHole | PlantSeed;
 export type BoatRequest = Omit<PlaceBoat, 'bid'> | PickBoat | BoardBoat | LeaveBoat | Omit<SailBoat, 'p' | 'yaw'>;
 export type SpearRequest = Omit<ThrowSpear, 'sid' | 't' | 'hit'> | PickSpear;
 export type WeatherRequest = Pick<SetWeather, 'type' | 'kind'>;
-export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | BoatRequest | SpearRequest | WeatherRequest | FireCommand;
+export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | GrowTree | BoatRequest | SpearRequest | WeatherRequest | FireCommand;
 
 /**
  * 頼みを出す関数（main の requestWorld）。by は頼んだ人の番号で、省くと自分。

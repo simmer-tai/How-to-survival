@@ -16,7 +16,7 @@
 | `seaMap.ts` | 海図（`SeaMap`）。船で世界の端まで行くと開き、ほかの場所へ渡る。渡るのは `main.ts` が船のワールドコマンド（`sailBoat`）にする。場面の切り替えの暗転 `travelFade()` |
 | `avatarEditor.ts` | アバターの見た目を選ぶ画面（`AvatarEditor`・`AvatarMenu`）。タイトル画面と一時停止の画面から開く |
 | `commandMenu.ts` | コマンドメニュー（`CommandMenu`）。Enter で開き、`/weather rain` のように打つかボタンで実行する。コマンドの中身は `main.ts` で `register()` する |
-| `chargeRing.ts` | クロスヘアの周りの円形のチャージメーター（槍を投げる力） |
+| `chargeRing.ts` | クロスヘアの周りの円形のチャージメーター（槍・釣り竿を投げる力） |
 | `pickupFeed.ts` | 手に入れた素材を右下に1行ずつ出す |
 | `keyGuide.ts` | 操作ガイドの文言の `[左]` `[右長]` `[F]` などを、マウスの絵やキーキャップにする |
 | `uiScale.ts` | UI の大きさを画面サイズに合わせる CSS 変数 `--u` |

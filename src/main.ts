@@ -14,6 +14,7 @@ import { ItemDrops } from './items/drops.js';
 import { BushForager } from './actions/foraging.js';
 import { RockMiner } from './actions/mining.js';
 import { GroundDigger } from './actions/digging.js';
+import { Saplings } from './actions/planting.js';
 import { Fisher } from './actions/fishing.js';
 import { FISH_IDS } from './items/fishKinds.js';
 import { COLLIDE, Physics, RAPIER, WATER_LEVEL } from './core/physics.js';
@@ -288,6 +289,13 @@ const fillHole = (): boolean => {
   swingBody('chop');
   return true;
 };
+/** 木の種を持って右クリック：狙っている穴に種を1つ置く（土で埋めると苗が生える）。置いたら true */
+const plantSeed = (): boolean => {
+  if (inventory.count('seed') < 1 || !digger.plant(camera, SHOVEL_REACH)) return false;
+  inventory.remove('seed', 1);
+  swingBody('chop');
+  return true;
+};
 shovelHand.onImpact = () => {
   if (digger.dig(camera, 'shovel', SHOVEL_REACH)) wearTool('shovel');
 };
@@ -311,7 +319,22 @@ const digger = new GroundDigger(props.group, terrain, aimTargets, blockers);
 digger.onHarvest = gain;
 digger.canDigAt = (x, z) =>
   !builder.covers(x, islandField.height(x, z), z) &&
+  !saplings.occupied(x, z, SAPLING_CLEARANCE) &&
   !(here === 'island' ? props.platforms : islandPlatforms).some((p) => x > p.minX - 0.3 && x < p.maxX + 0.3 && z > p.minZ - 0.3 && z < p.maxZ + 0.3);
+// 穴に木の種を置いて土で埋めると苗が生え、時間がたつと斧で切れる木に育つ（ほかの木のそばには植えられない）
+const SAPLING_CLEARANCE = 0.8; // 植えた木の根元とこれより近い所は掘れない
+const saplings = new Saplings(props.group, chopper, props.trees.map((t) => t.object));
+digger.canPlantAt = (x, z) => saplings.canPlantAt(x, z);
+digger.onSprout = (hid, x, z) => saplings.sprout(hid, x, z);
+saplings.onAdd = (obj, body) => {
+  if (!body) blockers.push(obj); // 苗の奥にも建てたり掘ったりできない
+  if (here === 'island') return;
+  // ほかの人が島で植えた・育てた木は、街にいる間は隠して止めておく（島へ戻ると見える）
+  if (body) {
+    body.setEnabled(false);
+    parkedIsland.push(body);
+  } else setShown(obj, false);
+};
 // 建てた床などの下や、掘った穴の中から草が生えないようにする
 const coverGrass = () => grass.setCovered((x, y, z) => builder.covers(x, y, z) || digger.covers(x, z));
 // ---- 焚火（石と枝で作り、手に持って置く。F で燃料の欄を開き、燃料を入れると燃える。燃料の欄と火は共有ワールド） ----
@@ -443,7 +466,10 @@ const authorizeWorld = (req: WorldRequest, by: number | null): WorldCommand | nu
       return miner.authorize(req);
     case 'digHole':
     case 'fillHole':
+    case 'plantSeed':
       return digger.authorize(req);
+    case 'growTree':
+      return saplings.authorize(req);
     case 'placeBoat':
     case 'pickBoat':
     case 'boardBoat':
@@ -488,7 +514,11 @@ const applyWorld = (cmd: WorldCommand, by: number | null): void => {
       break;
     case 'digHole':
     case 'fillHole':
+    case 'plantSeed':
       digger.apply(cmd, mine);
+      break;
+    case 'growTree':
+      saplings.apply(cmd);
       break;
     case 'placeBoat':
     case 'pickBoat':
@@ -531,6 +561,9 @@ const undoRequest = (req: WorldRequest): void => {
       break;
     case 'fillHole':
       gain('dirt', 1);
+      break;
+    case 'plantSeed':
+      gain('seed', 1);
       break;
     case 'addFuel':
       if (req.item in ITEMS) gain(req.item as ItemId, req.count);
@@ -579,6 +612,7 @@ pebbles.request = requestWorld;
 forager.request = requestWorld;
 miner.request = requestWorld;
 digger.request = requestWorld;
+saplings.request = requestWorld;
 boats.request = requestWorld;
 spears.request = requestWorld;
 campfires.request = requestWorld;
@@ -707,6 +741,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
       if (onIsland()) spearCharge = 0;
     }
     else if (held?.item === 'dirt' && fillHole()) return;
+    else if (held?.item === 'seed' && plantSeed()) return;
     else if (held && learnFrom(held.item)) return;
     else if (held && eater.start(held.item)) materialHands.find((m) => m.kind === held.item)?.hand.eat(EAT_TIME);
   }
@@ -752,6 +787,7 @@ const sharedSnapshot = (): SharedWorld => ({
   holes: digger.serialize(),
   built: builder.serialize(),
   fires: campfires.serialize(),
+  planted: saplings.serialize(),
   boats: boats.serialize(),
   spears: spears.serialize(),
   clock: clock.serialize(),
@@ -768,6 +804,7 @@ const restoreShared = (data: SharedWorld) => {
   forager.restore(data.bushes);
   miner.restore(data.rocks);
   digger.restore(data.holes);
+  saplings.restore(data.planted); // 最初からある木を戻してから、植えた木を戻す
   drops.restore(data.drops);
   pebbles.restore(data.pebbles); // 落とし物を戻してから（まだ小石を置いていないワールドなら置く）
   clock.restore(data.clock);
@@ -1030,6 +1067,7 @@ renderer.setAnimationLoop(() => {
       digger.tick(dt); // 掘った穴は時間がたつと埋まる
     }
     campfires.tick(dt); // 焚火の燃料が燃えていく（次の燃料を燃やすのはホストだけが決める）
+    saplings.tick(dt); // 植えた苗が育っていく（育ちきって木になるのはホストだけが決める）
     autosaveTimer += dt;
     if (autosaveTimer >= AUTOSAVE_INTERVAL) save(true);
   }
@@ -1058,7 +1096,8 @@ renderer.setAnimationLoop(() => {
       spearHand.pose(SPEAR_AIM_POS.map((v) => v * k) as [number, number, number], SPEAR_AIM_ROT.map((v) => v * k) as [number, number, number]);
     }
   }
-  chargeRing.set(spearCharge !== null && player.controls.isLocked ? spearCharge : null);
+  // 槍と釣り竿の投げる力は、同じクロスヘアの周りのチャージメーターに出す
+  chargeRing.set(player.controls.isLocked ? spearCharge ?? fisher.chargeLevel : null);
   spearHand.update(dt);
   pickaxeHand.visible = held?.item === 'pickaxe';
   pickaxeHand.update(dt);
@@ -1174,7 +1213,9 @@ function keyHint(held: typeof inventory.selectedStack | null): string {
                           ? '[左]：掘る'
                           : held?.item === 'dirt' && digger.canFill(camera, SHOVEL_REACH)
                             ? '[右]：穴を埋める'
-                            : '';
+                            : held?.item === 'seed' && digger.canPlant(camera, SHOVEL_REACH)
+                              ? '[右]：種を植える'
+                              : '';
   // 傷ついた部材を見ているときは、のこりの耐久値も出す
   const durability = builder.durability(AXE_REACH) ?? (held?.item === 'pickaxe' ? miner.durability(camera, PICK_REACH) : null);
   return [rodHand.visible && (fisher.busy || !pickup) ? fisher.hint : pickup, durability ? `耐久 ${durability.hp}/${durability.max}` : ''].filter(Boolean).join(' ／ ');

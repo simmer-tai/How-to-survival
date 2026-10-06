@@ -36,8 +36,8 @@ const SPARK_RISE = 1.4; // 火の粉が上がる速さ
 const SPARK_SIZE = 0.035;
 const COALS = 5; // 燃えている間、真ん中で赤く光る熾火の数
 // 煙：炎の先から丸い煙のかたまりが立ちのぼり、ふくらみながら風下へ流れて薄れる。火が消えたあともしばらくくすぶる
-const SMOKE_RATE = 2.5; // 燃えている間に1秒に出る煙のかたまりの数（size 1 のとき）
-const SMOLDER_RATE = 4; // 消えた直後のくすぶりで、1秒に出る煙のかたまりの数
+const SMOKE_RATE = 1.4; // 燃えている間に1秒に出る煙のかたまりの数（size 1 のとき）
+const SMOLDER_RATE = 2.2; // 消えた直後のくすぶりで、1秒に出る煙のかたまりの数
 const SMOLDER_TIME = 10; // 火が消えてから、くすぶりの煙が出なくなるまでの時間
 const SMOKE_LIFE = 4.5; // 煙のかたまりが消えるまでの時間
 const SMOKE_RISE = 0.9; // 煙が上がり始める速さ
@@ -49,7 +49,7 @@ const SMOLDER_OPACITY = 0.6;
 const SMOKE_WIND = 0.5; // 風がいちばん強いとき、煙が風下へ流される加速度（風がなくても少しは流れる）
 const SMOKE_SWIRL = 0.25; // 煙が左右に揺らぎながら上がる強さ
 const SMOKE_LUMPS = 3; // 煙のかたまり1つを作る丸い玉の数（重ねてもこもこさせる）
-const SMOKE_MAX = 40; // 焚火1つの煙のかたまりの数の上限
+const SMOKE_MAX = 24; // 焚火1つの煙のかたまりの数の上限
 const AIM_HEIGHT = 1; // 焚火を狙える高さ（低い石の輪だけでなく、炎のあたりを見ても使えるように）
 
 const AIM_EPS = 0.05;
@@ -66,6 +66,23 @@ const smokeGeo = new THREE.IcosahedronGeometry(1, 1);
 // 煙の色：出たては濃い灰色、上がるにつれて空に溶ける明るい灰色になる
 const SMOKE_DARK = new THREE.Color(PALETTE.rock).lerp(new THREE.Color(PALETTE.bark), 0.35);
 const SMOKE_LIGHT = new THREE.Color(PALETTE.rock).lerp(new THREE.Color(PALETTE.sky), 0.55);
+// 煙は焚火ごとに1つの InstancedMesh でまとめて描く（玉1つずつ描くと、透明な物の描画が何百回にもなって重い）。
+// 色は instanceColor、濃さは玉ごとの属性 smokeAlpha で変える
+const smokeMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, transparent: true, depthWrite: false });
+smokeMat.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute float smokeAlpha;\nvarying float vSmokeAlpha;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSmokeAlpha = smokeAlpha;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying float vSmokeAlpha;')
+    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vSmokeAlpha;');
+};
+const _puffMat = new THREE.Matrix4();
+const _lumpMat = new THREE.Matrix4();
+const _quat = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+const _color = new THREE.Color();
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /**
  * 炎1枚の形：[太さ, 高さ, 根元の x, 根元の z, 揺れの速さ]。太さ・位置は FLAME_RADIUS、高さは FLAME_HEIGHT に対する割合。
@@ -83,8 +100,8 @@ const FLAME_SWAY = 0.1; // 炎が左右に傾いて揺れる角度（rad）
 /** 火の粉1つ（自分の画面だけの演出） */
 interface Spark { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }
 
-/** 煙のかたまり1つ（自分の画面だけの演出）。玉を重ねたグループで、マテリアルはかたまりごとに持って薄れさせる */
-interface Puff { group: THREE.Group; mat: THREE.MeshLambertMaterial; vel: THREE.Vector3; age: number; life: number; size: number; opacity: number; spin: number }
+/** 煙のかたまり1つ（自分の画面だけの演出）。lumps は重ねる玉それぞれの、かたまりの中での置き方 */
+interface Puff { pos: THREE.Vector3; rot: number; lumps: THREE.Matrix4[]; vel: THREE.Vector3; age: number; life: number; size: number; opacity: number; spin: number }
 
 interface Fire {
   pid: number;
@@ -100,6 +117,9 @@ interface Fire {
   coals: THREE.Group;
   light: THREE.PointLight;
   sparks: Spark[];
+  /** 煙の玉をまとめて描くメッシュ */
+  smoke: THREE.InstancedMesh;
+  smokeAlpha: THREE.InstancedBufferAttribute;
   puffs: Puff[];
   /** 使い終わって、また使える煙のかたまり */
   spare: Puff[];
@@ -348,7 +368,16 @@ export class Campfires {
     // 消えている間も明かりは残し、強さを 0 にする（明かりの数が変わるとシェーダーを作り直して一瞬止まるので）
     const light = new THREE.PointLight(lightColor, 0, LIGHT_RANGE, 1);
     light.position.y = LIGHT_HEIGHT;
-    root.add(...flames, coals, light);
+    // 玉ごとの濃さの属性は焚火ごとに持つので、形を写して付ける
+    const smokeAlpha = new THREE.InstancedBufferAttribute(new Float32Array(SMOKE_MAX * SMOKE_LUMPS), 1);
+    smokeAlpha.setUsage(THREE.DynamicDrawUsage);
+    const smoke = new THREE.InstancedMesh(smokeGeo.clone().setAttribute('smokeAlpha', smokeAlpha), smokeMat, SMOKE_MAX * SMOKE_LUMPS);
+    smoke.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    smoke.setColorAt(0, SMOKE_DARK); // instanceColor を作っておく
+    smoke.count = 0;
+    smoke.frustumCulled = false; // 玉が動き回るので、囲む球を作り直さずに常に描く
+    smoke.renderOrder = 2; // 炎より後に描いて、炎が煙に透けて見えるようにする
+    root.add(...flames, coals, light, smoke);
     this.world.add(root);
     this.fires.set(p.pid, {
       pid: p.pid,
@@ -360,6 +389,8 @@ export class Campfires {
       coals,
       light,
       sparks: [],
+      smoke,
+      smokeAlpha,
       puffs: [],
       spare: [],
       smokeWait: 0,
@@ -377,7 +408,8 @@ export class Campfires {
     if (!f) return;
     f.root.removeFromParent();
     for (const s of f.sparks) s.mesh.removeFromParent();
-    for (const p of [...f.puffs, ...f.spare]) p.mat.dispose();
+    f.smoke.geometry.dispose();
+    f.smoke.dispose();
     this.fires.delete(pid);
   }
 
@@ -462,9 +494,7 @@ export class Campfires {
     for (let i = f.puffs.length - 1; i >= 0; i--) {
       const p = f.puffs[i];
       p.age += dt;
-      const k = p.age / p.life;
-      if (k >= 1) {
-        p.group.removeFromParent();
+      if (p.age >= p.life) {
         f.puffs.splice(i, 1);
         f.spare.push(p);
         continue;
@@ -473,51 +503,63 @@ export class Campfires {
       p.vel.y *= Math.exp(-SMOKE_DRAG * dt);
       p.vel.x += (WIND_DIR.x * drift + Math.sin(t * 1.3 + p.spin * 7) * SMOKE_SWIRL) * dt;
       p.vel.z += (WIND_DIR.y * drift + Math.cos(t * 1.1 + p.spin * 5) * SMOKE_SWIRL) * dt;
-      p.group.position.addScaledVector(p.vel, dt);
-      p.group.rotation.y += p.spin * dt;
+      p.pos.addScaledVector(p.vel, dt);
+      p.rot += p.spin * dt;
+    }
+    // 生きているかたまりの玉を、メッシュの玉に前から詰めて書き込む
+    let n = 0;
+    for (const p of f.puffs) {
+      const k = p.age / p.life;
       // 大きさは出たてで素早く、あとはゆっくりふくらむ。濃さはすぐ濃くなって、だんだん薄れる
       const grow = 1 - (1 - k) * (1 - k);
-      p.group.scale.setScalar(p.size * (SMOKE_START + (SMOKE_END - SMOKE_START) * grow));
-      p.mat.opacity = p.opacity * Math.min(k / 0.12, 1) * (1 - k) * (1 - k * 0.3);
-      p.mat.color.copy(SMOKE_DARK).lerp(SMOKE_LIGHT, Math.min(k * 1.6, 1));
+      _quat.setFromAxisAngle(Y_AXIS, p.rot);
+      _scale.setScalar(p.size * (SMOKE_START + (SMOKE_END - SMOKE_START) * grow));
+      _puffMat.compose(p.pos, _quat, _scale);
+      const alpha = p.opacity * Math.min(k / 0.12, 1) * (1 - k) * (1 - k * 0.3);
+      _color.copy(SMOKE_DARK).lerp(SMOKE_LIGHT, Math.min(k * 1.6, 1));
+      for (const lump of p.lumps) {
+        f.smoke.setMatrixAt(n, _lumpMat.multiplyMatrices(_puffMat, lump));
+        f.smoke.setColorAt(n, _color);
+        f.smokeAlpha.setX(n, alpha);
+        n++;
+      }
+    }
+    f.smoke.count = n;
+    if (n > 0) {
+      f.smoke.instanceMatrix.needsUpdate = true;
+      f.smoke.instanceColor!.needsUpdate = true;
+      f.smokeAlpha.needsUpdate = true;
     }
   }
 
   private spawnPuff(f: Fire, y: number, opacity: number): void {
-    let p = f.spare.pop();
-    if (!p) {
-      const mat = new THREE.MeshLambertMaterial({ color: SMOKE_DARK, flatShading: true, transparent: true, opacity: 0, depthWrite: false });
-      const group = new THREE.Group();
-      for (let i = 0; i < SMOKE_LUMPS; i++) {
-        const lump = new THREE.Mesh(smokeGeo, mat);
-        lump.renderOrder = 2; // 炎より後に描いて、炎が煙に透けて見えるようにする
-        group.add(lump);
-      }
-      p = { group, mat, vel: new THREE.Vector3(), age: 0, life: 0, size: 1, opacity, spin: 0 };
-    }
+    const p: Puff = f.spare.pop() ?? {
+      pos: new THREE.Vector3(),
+      rot: 0,
+      lumps: Array.from({ length: SMOKE_LUMPS }, () => new THREE.Matrix4()),
+      vel: new THREE.Vector3(),
+      age: 0,
+      life: 0,
+      size: 1,
+      opacity,
+      spin: 0,
+    };
     // 玉の並びはかたまりごとに変える（でこぼこした煙にする）
-    p.group.children.forEach((lump, i) => {
+    p.lumps.forEach((m, i) => {
       const r = i === 0 ? 0 : 0.55;
       const a = Math.random() * Math.PI * 2;
-      lump.position.set(Math.cos(a) * r, (Math.random() - 0.3) * 0.5, Math.sin(a) * r);
-      lump.scale.set(0.7 + Math.random() * 0.4, 0.6 + Math.random() * 0.35, 0.7 + Math.random() * 0.4).multiplyScalar(i === 0 ? 1 : 0.75);
+      const s = i === 0 ? 1 : 0.75;
+      m.makeScale((0.7 + Math.random() * 0.4) * s, (0.6 + Math.random() * 0.35) * s, (0.7 + Math.random() * 0.4) * s);
+      m.setPosition(Math.cos(a) * r, (Math.random() - 0.3) * 0.5, Math.sin(a) * r);
     });
-    // 隠れている間に使い終えたかたまりは隠れたレイヤーのままなので、見えるレイヤーに戻す
-    p.group.traverse((o) => {
-      o.layers.set(0);
-      delete o.userData.shownLayers;
-    });
-    p.group.position.set((Math.random() - 0.5) * 0.12, y, (Math.random() - 0.5) * 0.12);
-    p.group.rotation.set(0, Math.random() * Math.PI * 2, 0);
-    p.group.scale.setScalar(0.001);
+    p.pos.set((Math.random() - 0.5) * 0.12, y, (Math.random() - 0.5) * 0.12);
+    p.rot = Math.random() * Math.PI * 2;
     p.vel.set((Math.random() - 0.5) * 0.15, SMOKE_RISE * (0.8 + Math.random() * 0.4), (Math.random() - 0.5) * 0.15);
     p.age = 0;
     p.life = SMOKE_LIFE * (0.75 + Math.random() * 0.5);
     p.size = 0.8 + Math.random() * 0.5;
     p.opacity = opacity;
     p.spin = (Math.random() - 0.5) * 0.8;
-    p.mat.opacity = 0;
-    f.root.add(p.group);
     f.puffs.push(p);
   }
 }

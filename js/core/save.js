@@ -26,7 +26,8 @@ import { WorldClock } from '../world/clock.js';
 // 20 → 21：スコップで掘った穴（holes）が入った
 // 21 → 22：掘った穴が、掘ってからたった時間（holes.list[].t）を持つようになった
 // 22 → 23：焚火の燃料と火（fires）が入った
-export const SAVE_VERSION = 23;
+// 23 → 24：種から育てた木（planted）が入った。穴は木の種を置いたか（holes.list[].s）を持つようになった
+export const SAVE_VERSION = 24;
 /** 自分だけの状態（マルチでは各自のブラウザに残す） */
 export const PERSONAL_KEYS = ['player', 'inventory', 'vitals', 'guide', 'recipes'];
 /** 1 → 2：部材に並び順で ID を付ける */
@@ -154,6 +155,10 @@ function fromV21(old) {
 function fromV22(old) {
     return { ...old, version: 23, fires: [] };
 }
+/** 23 → 24：木はまだ1本も植えていない（s がない穴は種を置いていないとして読める） */
+function fromV23(old) {
+    return { ...old, version: 24, planted: { list: [] } };
+}
 const INDEX_KEY = 'warfarming:worlds';
 const dataKey = (id) => `warfarming:world:${id}`;
 /** 最後に遊んだ順 */
@@ -225,6 +230,8 @@ export function loadWorld(id) {
         data = fromV21(data);
     if (data.version === 22)
         data = fromV22(data);
+    if (data.version === 23)
+        data = fromV23(data);
     if (data.version !== SAVE_VERSION)
         throw new Error(`unknown save version: ${data.version}`);
     return data;

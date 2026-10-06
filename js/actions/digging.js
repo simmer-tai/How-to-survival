@@ -3,6 +3,8 @@ import { PALETTE } from '../core/palette.js';
 import { flat, flatVertex } from '../core/materials.js';
 import { WATER_LEVEL } from '../core/physics.js';
 import { ITEMS } from '../items/inventory.js';
+import { buildSeedModel } from '../items/itemModels.js';
+import { TREE_GAP } from './planting.js';
 import { islandField } from '../world/terrain.js';
 const HOLE_RADIUS = 0.32; // 穴の口の半径（m）
 const HOLE_DEPTH = 0.22; // 穴の深さ（m）
@@ -23,6 +25,7 @@ const FILL_TIME = 18 * 60; // 掘ってからこの時間（秒）がたつと�
 const CLODS = 9; // 掘ったとき・埋めたときに飛ぶ土くれ
 const CLOD_SIZE = 0.045;
 const GRAVITY = 12;
+const SEED_SCALE = 0.55; // 穴の底に置いた木の種の大きさ（手に持つ種に対する割合）
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
 const HOLE_SEED = 33013;
 /** 色を少し暗くする（パレットの色の濃淡だけを使う） */
@@ -65,6 +68,10 @@ export class GroundDigger {
     request = () => false;
     /** (x, z) に穴を掘ってよいか（建てた部材や桟橋の下などを除く。main.ts が差し替える） */
     canDigAt = () => true;
+    /** (x, z) に木の種を植えてよいか（ほかの木のそばを除く。main.ts が差し替える） */
+    canPlantAt = () => true;
+    /** 種を置いた穴が埋まって、苗が生えるときに呼ばれる（hid は穴の番号、(x, z) は穴の中心） */
+    onSprout = () => { };
     /**
      * ground は掘れる地面（自分の島の地形）、targets は視線をさえぎる物（地形・岩・桟橋・建てた部材）、blockers は木や茂み。
      * 地面がこの中で一番手前のときだけ掘れる
@@ -131,6 +138,25 @@ export class GroundDigger {
     canFill(camera, reach) {
         return this.aimedHole(camera, reach) !== undefined;
     }
+    /** 狙っている穴に木の種を置く頼みを出す（使う種はインベントリから main.ts が減らす）。置けたら true */
+    plant(camera, reach) {
+        const h = this.aimedHole(camera, reach);
+        return !!h && this.plantable(h) && this.request({ type: 'plantSeed', hid: h.hid });
+    }
+    /** 種を置ける穴を狙っているか（操作の案内に使う） */
+    canPlant(camera, reach) {
+        const h = this.aimedHole(camera, reach);
+        return !!h && this.plantable(h);
+    }
+    /** その穴に種を置けるか（もう種がある穴や、ほかの木・種を置いた穴のそばの穴には置けない） */
+    plantable(h) {
+        if (h.seed)
+            return false;
+        for (const o of this.holes.values())
+            if (o.seed && Math.hypot(o.x - h.x, o.z - h.z) < TREE_GAP)
+                return false;
+        return this.canPlantAt(h.x, h.z);
+    }
     /**
      * 穴の時間を進め、時間がたった穴を埋める頼みを出す（マルチではホストだけが呼ぶ）。
      * 掘ってからの時間はセーブに入るので、ロードしたあとも続きから進む
@@ -154,6 +180,10 @@ export class GroundDigger {
     authorize(req) {
         if (req.type === 'fillHole')
             return this.holes.has(req.hid) ? { type: 'fillHole', hid: req.hid } : null;
+        if (req.type === 'plantSeed') {
+            const h = this.holes.get(req.hid);
+            return h && this.plantable(h) ? { type: 'plantSeed', hid: req.hid } : null;
+        }
         const [x, z] = req.p;
         const dirt = DIRT_PER_HOLE[req.tool];
         if (!Number.isFinite(x) || !Number.isFinite(z) || dirt === undefined || !this.diggable(x, z))
@@ -165,6 +195,8 @@ export class GroundDigger {
     apply(cmd, mine) {
         if (cmd.type === 'digHole')
             this.applyDig(cmd, mine);
+        else if (cmd.type === 'plantSeed')
+            this.applyPlant(cmd);
         else
             this.applyFill(cmd);
     }
@@ -182,7 +214,14 @@ export class GroundDigger {
         this.spawnClods(cmd.p[0], cmd.p[1]);
         this.onChange();
     }
-    /** 穴を埋めて、もとの地面に戻す */
+    /** 穴の底に木の種を置く */
+    applyPlant(cmd) {
+        const h = this.holes.get(cmd.hid);
+        if (!h || h.seed)
+            return;
+        this.addSeed(h);
+    }
+    /** 穴を埋めて、もとの地面に戻す。種を置いた穴なら、そこから苗が生える */
     applyFill(cmd) {
         const h = this.holes.get(cmd.hid);
         if (!h)
@@ -190,14 +229,27 @@ export class GroundDigger {
         this.holes.delete(cmd.hid);
         h.group.removeFromParent();
         h.group.traverse((o) => {
-            if (o instanceof THREE.Mesh && o.geometry !== moundGeo)
-                o.geometry.dispose(); // 盛った土のジオメトリは共有なので残す
+            // 盛った土のジオメトリと、種のジオメトリは共有なので残す
+            if (o instanceof THREE.Mesh && o.geometry !== moundGeo && !o.geometry.userData.shared)
+                o.geometry.dispose();
         });
         this.spawnClods(h.x, h.z);
+        if (h.seed)
+            this.onSprout(h.hid, h.x, h.z);
         this.onChange();
     }
+    /** 穴の底のまんなかに、木の種を少し傾けて置く */
+    addSeed(h) {
+        const seed = buildSeedModel();
+        seed.scale.setScalar(SEED_SCALE);
+        seed.rotation.set(0.5, h.hid * 1.7, 0.3); // 傾きは穴の番号から決める
+        seed.position.set(0, islandField.height(h.x, h.z) - HOLE_DEPTH + 0.05, 0);
+        seed.traverse((o) => (o.castShadow = true));
+        h.group.add(seed);
+        h.seed = seed;
+    }
     serialize() {
-        return { next: this.nextHid, list: [...this.holes.values()].map((h) => ({ hid: h.hid, p: [h.x, h.z], t: Math.round(h.age) })) };
+        return { next: this.nextHid, list: [...this.holes.values()].map((h) => ({ hid: h.hid, p: [h.x, h.z], t: Math.round(h.age), ...(h.seed ? { s: 1 } : {}) })) };
     }
     /** 生成直後（穴が1つもない状態）に呼ぶ */
     restore(save) {
@@ -205,6 +257,8 @@ export class GroundDigger {
             if (!Number.isInteger(h.hid) || this.holes.has(h.hid) || !Number.isFinite(h.p?.[0]) || !Number.isFinite(h.p?.[1]))
                 continue;
             this.addHole(h.hid, h.p[0], h.p[1], Number.isFinite(h.t) ? Math.max(h.t, 0) : 0);
+            if (h.s)
+                this.addSeed(this.holes.get(h.hid));
             this.nextHid = Math.max(this.nextHid, h.hid + 1);
         }
         this.nextHid = Math.max(this.nextHid, Number.isInteger(save.next) ? save.next : 0);
@@ -314,7 +368,7 @@ export class GroundDigger {
             group.add(mound);
         }
         this.world.add(group);
-        this.holes.set(hid, { hid, x, z, age, group });
+        this.holes.set(hid, { hid, x, z, age, group, seed: null });
     }
     /** 穴から土くれを飛ばす（掘ったとき・埋めたとき。自分の画面だけの演出） */
     spawnClods(x, z) {

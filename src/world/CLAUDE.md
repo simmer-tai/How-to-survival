@@ -12,7 +12,7 @@
 | `terrain.ts` | 地形の高さ（`HeightField`、`islandField`）、`WORLD_SIZE`・`SEA_FLOOR`、ノイズ、砂・草の判定、地形メッシュ。`terrainHeight()` は `setActiveField()` で選んだ今いる場所の地形を返す | 固定 |
 | `water.ts` | 海（`Sea`）と海底の高さのテクスチャ（`bakeSeabed()`） | 固定 |
 | `grass.ts` | 草（`Grass`）。風で揺れる | 固定 |
-| `props.ts` | 木・茂み・岩・桟橋の配置（固定シード）。木は `Tree`、桟橋は `buildPier()` | 配置は固定、木・茂み・岩の変化は共有（`actions/` が持つ） |
+| `props.ts` | 木・茂み・岩・桟橋の配置（固定シード）。木は `Tree`、桟橋は `buildPier()`。種から育てる木の見た目は `plantedTree()`（植えた木の番号から決める） | 配置は固定、木・茂み・岩の変化は共有（`actions/` が持つ） |
 | `pebbles.ts` | 砂浜に湧く小石（`BeachPebbles`）。置いた数と時間をセーブ。置くのは世界の頼み（`dropItem`）なので、マルチではホストだけが置く | 共有 |
 | `clock.ts` | ワールドの時刻（`WorldClock`）。マルチではホストが進め、ときどき時刻を送って合わせる（ワールドコマンドにはしない） | 共有 |
 | `sky.ts` | 時刻と天気に合わせた空・太陽・月・星・雲・光（`Sky`）。見た目だけ | 演出 |

@@ -86,8 +86,6 @@ export class Fisher {
     leap = null;
     card;
     cardTimer = 0;
-    gauge;
-    gaugeFill;
     /** 魚を釣り上げたときに呼ばれる */
     onCatch = () => { };
     constructor(world, hand, rig, 
@@ -108,11 +106,6 @@ export class Fisher {
         this.line.visible = false;
         world.add(this.line);
         injectStyle();
-        this.gauge = document.createElement('div');
-        this.gauge.className = 'fish-gauge hidden';
-        this.gaugeFill = document.createElement('div');
-        this.gauge.append(this.gaugeFill);
-        document.body.append(this.gauge);
         this.card = document.createElement('div');
         this.card.className = 'fish-card';
         document.body.append(this.card);
@@ -158,6 +151,10 @@ export class Fisher {
     get busy() {
         return this.state !== 'idle';
     }
+    /** 投げる力を溜めている間はその量（0〜1）。溜めていなければ null（クロスヘアの周りのチャージメーターに出す） */
+    get chargeLevel() {
+        return this.state === 'charging' ? this.charge : null;
+    }
     /** 画面に出す操作の案内 */
     get hint() {
         switch (this.state) {
@@ -183,7 +180,6 @@ export class Fisher {
         if (!active) {
             if (this.state !== 'idle')
                 this.cancel();
-            this.gauge.classList.add('hidden');
             return;
         }
         this.time += dt;
@@ -199,9 +195,6 @@ export class Fisher {
             this.cancel();
         this.animateRod(dt);
         this.drawLine();
-        this.gauge.classList.toggle('hidden', this.state !== 'charging');
-        this.gaugeFill.style.width = `${(this.charge * 100).toFixed(1)}%`;
-        this.gauge.classList.toggle('full', this.charge >= 1);
     }
     // ---- ウキ ----
     /** 飛んでいるウキを進め、水面か地面・物に落ちたら止める */
@@ -482,17 +475,6 @@ const css = (c) => '#' + c.toString(16).padStart(6, '0');
 function injectStyle() {
     const style = document.createElement('style');
     style.textContent = `
-    .fish-gauge {
-      position: fixed; left: 50%; top: calc(50% + 40 * var(--u)); transform: translateX(-50%);
-      width: calc(160 * var(--u)); height: calc(12 * var(--u)); padding: calc(3 * var(--u));
-      border-radius: calc(8 * var(--u)); background: rgba(43, 38, 51, 0.55); pointer-events: none; z-index: 4;
-    }
-    .fish-gauge.hidden { display: none; }
-    .fish-gauge > div {
-      height: 100%; width: 0; border-radius: calc(5 * var(--u));
-      background: linear-gradient(90deg, ${css(PALETTE.grass)}, ${css(PALETTE.sand)});
-    }
-    .fish-gauge.full > div { background: ${css(PALETTE.accent)}; }
     .fish-card {
       position: fixed; left: 50%; top: calc(90 * var(--u)); transform: translateX(-50%) scale(0.6);
       display: flex; align-items: center; gap: calc(12 * var(--u));
