@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flatVertex, solid } from '../core/materials.js';
 import { terrainHeight } from './terrain.js';
+import { swayDepthMaterial, swayMaterial } from './wind.js';
 
 export interface Platform { minX: number; maxX: number; minZ: number; maxZ: number; top: number }
 /**
@@ -10,7 +11,8 @@ export interface Platform { minX: number; maxX: number; minZ: number; maxZ: numb
  */
 export interface Tree { object: THREE.Object3D; trunk: THREE.Mesh; leaves: THREE.Object3D[]; crown: THREE.Mesh; wood: number }
 
-interface TreeModel { group: THREE.Group; trunk: THREE.Mesh; leaves: THREE.Object3D[] }
+/** sway は木の根元から見た位置での、風での揺れやすさ（0 = 動かない、1 = いちばん揺れる） */
+interface TreeModel { group: THREE.Group; trunk: THREE.Mesh; leaves: THREE.Object3D[]; sway: (p: THREE.Vector3) => number }
 
 export interface Props {
   group: THREE.Group;
@@ -23,6 +25,8 @@ export interface Props {
   rocks: THREE.Mesh[];
   platforms: Platform[];
   spawn: THREE.Vector3;
+  /** 桟橋の陸側の端（板の上面の高さ）。桟橋は ここから +Z（海側）へ伸びる */
+  pierFoot: THREE.Vector3;
 }
 
 function mulberry32(seed: number) {
@@ -94,13 +98,15 @@ function frondGeometry(): THREE.BufferGeometry {
 
 /**
  * objects の中のメッシュを、root から見た位置のまま、頂点に色を塗った1つのメッシュにまとめる。
- * 色の違う部品をまとめて1回で描けるようにする（見た目は元と同じ）
+ * 色の違う部品をまとめて1回で描けるようにする（見た目は元と同じ）。
+ * sway を渡すと、頂点ごとの風での揺れやすさ（root から見た位置で決める）を aSway に焼き込み、風で揺れる材質で描く
  */
-function mergeLooks(root: THREE.Object3D, objects: THREE.Object3D[]): THREE.Mesh {
+function mergeLooks(root: THREE.Object3D, objects: THREE.Object3D[], sway?: (p: THREE.Vector3) => number): THREE.Mesh {
   root.updateMatrixWorld(true);
   const toRoot = root.matrixWorld.clone().invert();
   const positions: number[] = [];
   const colors: number[] = [];
+  const sways: number[] = [];
   const m = new THREE.Matrix4();
   const v = new THREE.Vector3();
   for (const o of objects) {
@@ -114,6 +120,7 @@ function mergeLooks(root: THREE.Object3D, objects: THREE.Object3D[]): THREE.Mesh
         v.fromBufferAttribute(pos, i).applyMatrix4(m);
         positions.push(v.x, v.y, v.z);
         colors.push(c.r, c.g, c.b);
+        if (sway) sways.push(THREE.MathUtils.clamp(sway(v), 0, 1));
       }
     });
   }
@@ -122,14 +129,19 @@ function mergeLooks(root: THREE.Object3D, objects: THREE.Object3D[]): THREE.Mesh
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, flatVertex());
+  if (sway) {
+    geo.setAttribute('aSway', new THREE.Float32BufferAttribute(sways, 1));
+    mesh.material = swayMaterial();
+    mesh.customDepthMaterial = swayDepthMaterial(); // 影も葉と一緒に揺らす
+  }
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
 }
 
-/** 木の葉・枝・実を1つにまとめた crown を足し、元の部品は隠しておく（倒れたら元の部品に戻す） */
-function addCrown(object: THREE.Object3D, leaves: THREE.Object3D[]): THREE.Mesh {
-  const crown = mergeLooks(object, leaves);
+/** 木の葉・枝・実を1つにまとめた crown（風で揺れる）を足し、元の部品は隠しておく（倒れたら元の部品に戻す） */
+function addCrown(object: THREE.Object3D, leaves: THREE.Object3D[], sway: (p: THREE.Vector3) => number): THREE.Mesh {
+  const crown = mergeLooks(object, leaves, sway);
   object.add(crown);
   for (const leaf of leaves) leaf.visible = false;
   return crown;
@@ -183,7 +195,9 @@ function pineTree(scale: number, shape: () => number): TreeModel {
     leaves.push(tier);
   }
   g.scale.setScalar(scale);
-  return { group: g, trunk, leaves };
+  // 上の段ほど大きく揺れる（幹の中ほどより下の段はほとんど動かさない）
+  const top = 2.7 + 6.2 + 1;
+  return { group: g, trunk, leaves, sway: (p) => ((p.y - 2) / (top - 2)) ** 2 };
 }
 
 /** 広葉樹：幹が数本の枝に分かれ、枝先ごとに葉のかたまりが付く */
@@ -222,7 +236,9 @@ function roundTree(scale: number, rand: () => number, shape: () => number): Tree
   // てっぺんのいちばん大きなかたまり
   blob(new THREE.Vector3(0, trunkHeight + 1.3, 0), 1.8 * crownSize, PALETTE.leaf);
   g.scale.setScalar(scale);
-  return { group: g, trunk, leaves };
+  // 枝分かれから上ほど揺れる（てっぺんで 1）
+  const top = trunkHeight + 1.3 + 1.8 * crownSize;
+  return { group: g, trunk, leaves, sway: (p) => (p.y - fork.y) / (top - fork.y) };
 }
 
 /** ヤシ：節のある幹が海側へ弓なりに反り、てっぺんから垂れた葉と実が付く */
@@ -279,7 +295,8 @@ function palmTree(outward: THREE.Vector2, rand: () => number, shape: () => numbe
     g.add(nut);
     leaves.push(nut);
   }
-  return { group: g, trunk, leaves };
+  // 葉は幹のてっぺんの付け根から先へいくほど揺れる（付け根と実は幹から離れないように動かさない）
+  return { group: g, trunk, leaves, sway: (p) => (p.distanceTo(top) - 0.4) / 3.4 };
 }
 
 /**
@@ -378,6 +395,73 @@ function rock(rand: () => number, size: number): THREE.Mesh {
   return m;
 }
 
+const PIER_TOP = 1.0; // 桟橋の板の上面の高さ
+const PIER_LAND = 4; // 桟橋が海岸線から陸側へ入る長さ
+const PIER_SEA = 15; // 桟橋が海岸線から海側へ出る長さ
+const PIER_HALF_W = 1.4; // 桟橋の幅の半分（上に乗れる範囲）
+
+/**
+ * 桟橋。陸の (x0, z0) から dir（海側の向き。[0, 1] や [-1, 0] のように軸に沿った向き）へ進み、
+ * 海岸線から陸側へ PIER_LAND、海側へ PIER_SEA の長さに板を並べる。板と柱は solids に入れ（当たり判定用）、上に乗れる範囲を platforms に足す。
+ * height は地面の高さ。foot は陸側の端、end は海側の端（どちらも板の上面の高さ）
+ */
+export function buildPier(
+  group: THREE.Group,
+  solids: THREE.Mesh[],
+  platforms: Platform[],
+  rand: () => number,
+  x0: number,
+  z0: number,
+  dir: [number, number],
+  height: (x: number, z: number) => number = terrainHeight,
+): { foot: THREE.Vector3; end: THREE.Vector3 } {
+  const [ax, az] = dir;
+  const [bx, bz] = [az, ax]; // 桟橋を横切る向き
+  const at = (s: number, side = 0): [number, number] => [x0 + ax * s + bx * side, z0 + az * s + bz * side];
+  let shore = 0;
+  for (let s = 0; s < 90; s += 0.5) {
+    if (height(...at(s)) < 0.5) { shore = s; break; }
+  }
+  const start = shore - PIER_LAND;
+  const end = shore + PIER_SEA;
+  const parts: THREE.Mesh[] = [];
+  for (let s = start; s < end; s += 0.62) {
+    const plank = solid(GEO.plank, PALETTE.trunk);
+    const [x, z] = at(s, (rand() - 0.5) * 0.08);
+    plank.position.set(x, PIER_TOP - 0.11, z);
+    plank.rotation.y = (ax !== 0 ? Math.PI / 2 : 0) + (rand() - 0.5) * 0.04;
+    group.add(plank);
+    solids.push(plank);
+    parts.push(plank);
+  }
+  for (let s = start + 1; s < end; s += 3) {
+    for (const side of [-1, 1]) {
+      const [x, z] = at(s, side * 1.3);
+      const bottom = height(x, z) - 0.5;
+      const h = PIER_TOP + 0.6 - bottom;
+      const post = solid(new THREE.CylinderGeometry(0.18, 0.18, h, 6), PALETTE.trunk);
+      post.position.set(x, bottom + h / 2, z);
+      group.add(post);
+      solids.push(post);
+      parts.push(post);
+    }
+  }
+  // 板と柱は当たり判定のために残して隠し、見た目は1つにまとめて描く
+  group.add(mergeLooks(group, parts));
+  for (const part of parts) part.visible = false;
+  const [fx, fz] = at(start);
+  const [ex, ez] = at(end);
+  const [ox, oz] = at(start - 0.3);
+  platforms.push({
+    minX: Math.min(ox, ex) - Math.abs(bx) * PIER_HALF_W,
+    maxX: Math.max(ox, ex) + Math.abs(bx) * PIER_HALF_W,
+    minZ: Math.min(oz, ez) - Math.abs(bz) * PIER_HALF_W,
+    maxZ: Math.max(oz, ez) + Math.abs(bz) * PIER_HALF_W,
+    top: PIER_TOP,
+  });
+  return { foot: new THREE.Vector3(fx, PIER_TOP, fz), end: new THREE.Vector3(ex, PIER_TOP, ez) };
+}
+
 export function buildProps(): Props {
   const group = new THREE.Group();
   const solids: THREE.Mesh[] = [];
@@ -396,38 +480,10 @@ export function buildProps(): Props {
 
   // ---- 桟橋（南側の浜から海へ） ----
   const pierX = -6;
-  let shoreZ = 0;
-  for (let z = 0; z < 90; z += 0.5) {
-    if (terrainHeight(pierX, z) < 0.5) { shoreZ = z; break; }
-  }
-  const pierTop = 1.0;
-  const pierStart = shoreZ - 4;
-  const pierEnd = shoreZ + 15;
-  const pierHalfW = 1.4;
-  const pierParts: THREE.Mesh[] = [];
-  for (let z = pierStart; z < pierEnd; z += 0.62) {
-    const plank = solid(GEO.plank, PALETTE.trunk);
-    plank.position.set(pierX + (rand() - 0.5) * 0.08, pierTop - 0.11, z);
-    plank.rotation.y = (rand() - 0.5) * 0.04;
-    group.add(plank);
-    solids.push(plank);
-    pierParts.push(plank);
-  }
-  for (let z = pierStart + 1; z < pierEnd; z += 3) {
-    for (const side of [-1, 1]) {
-      const bottom = terrainHeight(pierX + side * 1.3, z) - 0.5;
-      const height = pierTop + 0.6 - bottom;
-      const post = solid(new THREE.CylinderGeometry(0.18, 0.18, height, 6), PALETTE.trunk);
-      post.position.set(pierX + side * 1.3, bottom + height / 2, z);
-      group.add(post);
-      solids.push(post);
-      pierParts.push(post);
-    }
-  }
-  // 板と柱は当たり判定のために残して隠し、見た目は1つにまとめて描く
-  group.add(mergeLooks(group, pierParts));
-  for (const part of pierParts) part.visible = false;
-  platforms.push({ minX: pierX - pierHalfW, maxX: pierX + pierHalfW, minZ: pierStart - 0.3, maxZ: pierEnd, top: pierTop });
+  const pier = buildPier(group, solids, platforms, rand, pierX, 0, [0, 1]);
+  const pierTop = pier.foot.y;
+  const pierStart = pier.foot.z;
+  const pierEnd = pier.end.z;
   for (let z = pierStart; z < pierEnd + 2; z += 2) placed.push(new THREE.Vector2(pierX, z));
 
   // ---- ヤシ（浜辺） ----
@@ -437,10 +493,10 @@ export function buildProps(): Props {
     const y = terrainHeight(x, z);
     if (y < 0.4 || y > 1.4 || !isFree(x, z, 5)) continue;
     const outward = new THREE.Vector2(x, z).normalize();
-    const { group: palm, trunk, leaves } = palmTree(outward, rand, shapeRand(trees.length));
+    const { group: palm, trunk, leaves, sway } = palmTree(outward, rand, shapeRand(trees.length));
     palm.position.set(x, y - 0.1, z);
     group.add(palm);
-    trees.push({ object: palm, trunk, leaves, crown: addCrown(palm, leaves), wood: 3 });
+    trees.push({ object: palm, trunk, leaves, crown: addCrown(palm, leaves, sway), wood: 3 });
     placed.push(new THREE.Vector2(x, z));
     n++;
   }
@@ -453,11 +509,11 @@ export function buildProps(): Props {
     if (y < 1.8 || slopeAt(x, z) > 0.9 || !isFree(x, z, 4)) continue;
     const s = 0.8 + rand() * 0.6;
     const shape = shapeRand(trees.length);
-    const { group: tree, trunk, leaves } = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
+    const { group: tree, trunk, leaves, sway } = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
     tree.position.set(x, y - 0.2, z);
     tree.rotation.y = rand() * Math.PI * 2;
     group.add(tree);
-    trees.push({ object: tree, trunk, leaves, crown: addCrown(tree, leaves), wood: Math.round(3 * s) + 1 });
+    trees.push({ object: tree, trunk, leaves, crown: addCrown(tree, leaves, sway), wood: Math.round(3 * s) + 1 });
     placed.push(new THREE.Vector2(x, z));
     n++;
   }
@@ -508,5 +564,6 @@ export function buildProps(): Props {
     rocks,
     platforms,
     spawn,
+    pierFoot: new THREE.Vector3(pierX, pierTop, pierStart),
   };
 }

@@ -1,18 +1,22 @@
 import { PALETTE } from '../core/palette.js';
 import { itemIcon } from './itemIcons.js';
 
-const HOTBAR_SIZE = 9;
+const HOTBAR_SIZE = 4; // ホットバーのマスの数（数字キー 1〜4 で選ぶ）
+const BAG_COLS = 9; // カバンの横のマスの数
 const BAG_ROWS = 3;
-const SLOT_COUNT = HOTBAR_SIZE * (BAG_ROWS + 1);
+const SLOT_COUNT = HOTBAR_SIZE + BAG_COLS * BAG_ROWS;
 const MAX_STACK = 99; // 素材・作業台の最大スタック数（ベリーと道具は別）
+const MAX_COINS = 9999; // お金のマスに入るコインの最大枚数
 // 道具の耐久力：何回使うと壊れるか（木や部材を叩く・茂みを刈る・建てる／壊すたびに 1 減る）
 const AXE_DURABILITY = 100; // 木1本を切り倒してばらすのに 7 回叩く
 const KNIFE_DURABILITY = 40;
 const HAMMER_DURABILITY = 80;
 const PICKAXE_DURABILITY = 100;
+const SHOVEL_DURABILITY = 80;
 const SWORD_DURABILITY = 100;
 const HOE_DURABILITY = 80;
 const ROD_DURABILITY = 60;
+const SPEAR_DURABILITY = 80;
 const DUR_HIGH = 0.5; // 耐久値のバー：残りがこの割合より多ければ緑
 const DUR_LOW = 0.2; // これ以下なら赤（間は黄）
 
@@ -31,6 +35,10 @@ export interface ItemDef {
   maxStack: number; // アイコンは itemIcons.ts の 3D モデルから作る
   /** 道具の耐久力（使える回数）。耐久力のある物は maxStack を 1 にする */
   durability?: number;
+  /** お金。お金のマスにだけ入り、ホットバーやカバンには入らない（なので手に持つことはない） */
+  currency?: boolean;
+  /** 設計図。持って右クリックすると、この id の物の作り方を覚える（設計図は減らない） */
+  teaches?: string;
 }
 
 export const ITEMS = {
@@ -40,18 +48,31 @@ export const ITEMS = {
   leaf: { id: 'leaf', name: '葉っぱ', maxStack: MAX_STACK },
   stone: { id: 'stone', name: '石', maxStack: MAX_STACK },
   vine: { id: 'vine', name: 'ツル', maxStack: MAX_STACK }, // 石のナイフで茂みを刈ると採れる
-  seed: { id: 'seed', name: 'たね', maxStack: MAX_STACK },
+  dirt: { id: 'dirt', name: '土', maxStack: MAX_STACK }, // 木のスコップで地面を掘ると採れる
+  seed: { id: 'seed', name: '木の種', maxStack: MAX_STACK },
   berry: { id: 'berry', name: 'ベリー', maxStack: 32 },
-  fish: { id: 'fish', name: '魚', maxStack: 32 }, // 釣り竿で釣れる。持って右クリックで食べる
+  // 魚：釣り竿で釣れる。持って右クリックで食べる（種類ごとの見た目・釣れる場所は items/fishKinds.ts）
+  fish: { id: 'fish', name: 'アジ', maxStack: 32 },
+  clownfish: { id: 'clownfish', name: 'クマノミ', maxStack: 32 },
+  snapper: { id: 'snapper', name: 'マダイ', maxStack: 32 },
+  puffer: { id: 'puffer', name: 'フグ', maxStack: 32 },
+  flounder: { id: 'flounder', name: 'ヒラメ', maxStack: 32 },
+  bonito: { id: 'bonito', name: 'カツオ', maxStack: 32 },
   hoe: { id: 'hoe', name: 'くわ', maxStack: 1, durability: HOE_DURABILITY },
   axe: { id: 'axe', name: '石の斧', maxStack: 1, durability: AXE_DURABILITY },
   sword: { id: 'sword', name: '剣', maxStack: 1, durability: SWORD_DURABILITY },
   stoneKnife: { id: 'stoneKnife', name: '石のナイフ', maxStack: 1, durability: KNIFE_DURABILITY }, // 持って左クリックで茂みを刈り、ツルを採る
+  spear: { id: 'spear', name: '石の槍', maxStack: 1, durability: SPEAR_DURABILITY }, // 持って左クリックで突く。ナイフより遠くの茂みを刈れて、ツルも採れる
   pickaxe: { id: 'pickaxe', name: '石のツルハシ', maxStack: 1, durability: PICKAXE_DURABILITY },
+  shovel: { id: 'shovel', name: '木のスコップ', maxStack: 1, durability: SHOVEL_DURABILITY }, // 板の刃を枝の柄にツルで縛りつけたスコップ
   fishingRod: { id: 'fishingRod', name: '釣り竿', maxStack: 1, durability: ROD_DURABILITY }, // 右クリック長押しで投げ、左クリックで巻く。魚を釣り上げるたびに耐久値が減る
   hammer: { id: 'hammer', name: 'ハンマー', maxStack: 1, durability: HAMMER_DURABILITY }, // 持って右クリックで部材を選び、左クリックで建てる
   // 手に持って左クリックで設置する部材（id は actions/pieces.ts の部材と同じ）。ほかの部材はハンマーで建てる
   workbench: { id: 'workbench', name: '作業台', maxStack: MAX_STACK },
+  campfire: { id: 'campfire', name: '焚火', maxStack: MAX_STACK }, // 石を輪に並べて枝を組んだ焚火。置いて F で燃料を入れる（actions/campfire.ts）
+  coin: { id: 'coin', name: 'コイン', maxStack: MAX_COINS, currency: true }, // 島のお金。桟橋の人との取引で手に入る
+  boatBlueprint: { id: 'boatBlueprint', name: '木製の船の設計図', maxStack: 1, teaches: 'boat' }, // 桟橋の人からコインで買う
+  boat: { id: 'boat', name: '木製の船', maxStack: 1 }, // 設計図で作り方を覚えると、作業台で作れる。持って左クリックで水に浮かべる（actions/boats.ts。乗るのはこれから）
 } satisfies Record<string, ItemDef>;
 
 export type ItemId = keyof typeof ITEMS;
@@ -65,14 +86,19 @@ export function validDmg(item: ItemId, dmg: unknown): number | undefined {
   return max && Number.isInteger(dmg) && (dmg as number) > 0 && (dmg as number) < max ? (dmg as number) : undefined;
 }
 
+/** お金（お金のマスにだけ入る物）か */
+export function isCurrency(item: ItemId): boolean {
+  return !!(ITEMS[item] as ItemDef).currency;
+}
+
 /** count 個だけ取り分けたスタック（減った耐久値も引き継ぐ） */
 function part(s: Stack, count: number): Stack {
   const dmg = validDmg(s.item, s.dmg);
   return dmg ? { item: s.item, count, dmg } : { item: s.item, count };
 }
 
-/** trash はゴミ箱のマス（無いセーブデータは空とみなす） */
-export interface InventorySave { slots: (Stack | null)[]; selected: number; trash?: Stack | null }
+/** trash はゴミ箱のマス、purse はお金のマス（無いセーブデータは空とみなす） */
+export interface InventorySave { slots: (Stack | null)[]; selected: number; trash?: Stack | null; purse?: Stack | null }
 
 /** 画面上のマス1つ。list の i 番目を表示する */
 interface SlotRef { list: (Stack | null)[]; i: number; el: HTMLElement }
@@ -93,6 +119,8 @@ export class Inventory {
   isOpen = false;
   /** ゴミ箱のマス。入れた物は次に別の物を入れるまで取り戻せる（テラリアと同じ） */
   private readonly trash: (Stack | null)[] = [null];
+  /** お金のマス。お金はここにしか入らず、ここにはお金しか入らない */
+  private readonly purse: (Stack | null)[] = [null];
   private held: Stack | null = null; // 開いた画面でつまんでいるスタック
   private gesture: Gesture | null = null;
   private hovered: SlotRef | null = null; // 開いた画面でマウスが乗っているマス
@@ -102,6 +130,7 @@ export class Inventory {
   private readonly bagEl: HTMLElement;
   private readonly nameEl: HTMLElement;
   private readonly heldEl: HTMLElement;
+  private readonly tipEl: HTMLElement; // マウスが乗っているマスの物の名前
   private readonly refs: SlotRef[] = [];
   private nameTimer = 0;
 
@@ -109,6 +138,11 @@ export class Inventory {
   onToggle: (open: boolean, resume: boolean) => void = () => {};
   /** インベントリの外に預けている物（クラフトの台に置いた素材など）。セーブのときに一緒に保存する */
   pending: () => Stack[] = () => [];
+  /**
+   * Shift+クリックしたマスの物を、開いている画面の別の欄（焚火の燃料の欄など）へ送る。送った個数を返す。
+   * null なら Shift+クリックは何もしない
+   */
+  quickMove: ((s: Stack) => number) | null = null;
 
   constructor() {
     injectStyle();
@@ -117,12 +151,14 @@ export class Inventory {
     this.nameEl = el('div', 'inv-name');
     this.hotbarEl = el('div', 'inv-hotbar');
     this.heldEl = el('div', 'inv-held');
-    // ゴミ箱はカバンの右隣に置く（カバンと同じく開いたときだけ見える）
+    this.tipEl = el('div', 'inv-tip');
+    // ゴミ箱はカバンの右隣、お金のマスは左隣に置く（カバンと同じく開いたときだけ見える）
     const bagRow = el('div', 'inv-bagrow');
     const trashEl = el('div', 'inv-slot inv-trash');
-    bagRow.append(this.bagEl, trashEl);
+    const purseEl = el('div', 'inv-slot inv-purse');
+    bagRow.append(purseEl, this.bagEl, trashEl);
     this.root.append(bagRow, this.nameEl, this.hotbarEl);
-    document.body.append(this.root, this.heldEl);
+    document.body.append(this.root, this.heldEl, this.tipEl);
 
     for (let i = 0; i < SLOT_COUNT; i++) {
       const slot = el('div', 'inv-slot');
@@ -130,6 +166,7 @@ export class Inventory {
       this.bindSlot({ list: this.slots, i, el: slot });
     }
     this.bindSlot({ list: this.trash, i: 0, el: trashEl });
+    this.bindSlot({ list: this.purse, i: 0, el: purseEl });
     // マスの外で離したとき：なぞって分ける操作はそこまでで確定し、つまんだ物はそのまま持っておく
     addEventListener('mouseup', () => {
       if (!this.gesture) return;
@@ -145,7 +182,8 @@ export class Inventory {
       } else if (e.code === 'Escape' && this.isOpen) {
         this.setOpen(false, false);
       } else if (/^Digit[1-9]$/.test(e.code)) {
-        this.select(Number(e.code.slice(5)) - 1);
+        const i = Number(e.code.slice(5)) - 1;
+        if (i < HOTBAR_SIZE) this.select(i);
       }
     });
     addEventListener('wheel', (e) => {
@@ -154,6 +192,7 @@ export class Inventory {
     });
     addEventListener('mousemove', (e) => {
       this.heldEl.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+      this.tipEl.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
     });
 
     this.render();
@@ -178,14 +217,15 @@ export class Inventory {
   /** インベントリにあと何個入るか */
   room(item: ItemId): number {
     const max = ITEMS[item].maxStack;
-    return this.slots.reduce((n, s) => n + (!s ? max : s.item === item ? max - s.count : 0), 0);
+    return this.home(item).reduce((n, s) => n + (!s ? max : s.item === item ? max - s.count : 0), 0);
   }
 
   /** アイテムを追加し、入りきらなかった個数を返す。dmg は使いかけの道具の減った耐久値 */
   add(item: ItemId, count = 1, dmg?: number): number {
     const max = ITEMS[item].maxStack;
+    const list = this.home(item);
     // 既存スタックに詰める → 空きスロットへ（ホットバー優先）
-    for (const s of this.slots) {
+    for (const s of list) {
       if (count === 0) break;
       if (s && s.item === item && s.count < max) {
         const n = Math.min(max - s.count, count);
@@ -193,10 +233,10 @@ export class Inventory {
         count -= n;
       }
     }
-    for (let i = 0; i < SLOT_COUNT && count > 0; i++) {
-      if (this.slots[i]) continue;
+    for (let i = 0; i < list.length && count > 0; i++) {
+      if (list[i]) continue;
       const n = Math.min(max, count);
-      this.slots[i] = dmg ? { item, count: n, dmg } : { item, count: n };
+      list[i] = dmg ? { item, count: n, dmg } : { item, count: n };
       count -= n;
     }
     this.render();
@@ -205,20 +245,21 @@ export class Inventory {
 
   /** 持っている個数の合計 */
   count(item: ItemId): number {
-    return this.slots.reduce((n, s) => (s?.item === item ? n + s.count : n), 0);
+    return this.home(item).reduce((n, s) => (s?.item === item ? n + s.count : n), 0);
   }
 
   /** count 個取り除く。足りなければ何もせず false */
   remove(item: ItemId, count = 1): boolean {
     if (this.count(item) < count) return false;
     // 後ろ（カバン側）のスタックから使う
-    for (let i = SLOT_COUNT - 1; i >= 0 && count > 0; i--) {
-      const s = this.slots[i];
+    const list = this.home(item);
+    for (let i = list.length - 1; i >= 0 && count > 0; i--) {
+      const s = list[i];
       if (s?.item !== item) continue;
       const n = Math.min(s.count, count);
       s.count -= n;
       count -= n;
-      if (s.count === 0) this.slots[i] = null;
+      if (s.count === 0) list[i] = null;
     }
     this.render();
     return true;
@@ -277,13 +318,18 @@ export class Inventory {
 
   serialize(): InventorySave {
     const slots = this.slots.map((s) => (s ? { ...s } : null));
-    // 画面でつまんでいる途中のスタックや、クラフトの台に置いた素材も失わないように、空きスロットへ入れておく
+    let purse = this.purse[0] ? { ...this.purse[0] } : null;
+    // 画面でつまんでいる途中のスタックや、クラフトの台に置いた素材も失わないように、空きスロット（お金ならお金のマス）へ入れておく
     for (const s of [this.held, ...this.pending()]) {
       if (!s) continue;
+      if (isCurrency(s.item)) {
+        purse = { item: s.item, count: Math.min((purse?.count ?? 0) + s.count, ITEMS[s.item].maxStack) };
+        continue;
+      }
       const i = slots.indexOf(null);
       if (i >= 0) slots[i] = { ...s };
     }
-    return { slots, selected: this.selected, trash: this.trash[0] ? { ...this.trash[0] } : null };
+    return { slots, selected: this.selected, trash: this.trash[0] ? { ...this.trash[0] } : null, purse };
   }
 
   restore(save: InventorySave): void {
@@ -293,6 +339,19 @@ export class Inventory {
     }
     const t = save.trash;
     this.trash[0] = t && t.item in ITEMS && t.count > 0 ? part(t, t.count) : null;
+    const p = save.purse;
+    this.purse[0] = p && p.item in ITEMS && isCurrency(p.item) && p.count > 0 ? part(p, p.count) : null;
+    // ふつうのマスに入っているお金は、お金のマスへ移す
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const s = this.slots[i];
+      if (!s || !isCurrency(s.item)) continue;
+      this.slots[i] = null;
+      this.add(s.item, s.count);
+    }
+    // マスの数が今より多かった頃のセーブデータは、はみ出した分を空いているマスへ入れる
+    for (const s of save.slots.slice(SLOT_COUNT)) {
+      if (s && s.item in ITEMS && s.count > 0) this.add(s.item, s.count, validDmg(s.item, s.dmg));
+    }
     this.held = null;
     this.selected = save.selected >= 0 && save.selected < HOTBAR_SIZE ? save.selected : 0;
     this.render();
@@ -329,9 +388,11 @@ export class Inventory {
     ref.el.addEventListener('mouseenter', () => {
       this.hovered = ref;
       this.onSlotEnter(ref);
+      this.renderTip();
     });
     ref.el.addEventListener('mouseleave', () => {
       if (this.hovered === ref) this.hovered = null;
+      this.renderTip();
     });
     ref.el.addEventListener('mouseup', () => this.onSlotUp(ref));
     ref.el.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -346,6 +407,10 @@ export class Inventory {
 
     if (ref.list === this.trash && this.held) {
       this.discard(); // ゴミ箱に入れる（前に入っていた物は消える）
+    } else if (e.shiftKey && !right && !this.held && slot && ref.list === this.slots && this.quickMove) {
+      // Shift+クリック：開いている画面の欄へ送る
+      slot.count -= Math.min(this.quickMove(slot), slot.count);
+      if (slot.count <= 0) ref.list[ref.i] = null;
     } else if (e.ctrlKey && !this.held && slot && ref.list !== this.trash) {
       // Ctrl+クリック：マスの物をまるごとゴミ箱へ
       this.trash[0] = slot;
@@ -361,6 +426,8 @@ export class Inventory {
         ref.list[ref.i] = null;
       }
       this.gesture = { kind: 'pick', from: ref };
+    } else if (!this.fits(ref, this.held.item)) {
+      return; // お金はお金のマスにだけ、お金のマスにはお金だけ置ける
     } else if (slot && slot.item !== this.held.item) {
       this.dropAll(ref); // 違うアイテムなら入れ替える
     } else if (right) {
@@ -393,7 +460,7 @@ export class Inventory {
     this.gesture = null;
     if (g.kind === 'pick' && g.from !== ref && this.held) {
       if (ref.list === this.trash) this.discard();
-      else this.dropAll(ref);
+      else if (this.fits(ref, this.held.item)) this.dropAll(ref);
     }
     else if (g.kind === 'spread') this.finishSpread(g.refs);
     this.render();
@@ -407,9 +474,20 @@ export class Inventory {
 
   /** そのマスに item を置けるか（空いているか、同じアイテムでまだ積めるか）。ゴミ箱には分けて置けない */
   private accepts(ref: SlotRef, item: ItemId): boolean {
-    if (ref.list === this.trash) return false;
+    if (ref.list === this.trash || !this.fits(ref, item)) return false;
     const s = ref.list[ref.i];
     return !s || (s.item === item && s.count < ITEMS[item].maxStack);
+  }
+
+  /** そのアイテムが入るマスの並び（お金ならお金のマス、それ以外はホットバーとカバン） */
+  private home(item: ItemId): (Stack | null)[] {
+    return isCurrency(item) ? this.purse : this.slots;
+  }
+
+  /** そのマスに item を置いてよいか（お金はお金のマスにだけ、お金のマスにはお金だけ。ゴミ箱には何でも入る） */
+  private fits(ref: SlotRef, item: ItemId): boolean {
+    if (ref.list === this.trash) return true;
+    return (ref.list === this.purse) === isCurrency(item);
   }
 
   /** つまんでいる物をすべて置く。同じアイテムなら積めるだけ積み、違うアイテムなら入れ替える */
@@ -475,10 +553,20 @@ export class Inventory {
       const s = ref.list[ref.i];
       ref.el.classList.toggle('selected', ref.list === this.slots && ref.i === this.selected);
       ref.el.classList.toggle('spread', spread.includes(ref));
-      ref.el.innerHTML = stackHtml(s);
-      ref.el.title = s ? itemLabel(s) : ref.list === this.trash ? 'ゴミ箱' : '';
+      // 空のお金のマスには、コインの絵を薄く出す
+      ref.el.innerHTML = !s && ref.list === this.purse ? `<img class="inv-ghost" src="${itemIcon('coin')}" alt="" draggable="false">` : stackHtml(s);
     }
     this.heldEl.innerHTML = stackHtml(this.held);
+    this.renderTip();
+  }
+
+  /** 開いた画面でマウスが乗っているマスの物の名前を、カーソルの横に出す（物をつまんでいる間は出さない） */
+  private renderTip(): void {
+    const ref = this.isOpen && !this.held ? this.hovered : null;
+    const s = ref ? ref.list[ref.i] : null;
+    const text = s ? itemLabel(s) : ref?.list === this.trash ? 'ゴミ箱' : ref?.list === this.purse ? 'お金' : '';
+    this.tipEl.textContent = text;
+    this.tipEl.classList.toggle('show', text !== '');
   }
 
 }
@@ -524,9 +612,11 @@ function injectStyle(): void {
       user-select: none; z-index: 5; pointer-events: none;
     }
     .inv-hotbar, .inv-bag {
-      display: grid; grid-template-columns: repeat(${HOTBAR_SIZE}, calc(52 * var(--u))); gap: calc(4 * var(--u));
+      display: grid; gap: calc(4 * var(--u));
       padding: calc(6 * var(--u)); border-radius: calc(10 * var(--u)); background: rgba(43, 38, 51, 0.55);
     }
+    .inv-hotbar { grid-template-columns: repeat(${HOTBAR_SIZE}, calc(52 * var(--u))); }
+    .inv-bag { grid-template-columns: repeat(${BAG_COLS}, calc(52 * var(--u))); }
     .inv-bagrow { position: relative; display: none; }
     .inv.open { pointer-events: auto; }
     .inv.open .inv-bagrow { display: block; }
@@ -534,6 +624,12 @@ function injectStyle(): void {
       position: absolute; left: calc(100% + 8 * var(--u)); bottom: 0;
       outline: calc(6 * var(--u)) solid rgba(43, 38, 51, 0.55); margin: calc(6 * var(--u));
     }
+    .inv-purse {
+      position: absolute; right: calc(100% + 8 * var(--u)); bottom: 0;
+      outline: calc(6 * var(--u)) solid rgba(43, 38, 51, 0.55); margin: calc(6 * var(--u));
+      box-shadow: inset 0 0 0 calc(2 * var(--u)) ${css(PALETTE.sand)};
+    }
+    .inv-slot img.inv-ghost { opacity: 0.3; filter: grayscale(1); }
     /* 空のゴミ箱にはゴミ箱の絵を薄く出す */
     .inv-trash:empty::before {
       content: ''; position: absolute; inset: calc(12 * var(--u)); background: rgba(255, 255, 255, 0.3);
@@ -571,6 +667,12 @@ function injectStyle(): void {
       position: fixed; left: calc(-26 * var(--u)); top: calc(-26 * var(--u)); width: calc(52 * var(--u)); height: calc(52 * var(--u));
       pointer-events: none; z-index: 6;
     }
+    .inv-tip {
+      position: fixed; left: calc(14 * var(--u)); top: calc(14 * var(--u)); display: none; white-space: nowrap;
+      padding: calc(4 * var(--u)) calc(8 * var(--u)); border-radius: calc(6 * var(--u)); background: rgba(43, 38, 51, 0.88);
+      color: #fff; font-size: calc(14 * var(--u)); font-weight: 700; pointer-events: none; z-index: 7;
+    }
+    .inv-tip.show { display: block; }
 
   `;
   document.head.append(style);

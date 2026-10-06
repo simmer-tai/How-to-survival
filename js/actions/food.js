@@ -8,10 +8,16 @@ import { waveOffset } from '../core/waves.js';
 export const FOODS = {
     berry: { hunger: 8, thirst: 2 },
     fish: { hunger: 20, thirst: 0 },
+    clownfish: { hunger: 10, thirst: 0 },
+    snapper: { hunger: 30, thirst: 0 },
+    puffer: { hunger: 15, thirst: 0 },
+    flounder: { hunger: 30, thirst: 0 },
+    bonito: { hunger: 45, thirst: 2 },
 };
 export const EAT_TIME = 0.6; // 口へ運んで食べ終わるまで（秒）
 const DRINK_AMOUNT = 12; // 1口で回復する水分
 const DRINK_COOLDOWN = 0.4; // F を押しっぱなしにしても、この間隔でしか飲めない
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
 const DRINK_REACH = 3.2; // 視線の先、この距離までの水面から飲める
 const SPLASH_COUNT = 8;
 const splashGeo = new THREE.BoxGeometry(0.07, 0.07, 0.07);
@@ -64,7 +70,7 @@ export class Drinker {
     }
     /** 手の届く水面を見ていれば、その点を返す */
     aimed(camera) {
-        this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+        this.raycaster.setFromCamera(SCREEN_CENTER, camera);
         const { origin, direction } = this.raycaster.ray;
         if (direction.y >= -0.05)
             return null;

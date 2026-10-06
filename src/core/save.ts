@@ -9,6 +9,13 @@ import type { DropsSave } from '../items/drops.js';
 import { WorldClock, type ClockSave } from '../world/clock.js';
 import type { PebblesSave } from '../world/pebbles.js';
 import type { RockSave } from '../actions/mining.js';
+import type { GuideSave } from '../story/guide.js';
+import type { RecipeBookSave } from '../items/recipeBook.js';
+import type { BoatsSave } from '../actions/boats.js';
+import type { SpearsSave } from '../actions/spears.js';
+import type { WeatherSave } from '../world/weather.js';
+import type { HolesSave } from '../actions/digging.js';
+import type { FireSave } from '../actions/campfire.js';
 
 // ワールドはブラウザの localStorage に保存する（ページの URL のオリジンごとに別々になる）。
 // 地形や木・茂みの配置は固定シードで毎回同じに生成されるので、変化した状態だけを持つ
@@ -23,7 +30,19 @@ import type { RockSave } from '../actions/mining.js';
 // 8 → 9：インベントリ・落とし物の道具が、使って減った耐久値（dmg）を持つようになった
 // 9 → 10：茂みが、なっている実の数（berries）を持つようになった
 // 10 → 11：岩ののこりの耐久値（rocks）が入った
-export const SAVE_VERSION = 11;
+// 11 → 12：桟橋の住人の頼みごとの進み具合（guide）が入った
+// 12 → 13：お金（wallet）が入った
+// 13 → 14：お金をインベントリのお金のマス（inventory.purse）に入れるようになった（wallet はなくなった）
+// 14 → 15：設計図で覚えたレシピ（recipes）が入った
+// 15 → 16：水に浮かべた船（boats）が入った
+// 16 → 17：プレイヤーが乗っている船の番号（player.boat）が入った
+// 17 → 18：投げて刺さった石の槍（spears）が入った
+// 18 → 19：場所（島・街）が入った。船（boats.list[].loc）とプレイヤー（player.loc）がどの場所にいるか
+// 19 → 20：コマンドメニューで決めた天気（weather）が入った
+// 20 → 21：スコップで掘った穴（holes）が入った
+// 21 → 22：掘った穴が、掘ってからたった時間（holes.list[].t）を持つようになった
+// 22 → 23：焚火の燃料と火（fires）が入った
+export const SAVE_VERSION = 23;
 
 export interface WorldData {
   version: number;
@@ -44,6 +63,20 @@ export interface WorldData {
   pebbles: PebblesSave;
   /** props の岩の生成順 */
   rocks: RockSave[];
+  /** 桟橋の住人の頼みごとの進み具合（自分だけの状態） */
+  guide: GuideSave;
+  /** 設計図で覚えたレシピ（自分だけの状態） */
+  recipes: RecipeBookSave;
+  /** 水に浮かべた船 */
+  boats: BoatsSave;
+  /** 投げて刺さった石の槍 */
+  spears: SpearsSave;
+  /** コマンドメニューで決めた天気（ふだんの天気のままなら null） */
+  weather: WeatherSave | null;
+  /** スコップで掘った穴 */
+  holes: HolesSave;
+  /** 置いた焚火の燃料の欄と、燃えている燃料（焚火の部材そのものは built に入る） */
+  fires: FireSave[];
 }
 
 /** バージョン 1 のセーブデータ（部材に ID がない） */
@@ -147,11 +180,114 @@ function fromV9(old: WorldDataV9): WorldDataV10 {
 }
 
 /** バージョン 10 のセーブデータ（岩がない） */
-type WorldDataV10 = Omit<WorldData, 'version' | 'rocks'> & { version: 10 };
+type WorldDataV10 = Omit<WorldDataV11, 'version' | 'rocks'> & { version: 10 };
 
 /** 10 → 11：岩はすべて無傷として読む */
-function fromV10(old: WorldDataV10): WorldData {
+function fromV10(old: WorldDataV10): WorldDataV11 {
   return { ...old, version: 11, rocks: [] };
+}
+
+/** バージョン 11 のセーブデータ（頼みごとの進み具合がない） */
+type WorldDataV11 = Omit<WorldDataV12, 'version' | 'guide'> & { version: 11 };
+
+/** 11 → 12：頼みごとは最初から。持ち物で達成済みの目標は、読み込んだあとにすぐ進む */
+function fromV11(old: WorldDataV11): WorldDataV12 {
+  return { ...old, version: 12, guide: { step: 0 } };
+}
+
+/** バージョン 12 のセーブデータ（お金がない。試作の「貝貨」がインベントリに入っていることがある） */
+type WorldDataV12 = Omit<WorldDataV13, 'version' | 'wallet'> & { version: 12 };
+
+/** 12 → 13：お金は 0 枚から。インベントリに残っている貝貨は、同じ枚数のコインに換える */
+function fromV12(old: WorldDataV12): WorldDataV13 {
+  let coins = 0;
+  const slots = old.inventory.slots.map((s) => {
+    if ((s?.item as string) !== 'shell') return s;
+    coins += s!.count;
+    return null;
+  });
+  return { ...old, version: 13, inventory: { ...old.inventory, slots }, wallet: { coins } };
+}
+
+/** バージョン 13 のセーブデータ（お金はインベントリの外の wallet に入っている） */
+type WorldDataV13 = Omit<WorldDataV14, 'version'> & { version: 13; wallet: { coins: number } };
+
+/** 13 → 14：wallet のお金を、インベントリのお金のマスのコインにする */
+function fromV13({ wallet, ...old }: WorldDataV13): WorldDataV14 {
+  const coins = Math.min(wallet.coins, ITEMS.coin.maxStack);
+  return { ...old, version: 14, inventory: { ...old.inventory, purse: coins > 0 ? { item: 'coin', count: coins } : null } };
+}
+
+/** バージョン 14 のセーブデータ（覚えたレシピがない） */
+type WorldDataV14 = Omit<WorldDataV15, 'version' | 'recipes'> & { version: 14 };
+
+/** 14 → 15：まだ何も覚えていないとして読む */
+function fromV14(old: WorldDataV14): WorldDataV15 {
+  return { ...old, version: 15, recipes: [] };
+}
+
+/** バージョン 15 のセーブデータ（船がない） */
+type WorldDataV15 = Omit<WorldDataV16, 'version' | 'boats'> & { version: 15 };
+
+/** 15 → 16：船はまだ1つも浮かべていないとして読む */
+function fromV15(old: WorldDataV15): WorldDataV16 {
+  return { ...old, version: 16, boats: { next: 0, list: [] } };
+}
+
+/** バージョン 16 のセーブデータ（player.boat がない） */
+type WorldDataV16 = Omit<WorldDataV17, 'version'> & { version: 16 };
+
+/** 16 → 17：boat がないプレイヤーは船に乗っていないとして読めるので、形はそのまま */
+function fromV16(old: WorldDataV16): WorldDataV17 {
+  return { ...old, version: 17 };
+}
+
+/** バージョン 17 のセーブデータ（刺さった槍がない） */
+type WorldDataV17 = Omit<WorldDataV18, 'version' | 'spears'> & { version: 17 };
+
+/** 17 → 18：刺さった槍はまだない */
+function fromV17(old: WorldDataV17): WorldDataV18 {
+  return { ...old, version: 18, spears: { next: 0, list: [] } };
+}
+
+/** バージョン 18 のセーブデータ（場所がない） */
+type WorldDataV18 = Omit<WorldDataV19, 'version'> & { version: 18 };
+
+/** 18 → 19：loc がない船とプレイヤーは自分の島にいるとして読めるので、形はそのまま */
+function fromV18(old: WorldDataV18): WorldDataV19 {
+  return { ...old, version: 19 };
+}
+
+/** バージョン 19 のセーブデータ（天気の指定がない） */
+type WorldDataV19 = Omit<WorldDataV20, 'version' | 'weather'> & { version: 19 };
+
+/** 19 → 20：天気は時刻から決まる、ふだんの天気のまま */
+function fromV19(old: WorldDataV19): WorldDataV20 {
+  return { ...old, version: 20, weather: null };
+}
+
+/** バージョン 20 のセーブデータ（穴がない） */
+type WorldDataV20 = Omit<WorldDataV21, 'version' | 'holes'> & { version: 20 };
+
+/** 20 → 21：穴はまだ1つも掘っていない */
+function fromV20(old: WorldDataV20): WorldDataV21 {
+  return { ...old, version: 21, holes: { next: 0, list: [] } };
+}
+
+/** バージョン 21 のセーブデータ（穴に t がない） */
+type WorldDataV21 = Omit<WorldDataV22, 'version'> & { version: 21 };
+
+/** 21 → 22：t がない穴は掘ったばかりとして読めるので、形はそのまま */
+function fromV21(old: WorldDataV21): WorldDataV22 {
+  return { ...old, version: 22 };
+}
+
+/** バージョン 22 のセーブデータ（焚火がない） */
+type WorldDataV22 = Omit<WorldData, 'version' | 'fires'> & { version: 22 };
+
+/** 22 → 23：焚火はまだ1つも置いていない */
+function fromV22(old: WorldDataV22): WorldData {
+  return { ...old, version: 23, fires: [] };
 }
 
 export interface WorldMeta {
@@ -189,7 +325,7 @@ export function createWorld(name: string): WorldMeta {
 export function loadWorld(id: string): WorldData | null {
   const json = localStorage.getItem(dataKey(id));
   if (json === null) return null;
-  let data = JSON.parse(json) as WorldData | WorldDataV1 | WorldDataV2 | WorldDataV3 | WorldDataV4 | WorldDataV5 | WorldDataV6 | WorldDataV7 | WorldDataV8 | WorldDataV9 | WorldDataV10;
+  let data = JSON.parse(json) as WorldData | WorldDataV1 | WorldDataV2 | WorldDataV3 | WorldDataV4 | WorldDataV5 | WorldDataV6 | WorldDataV7 | WorldDataV8 | WorldDataV9 | WorldDataV10 | WorldDataV11 | WorldDataV12 | WorldDataV13 | WorldDataV14 | WorldDataV15 | WorldDataV16 | WorldDataV17 | WorldDataV18 | WorldDataV19 | WorldDataV20 | WorldDataV21 | WorldDataV22;
   if (data.version === 1) data = fromV1(data as WorldDataV1);
   if (data.version === 2) data = fromV2(data as WorldDataV2);
   if (data.version === 3) data = fromV3(data as WorldDataV3);
@@ -200,6 +336,18 @@ export function loadWorld(id: string): WorldData | null {
   if (data.version === 8) data = fromV8(data as WorldDataV8);
   if (data.version === 9) data = fromV9(data as WorldDataV9);
   if (data.version === 10) data = fromV10(data as WorldDataV10);
+  if (data.version === 11) data = fromV11(data as WorldDataV11);
+  if (data.version === 12) data = fromV12(data as WorldDataV12);
+  if (data.version === 13) data = fromV13(data as WorldDataV13);
+  if (data.version === 14) data = fromV14(data as WorldDataV14);
+  if (data.version === 15) data = fromV15(data as WorldDataV15);
+  if (data.version === 16) data = fromV16(data as WorldDataV16);
+  if (data.version === 17) data = fromV17(data as WorldDataV17);
+  if (data.version === 18) data = fromV18(data as WorldDataV18);
+  if (data.version === 19) data = fromV19(data as WorldDataV19);
+  if (data.version === 20) data = fromV20(data as WorldDataV20);
+  if (data.version === 21) data = fromV21(data as WorldDataV21);
+  if (data.version === 22) data = fromV22(data as WorldDataV22);
   if (data.version !== SAVE_VERSION) throw new Error(`unknown save version: ${data.version}`);
   return data as WorldData;
 }

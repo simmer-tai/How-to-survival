@@ -8,6 +8,7 @@ import { ITEMS, type Inventory, type ItemId, type Stack } from '../items/invento
 import { candidates, ingredients, totals, type Recipe } from '../items/recipes.js';
 import { BENCH_D, BENCH_H, BENCH_W } from './pieces.js';
 import type { PieceInfo } from './build.js';
+import { FISH_IDS } from '../items/fishKinds.js';
 import { keyGuide } from '../ui/keyGuide.js';
 
 const MAT_W = 0.8; // 手元の台（インベントリを開いたとき画面に出る半透明のグリッド）の幅
@@ -28,7 +29,7 @@ const ZOOM_TIME = 0.35; // 作業台に寄る時間
 const MAX_ITEMS = 40; // 台に置ける素材の数
 const HOVER_SCALE = 1.12;
 /** 寝かせて置く素材（道具や枝・葉は立てると不自然なので、アイコンの正面を上に向ける） */
-const FLAT_ITEMS: ItemId[] = ['stick', 'leaf', 'vine', 'hoe', 'axe', 'sword', 'stoneKnife', 'hammer', 'pickaxe', 'fishingRod', 'fish'];
+const FLAT_ITEMS: ItemId[] = ['stick', 'leaf', 'vine', 'hoe', 'axe', 'sword', 'stoneKnife', 'spear', 'hammer', 'pickaxe', 'shovel', 'fishingRod', ...FISH_IDS, 'boatBlueprint'];
 const UP = new THREE.Vector3(0, 1, 0);
 
 // ---- 台の上の物理演算 ----
@@ -106,6 +107,8 @@ export class Crafting {
 
   /** その番号の作業台がまだあるか（壊されたら閉じる） */
   benchExists: (pid: number) => boolean = () => true;
+  /** そのレシピの作り方を知っているか（設計図で覚えるレシピのため。main が設定する） */
+  knows: (recipe: Recipe) => boolean = () => true;
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -500,7 +503,7 @@ export class Crafting {
         ? '候補を [左] で作る（[Shift]+[左]：作れるだけ） ／ 台の素材は [右] でインベントリに戻る'
         : '素材をドラッグして台に1つずつ置くと、作れる物が出てくる' + (this.bench ? '' : '（作業台を置いて [F] で使うと、もっといろいろ作れる）'));
     this.candEl.innerHTML = '';
-    const list = candidates(this.bench ? 'workbench' : null, have);
+    const list = candidates(this.bench ? 'workbench' : null, have, this.knows);
     if (have.size > 0 && list.length === 0) {
       const note = el('div', 'craft-note');
       note.textContent = 'この素材で作れる物はない';

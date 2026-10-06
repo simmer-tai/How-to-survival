@@ -27,10 +27,17 @@ const coeffs = WAVES.map((w) => {
 });
 
 let time = 0;
+/** 波の高さの倍率（天気で変わる。シェーダーにも同じ値を渡す） */
+export const waveScale = { value: 1 };
 
 /** 毎フレーム経過時間を渡す */
 export function setWaveTime(t: number): void {
   time = t;
+}
+
+/** 波の高さの倍率を変える（嵐で高くなる） */
+export function setWaveScale(k: number): void {
+  waveScale.value = k;
 }
 
 // 山はとがらせ、谷は広くする（平均が0になるようにずらす）
@@ -45,13 +52,14 @@ export function waveOffset(x: number, z: number): number {
   for (const c of coeffs) h += c.amp * crest(x * c.kx + z * c.kz - time * c.omega + c.phase);
   const r = Math.hypot(x, z);
   const t = Math.min(Math.max((r - WAVE_FADE_START) / (WAVE_FADE_END - WAVE_FADE_START), 0), 1);
-  return h * (1 - t * t * (3 - 2 * t));
+  return h * waveScale.value * (1 - t * t * (3 - 2 * t));
 }
 
 const f = (n: number) => n.toFixed(6);
 
-/** waveOffset と同じ計算の GLSL */
+/** waveOffset と同じ計算の GLSL（使うシェーダーには uWaveScale に waveScale を渡す） */
 export const WAVE_GLSL = /* glsl */ `
+uniform float uWaveScale;
 float waveCrest(float x) {
   float s = 0.5 + 0.5 * sin(x);
   return (s * s - 0.375) * 2.0;
@@ -61,6 +69,6 @@ float waveOffset(vec2 p, float t) {
 ${coeffs
   .map((c) => `  h += ${f(c.amp)} * waveCrest(dot(p, vec2(${f(c.kx)}, ${f(c.kz)})) - t * ${f(c.omega)} + ${f(c.phase)});`)
   .join('\n')}
-  return h * (1.0 - smoothstep(${f(WAVE_FADE_START)}, ${f(WAVE_FADE_END)}, length(p)));
+  return h * uWaveScale * (1.0 - smoothstep(${f(WAVE_FADE_START)}, ${f(WAVE_FADE_END)}, length(p)));
 }
 `;

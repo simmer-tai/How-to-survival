@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { woodPiece } from '../items/drops.js';
-import { PLANK_T, buildBerryModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel } from '../items/itemModels.js';
+import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildDirtModel } from '../items/itemModels.js';
+import { FISH_KINDS, type FishId } from '../items/fishKinds.js';
 import { HandModel, type HandAnchor, type HandPoseName, type Vec3 } from './handModel.js';
+import { pieceIconModel } from '../actions/pieces.js';
 
 /** 腕を伸ばす向き（カメラ基準）。どの持ち方でも、画面の右下手前から手へまっすぐ腕が伸びる */
 const ARM_DIR: Vec3 = [0.25, -0.5, 0.83];
@@ -23,7 +25,9 @@ function toViewLayer(root: THREE.Object3D): void {
 /** 振りの区間の進み方。out=だんだん遅く, in=だんだん速く, smooth=なめらかに */
 type Ease = 'out' | 'in' | 'smooth';
 /** 道具を振るキーフレーム。t=秒, pos=握りの移動 [x,y,z], rot=握りを中心にした回転 [x,y,z]（構えの向き基準） */
-interface SwingKey { t: number; pos: Vec3; rot: Vec3; ease: Ease }
+export interface SwingKey { t: number; pos: Vec3; rot: Vec3; ease: Ease }
+/** 道具を振る動き。keys の最後で構えに戻り、impactAt 秒で当たる */
+export interface SwingMotion { keys: SwingKey[]; impactAt: number }
 const SWING_KEYS: SwingKey[] = [
   { t: 0, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構え
   { t: 0.16, pos: [0.02, 0.13, 0.1], rot: [0.42, 0, 0.08], ease: 'out' }, // 肩の上へ振りかぶる
@@ -32,7 +36,19 @@ const SWING_KEYS: SwingKey[] = [
   { t: 0.52, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構えに戻る
 ];
 const IMPACT_AT = 0.25; // 振り下ろしきって当たるタイミング（秒）
-const SWING_END = SWING_KEYS[SWING_KEYS.length - 1].t;
+/** 斧・ハンマー・ナイフ・ツルハシの、肩の上から振り下ろす動き */
+const CHOP_MOTION: SwingMotion = { keys: SWING_KEYS, impactAt: IMPACT_AT };
+/** 槍の、いったん引いてから前へまっすぐ突き出す動き（穂先を水平近くまで倒して突く） */
+export const THRUST_MOTION: SwingMotion = {
+  keys: [
+    { t: 0, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構え
+    { t: 0.12, pos: [0.03, 0.03, 0.14], rot: [-0.55, 0, 0], ease: 'out' }, // 穂先を前へ倒しながら手元へ引く
+    { t: 0.2, pos: [-0.07, 0.05, -0.38], rot: [-0.62, -0.06, 0], ease: 'in' }, // 前へ突き出す
+    { t: 0.27, pos: [-0.07, 0.05, -0.4], rot: [-0.62, -0.06, 0], ease: 'out' }, // 突き刺さって止まる
+    { t: 0.5, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構えに戻る
+  ],
+  impactAt: 0.2,
+};
 /** 肩の位置（構えた握りから ARM_DIR 方向へこの距離）。振っている間も腕はここから伸びる */
 const SHOULDER_DIST = 0.55;
 const HAMMER_HEAD_Y = 0.4; // ハンマーの頭の高さ（握りから）
@@ -218,6 +234,35 @@ export function buildStoneKnife(): THREE.Group {
   return g;
 }
 
+const SPEAR_SHAFT_BOTTOM = -0.35; // 石の槍の柄尻の高さ（握りから）
+const SPEAR_SHAFT_TOP = 1.0; // 柄の先の高さ。ここに石のナイフを縛りつける
+const SPEAR_SHAFT_R = 0.022; // 柄（枝）の太さ
+const SPEAR_TIP_SCALE = 0.7; // 穂先にする石のナイフの大きさ（手に持つナイフに対する倍率）
+/** 握り（原点）から穂先の切っ先までの長さ（石のナイフの切っ先は形の v = 0.33） */
+export const SPEAR_LENGTH = SPEAR_SHAFT_TOP + 0.33 * SPEAR_TIP_SCALE;
+
+/** 石の槍。枝の先に石のナイフの握りを差しこみ、ツルで縛りつけてある。原点が握りの位置で、穂先は +Y、刃は -Z 側を向く */
+export function buildSpear(): THREE.Group {
+  const g = new THREE.Group();
+  const len = SPEAR_SHAFT_TOP - SPEAR_SHAFT_BOTTOM;
+  g.add(part(new THREE.CylinderGeometry(SPEAR_SHAFT_R * 0.9, SPEAR_SHAFT_R, len, 6), PALETTE.trunk, 0, (SPEAR_SHAFT_TOP + SPEAR_SHAFT_BOTTOM) / 2, 0)); // 柄
+  g.add(part(new THREE.CylinderGeometry(SPEAR_SHAFT_R + 0.006, SPEAR_SHAFT_R + 0.006, 0.15, 6), PALETTE.bark, 0, -0.04, 0)); // 握りに巻いたツル
+
+  // 穂先：石のナイフの握りの部分を柄の先に重ねる
+  const tip = part(buildStoneKnifeGeometry(), PALETTE.rock, 0, SPEAR_SHAFT_TOP, 0);
+  tip.scale.setScalar(SPEAR_TIP_SCALE);
+  tip.rotation.y = Math.PI / 2; // 形の +u（刃）を -Z へ
+  g.add(tip);
+  // 穂先と柄の重なったところに巻いたツル
+  const ring = new THREE.TorusGeometry(SPEAR_SHAFT_R + 0.01, 0.008, 4, 8);
+  for (const dy of [-0.1, -0.075, -0.05, -0.025]) {
+    const r = part(ring, PALETTE.bark, 0, SPEAR_SHAFT_TOP + dy, 0);
+    r.rotation.x = Math.PI / 2;
+    g.add(r);
+  }
+  return g;
+}
+
 const PICK_HEAD_Y = 0.42; // ツルハシの頭の高さ（握りから）
 const PICK_HEAD_DEPTH = 0.06; // ツルハシの頭の、柄のところでの厚み
 const PICK_TIP_THIN = 0.7; // 先端でどれだけ細くなるか（0=太いまま, 1=先端で厚み0）
@@ -293,6 +338,146 @@ export function buildPickaxe(): THREE.Group {
       head.add(s);
     }
   }
+  g.add(head);
+  return g;
+}
+
+const SHOVEL_BLADE_Y = 0.5; // スコップの刃の付け根の高さ（握りから）
+const SHOVEL_BLADE_HW = 0.078; // 刃の幅の半分（肩のところ）
+const SHOVEL_BLADE_L = 0.27; // 刃の付け根から先端までの長さ
+const SHOVEL_SHOULDER = 0.05; // 付け根から肩まで広がる長さ
+const SHOVEL_TIP_START = 0.17; // ここから先端へ向かって丸くすぼまる
+const SHOVEL_NECK_HW = 0.026; // 柄に縛りつける首の幅の半分
+const SHOVEL_NECK_L = 0.08; // 付け根から下へ出た首の長さ
+const SHOVEL_ROOT_T = 0.017; // 刃の付け根の厚みの半分
+const SHOVEL_TIP_T = 0.005; // 刃先の厚みの半分
+const SHOVEL_DISH = 0.014; // 刃をくぼませる深さ（ふちが前へ出て、土をすくえる形）
+const SHOVEL_BEND = 0.018; // 刃先が前（-Z）へ反る量
+const SHOVEL_CARVE = 0.0018; // 削って作ったふちのでこぼこの大きさ
+const SHOVEL_TILT = 0.07; // 刃を前へ倒す角度。柄から少し折れている
+const SHOVEL_HAFT_R = 0.023; // 柄の太さ
+const SHOVEL_ROWS = 14; // 刃を縦に分ける数
+const SHOVEL_COLS = 8; // 刃を横に分ける数
+
+/** 付け根からの距離 v での刃の幅の半分（首・肩・まっすぐな胴・丸い先端） */
+function shovelHalfWidth(v: number): number {
+  if (v < 0) return SHOVEL_NECK_HW;
+  if (v < SHOVEL_SHOULDER) {
+    const k = THREE.MathUtils.smootherstep(v / SHOVEL_SHOULDER, 0, 1);
+    return SHOVEL_NECK_HW + (SHOVEL_BLADE_HW - SHOVEL_NECK_HW) * k;
+  }
+  if (v < SHOVEL_TIP_START) return SHOVEL_BLADE_HW * (1 - 0.04 * (v - SHOVEL_SHOULDER) / (SHOVEL_TIP_START - SHOVEL_SHOULDER));
+  const k = (v - SHOVEL_TIP_START) / (SHOVEL_BLADE_L - SHOVEL_TIP_START);
+  return Math.max(SHOVEL_BLADE_HW * 0.96 * Math.sqrt(1 - k ** 2.6), 0.02);
+}
+
+/** 刃の面の中心が前へ出る量（-Z が前）。s=-1〜1 は横の位置 */
+function shovelFace(s: number, v: number): number {
+  const dish = SHOVEL_DISH * s * s * THREE.MathUtils.smoothstep(v, 0, SHOVEL_SHOULDER);
+  const bend = SHOVEL_BEND * Math.max(v / SHOVEL_BLADE_L, 0) ** 2;
+  return -dish - bend;
+}
+
+/**
+ * 板を削ったスコップの刃。原点が刃の付け根で、+Y が先端、面は -Z を向く。
+ * 下へ出た首を柄に縛りつける。ふちが前へ出たくぼんだ面で、先端へ向かって薄くなる
+ */
+function buildShovelBlade(): THREE.BufferGeometry {
+  const v0 = -SHOVEL_NECK_L, v1 = SHOVEL_BLADE_L;
+  const front: number[][][] = [], back: number[][][] = [];
+  for (let i = 0; i <= SHOVEL_ROWS; i++) {
+    // 肩と先端のあたりを細かく分ける
+    const v = v0 + (v1 - v0) * (i / SHOVEL_ROWS) ** 0.9;
+    const hw = shovelHalfWidth(v);
+    const t = THREE.MathUtils.lerp(SHOVEL_ROOT_T, SHOVEL_TIP_T, THREE.MathUtils.smoothstep(v, 0, v1));
+    const f: number[][] = [], b: number[][] = [];
+    for (let j = 0; j <= SHOVEL_COLS; j++) {
+      const s = (j / SHOVEL_COLS) * 2 - 1;
+      const edge = Math.abs(s) === 1 || i === SHOVEL_ROWS;
+      const carve = edge ? hash3(s, v, 1) * SHOVEL_CARVE : 0;
+      const x = s * (hw + carve);
+      const th = t * (1 - 0.55 * s * s); // ふちほど薄い
+      const z = shovelFace(s, v);
+      f.push([x, v + (i === SHOVEL_ROWS ? carve : 0), z - th]);
+      b.push([x, v + (i === SHOVEL_ROWS ? carve : 0), z + th]);
+    }
+    front.push(f);
+    back.push(b);
+  }
+  const pos: number[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]) => pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+  for (let i = 0; i < SHOVEL_ROWS; i++) {
+    for (let j = 0; j < SHOVEL_COLS; j++) {
+      quad(front[i][j], front[i + 1][j], front[i + 1][j + 1], front[i][j + 1]);
+      quad(back[i][j], back[i][j + 1], back[i + 1][j + 1], back[i + 1][j]);
+    }
+    // 両側のふち
+    quad(front[i][0], back[i][0], back[i + 1][0], front[i + 1][0]);
+    quad(front[i][SHOVEL_COLS], front[i + 1][SHOVEL_COLS], back[i + 1][SHOVEL_COLS], back[i][SHOVEL_COLS]);
+  }
+  // 先端と首の下のふち
+  for (let j = 0; j < SHOVEL_COLS; j++) {
+    const n = SHOVEL_ROWS;
+    quad(front[n][j], back[n][j], back[n][j + 1], front[n][j + 1]);
+    quad(front[0][j], front[0][j + 1], back[0][j + 1], back[0][j]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** 首と柄をまとめて巻いたツルの輪（楕円）。中心 z、横の半径 rx、前後の半径 rz */
+function lashLoop(rx: number, rz: number, z: number): THREE.BufferGeometry {
+  const pts: THREE.Vector3[] = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    pts.push(new THREE.Vector3(Math.cos(a) * rx, 0, z + Math.sin(a) * rz));
+  }
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 10, 0.007, 4, true);
+}
+
+/** 木のスコップ。枝の柄の先に板を削った刃をツルで縛りつける。原点が握りの位置で、刃の面は -Z を向く */
+export function buildShovel(): THREE.Group {
+  const g = new THREE.Group();
+  // 刃の裏に沿わせる柄。根元から刃の付け根へゆるく反り、刃の裏で細く削って終わる
+  const backZ = SHOVEL_ROOT_T + SHOVEL_HAFT_R * 0.7; // 刃の裏に当たる柄の中心
+  const haft = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, -0.21, 0.015),
+    new THREE.Vector3(0, -0.04, 0),
+    new THREE.Vector3(0, 0.25, 0),
+    new THREE.Vector3(0, SHOVEL_BLADE_Y - SHOVEL_NECK_L, 0),
+  ]);
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(haft, 8, SHOVEL_HAFT_R, 6, false), flat(PALETTE.trunk)));
+  g.add(part(new THREE.CylinderGeometry(0.038, 0.03, 0.05, 6), PALETTE.trunk, 0, -0.215, 0.015)); // 柄尻
+  g.add(part(new THREE.CylinderGeometry(0.031, 0.031, 0.15, 6), PALETTE.accent, 0, -0.04, 0.002)); // 握りの布
+
+  // 刃。柄の先が刃の裏に来るよう、刃を前へずらす
+  const head = new THREE.Group();
+  head.position.set(0, SHOVEL_BLADE_Y, -backZ);
+  head.rotation.x = -SHOVEL_TILT;
+  head.add(part(buildShovelBlade(), PALETTE.sand, 0, 0, 0)); // 削ったばかりの明るい木肌
+  // 刃の裏に重なる柄の先。上へ行くほど細い
+  const tipLen = SHOVEL_NECK_L + 0.075;
+  head.add(part(new THREE.CylinderGeometry(SHOVEL_HAFT_R * 0.55, SHOVEL_HAFT_R, tipLen, 6), PALETTE.trunk, 0, tipLen / 2 - SHOVEL_NECK_L, backZ));
+  // 表の木目
+  const grain = new THREE.BoxGeometry(0.004, 0.13, 0.004);
+  for (const [s, v, len] of [[-0.42, 0.11, 1], [0.3, 0.13, 0.75], [0.05, 0.19, 0.5]]) {
+    const line = part(grain, PALETTE.bark, s * SHOVEL_BLADE_HW, v, 0);
+    line.scale.y = len;
+    // くぼんだ面に沿わせ、面から少しだけ浮かせる
+    const t = THREE.MathUtils.lerp(SHOVEL_ROOT_T, SHOVEL_TIP_T, THREE.MathUtils.smoothstep(v, 0, SHOVEL_BLADE_L)) * (1 - 0.55 * s * s);
+    line.position.z = shovelFace(s, v) - t - 0.001;
+    line.rotation.x = -Math.atan((2 * SHOVEL_BEND * v) / SHOVEL_BLADE_L ** 2); // 刃先の反りに合わせて傾ける
+    head.add(line);
+  }
+  // 首と柄をまとめて巻いたツル
+  const loopZ = backZ / 2;
+  const loop = lashLoop(SHOVEL_NECK_HW + 0.008, backZ / 2 + SHOVEL_HAFT_R + 0.004, loopZ);
+  for (const v of [-0.068, -0.05, -0.032, -0.014]) head.add(part(loop, PALETTE.bark, 0, v, 0));
+  // 刃の裏で柄の先を留めるツル
+  const top = lashLoop(SHOVEL_HAFT_R * 0.8 + 0.006, SHOVEL_HAFT_R * 0.8 + 0.004, backZ);
+  for (const v of [0.035, 0.05]) head.add(part(top, PALETTE.bark, 0, v, -0.002));
   g.add(head);
   return g;
 }
@@ -394,10 +579,11 @@ export class ToolHand {
   onImpact: () => void = () => {};
 
   /**
-   * tool は原点が握りで、柄が +Y、刃や打つ面が -Z を向いたモデル（buildAxe・buildHammer・buildStoneKnife・buildPickaxe・buildFishingRod）。
-   * lean は構えたときに道具を前へ倒す角度（釣り竿のように長い物が画面の上へはみ出さないように）
+   * tool は原点が握りで、柄が +Y、刃や打つ面が -Z を向いたモデル（buildAxe・buildHammer・buildStoneKnife・buildSpear・buildPickaxe・buildFishingRod）。
+   * lean は構えたときに道具を前へ倒す角度（釣り竿のように長い物が画面の上へはみ出さないように）。
+   * motion は左クリックで振る動き（槍は THRUST_MOTION で突く）
    */
-  constructor(camera: THREE.Camera, tool: THREE.Group, lean = 0) {
+  constructor(camera: THREE.Camera, tool: THREE.Group, lean = 0, private readonly motion: SwingMotion = CHOP_MOTION) {
     // 画面右下に構え、振り下ろす面が照準の先（約3m）で画面中央に来るよう少し内側へ向ける
     this.root.position.set(0.48, -0.42, -0.78);
     this.root.rotation.y = Math.atan2(0.5, 3);
@@ -426,7 +612,7 @@ export class ToolHand {
     if (v === this.root.visible) return;
     this.root.visible = v;
     this.swingTime = -1;
-    this.applySwing(SWING_KEYS[0].pos, SWING_KEYS[0].rot);
+    this.applySwing(this.motion.keys[0].pos, this.motion.keys[0].rot);
   }
 
   /** 振っていないときの、構えからの握りの移動 pos と回転 rot（釣り竿を振りかぶる・魚に引かれるときに使う） */
@@ -443,20 +629,22 @@ export class ToolHand {
   update(dt: number): void {
     if (this.swingTime < 0) return;
     this.swingTime += dt;
-    const t = Math.min(this.swingTime, SWING_END);
+    const keys = this.motion.keys;
+    const end = keys[keys.length - 1].t;
+    const t = Math.min(this.swingTime, end);
     let i = 1;
-    while (i < SWING_KEYS.length - 1 && t > SWING_KEYS[i].t) i++;
-    const a = SWING_KEYS[i - 1];
-    const b = SWING_KEYS[i];
+    while (i < keys.length - 1 && t > keys[i].t) i++;
+    const a = keys[i - 1];
+    const b = keys[i];
     const k = ease((t - a.t) / (b.t - a.t), b.ease);
     const mix = (p: Vec3, q: Vec3): Vec3 => [0, 1, 2].map((j) => THREE.MathUtils.lerp(p[j], q[j], k)) as Vec3;
     this.applySwing(mix(a.pos, b.pos), mix(a.rot, b.rot));
 
-    if (!this.impacted && t >= IMPACT_AT) {
+    if (!this.impacted && t >= this.motion.impactAt) {
       this.impacted = true;
       this.onImpact();
     }
-    if (t >= SWING_END) this.swingTime = -1;
+    if (t >= end) this.swingTime = -1;
   }
 
   /** 握りを動かし、手首から肩へ向けて腕を伸ばし直す */
@@ -485,6 +673,20 @@ interface HoldStyle {
    * grip ポーズのときは palm の代わりに素材の +Y を柄として握る。腕は ARM_DIR へ伸ばす
    */
   hand: { pose: HandPoseName; at: Vec3; fingers: Vec3; palm?: Vec3; anchor: HandAnchor };
+}
+
+/** 魚の持ち方。大きい魚も手のひらに収まるよう長さをそろえ、体の高さに合わせて少しずつずらして重ねる */
+function fishHold(id: FishId): HoldStyle {
+  const k = FISH_KINDS[id];
+  const scale = 0.32 / k.length;
+  const step = k.length * k.height * (k.flat ? 1.1 : 0.35);
+  return {
+    build: () => buildFishModel(id),
+    slots: [[0, 0.04, 0, 0, 0, 0], [0.02, 0.04 + step, -0.02, 0, 0.25, 0.05], [-0.02, 0.04 + step * 2, 0.02, 0, -0.2, -0.05]],
+    rotation: [0.2, 0.5, 0.05],
+    scale,
+    hand: { pose: 'cup', at: [0, -0.06, 0.02], fingers: [-0.4, 0.15, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+  };
 }
 
 const HOLD_STYLES = {
@@ -525,14 +727,13 @@ const HOLD_STYLES = {
     scale: 0.6,
     hand: { pose: 'cup', at: [0, -PLANK_T / 2, 0.16], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.1], anchor: 'palm' },
   },
-  // 手のひらに横たえて、頭を左奥へ向ける
-  fish: {
-    build: buildFishModel,
-    slots: [[0, 0.04, 0, 0, 0, 0], [0.02, 0.11, -0.02, 0, 0.25, 0.05], [-0.02, 0.18, 0.02, 0, -0.2, -0.05]],
-    rotation: [0.2, 0.5, 0.05],
-    scale: 0.75,
-    hand: { pose: 'cup', at: [0, -0.06, 0.02], fingers: [-0.4, 0.15, -1], palm: [0, 1, 0.15], anchor: 'palm' },
-  },
+  // 魚：手のひらに横たえて、頭を左奥へ向ける
+  fish: fishHold('fish'),
+  clownfish: fishHold('clownfish'),
+  snapper: fishHold('snapper'),
+  puffer: fishHold('puffer'),
+  flounder: fishHold('flounder'),
+  bonito: fishHold('bonito'),
   // 手のひらに数粒のせる
   berry: {
     build: buildBerryModel,
@@ -541,11 +742,82 @@ const HOLD_STYLES = {
     scale: 0.42,
     hand: { pose: 'cup', at: [0.08, 0.03, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
   },
+  // 木の種：ベリーと同じように手のひらに数粒のせる
+  seed: {
+    build: buildSeedModel,
+    slots: [[0, 0.14, 0, 0.3, 0, 1.3], [0.17, 0.12, 0.05, -0.2, 0.5, 1.6], [0.07, 0.2, -0.15, 0.1, 1, 1.1]],
+    rotation: [0.25, -0.3, 0],
+    scale: 0.36,
+    hand: { pose: 'cup', at: [0.08, 0.03, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
+  },
+  // 土：手のひらにかたまりをのせる（たくさん持つと積み重なる）
+  dirt: {
+    build: buildDirtModel,
+    slots: [[0, 0.1, 0, 0, 0, 0], [0.12, 0.13, -0.08, 0.3, 1.2, 0.2], [-0.06, 0.2, -0.04, -0.2, 2.3, -0.1]],
+    rotation: [0.25, -0.3, 0],
+    scale: 0.55,
+    hand: { pose: 'cup', at: [0.04, -0.02, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
+  },
+  // 設計図：手のひらにのせ、図面が見えるようにこちらへ傾ける
+  boatBlueprint: {
+    build: buildBlueprintModel,
+    slots: [[0, 0.004, 0, 0, 0, 0]],
+    rotation: [0.75, 0.15, 0.05],
+    scale: 0.85,
+    hand: { pose: 'cup', at: [0, -0.01, 0.08], fingers: [-0.3, 0.1, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+  },
+  // 木製の船：持ち物の中では小さく見せて、手のひらにのせる（舳先を左奥へ）
+  boat: {
+    build: buildBoatModel,
+    slots: [[0, 0.1, 0, 0, Math.PI * 0.8, 0]],
+    rotation: [0.25, 0.4, 0.05],
+    scale: 0.45,
+    hand: { pose: 'cup', at: [0, -0.05, 0.02], fingers: [-0.4, 0.15, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+  },
+  // 焚火：組んだ石と薪を、小さくして手のひらにのせる
+  campfire: {
+    build: () => {
+      const g = pieceIconModel('campfire');
+      g.rotation.set(0, 0, 0);
+      return g;
+    },
+    slots: [[0, 0.02, 0, 0, 0.4, 0]],
+    rotation: [0.35, 0.3, 0.05],
+    scale: 0.17,
+    hand: { pose: 'cup', at: [0, -0.03, 0.02], fingers: [-0.4, 0.15, -1], palm: [0, 1, 0.15], anchor: 'palm' },
+  },
 } satisfies Record<string, HoldStyle>;
 
 export type HeldMaterial = keyof typeof HOLD_STYLES;
 
-/** 一人称視点で手に持つ素材（木材・板・枝・葉っぱ・魚・ベリー）。持っている数に応じて最大3個まで重ねて見せる */
+/** 振って使う道具の見た目 */
+const TOOL_MODELS: Record<string, () => THREE.Group> = {
+  axe: buildAxe,
+  hammer: buildHammer,
+  stoneKnife: buildStoneKnife,
+  pickaxe: buildPickaxe,
+  shovel: buildShovel,
+  spear: buildSpear,
+  fishingRod: buildFishingRod,
+};
+
+/**
+ * 三人称の体の手に持たせる、持ち物の見た目（1個分）。tool なら原点が握りで、柄が +Y、刃が -Z を向く。
+ * 素材なら一人称と同じ縮尺にして、原点に置く。手に見せない物は null
+ */
+export function buildHeldModel(item: string): { model: THREE.Object3D; tool: boolean } | null {
+  const tool = TOOL_MODELS[item];
+  if (tool) return { model: tool(), tool: true };
+  if (!(item in HOLD_STYLES)) return null;
+  const style: HoldStyle = HOLD_STYLES[item as HeldMaterial];
+  const model = new THREE.Group();
+  const piece = style.build();
+  piece.scale.setScalar(style.scale);
+  model.add(piece);
+  return { model, tool: false };
+}
+
+/** 一人称視点で手に持つ素材（木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・船）。持っている数に応じて最大3個まで重ねて見せる */
 export class ItemHand {
   private readonly root = new THREE.Group();
   private readonly pieces: THREE.Object3D[] = [];

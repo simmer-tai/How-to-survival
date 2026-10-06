@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { terrainHeight, isGrassAt, valueNoise } from './terrain.js';
 import type { Platform } from './props.js';
+import { WIND_GLSL, windUniforms } from './wind.js';
 
 const AREA = 70; // 島の中心からこの範囲に生やす
 const SPACING = 0.42; // 房どうしの間隔（ずらして置く）
@@ -11,7 +12,9 @@ const HIDDEN_Y = -1000; // 隠した房を移す高さ
 const CHUNK_SIZE = 12; // 房をまとめて描く区画の一辺（m）。区画ごとに画面外・遠くなら描かない
 const FADE_START = 45; // カメラからこの距離より遠い房は、だんだん縮めて消す
 const DRAW_DISTANCE = 70; // この距離より遠い房は描かない
-const SWAY_MARGIN = 0.5; // 風で揺れてはみ出す分、区画の境界球を広げる量
+const SWAY_MARGIN = 0.6; // 風で揺れてはみ出す分、区画の境界球を広げる量
+const GRASS_SWAY_CALM = 0.08; // 風がないときに、草の先がなびく量
+const GRASS_SWAY_WIND = 0.4; // いちばん強い風のときに、草の先がなびく量へ足す分
 
 function mulberry32(seed: number) {
   return () => {
@@ -70,7 +73,6 @@ interface Chunk {
 export class Grass {
   /** 全区画をまとめたグループ（シーンに足す） */
   readonly mesh = new THREE.Group();
-  private readonly time = { value: 0 };
   /** 房を縮め始める距離と、消える距離 */
   private readonly fade = { value: new THREE.Vector2(FADE_START, DRAW_DISTANCE) };
   private readonly chunks: Chunk[] = [];
@@ -111,19 +113,20 @@ export class Grass {
 
     const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
     material.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = this.time;
+      Object.assign(shader.uniforms, windUniforms);
       shader.uniforms.uFade = this.fade;
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform vec2 uFade;')
+        .replace('#include <common>', `#include <common>\nuniform vec2 uFade;\n${WIND_GLSL}`)
         .replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
-          // 風：先端ほど大きく、場所ごとに時間差のある突風で揺らす
+          // 風：先端ほど大きく、場所ごとに時間差のある突風で揺らす。風が強いほど大きくなびく
           vec2 rootPos = instanceMatrix[3].xz;
-          float gust = sin(dot(rootPos, vec2(0.18, 0.11)) - uTime * 1.6) * 0.5 + 0.5;
-          float flutter = sin(dot(rootPos, vec2(1.7, -1.3)) + uTime * 4.0);
+          float gust = sin(dot(rootPos, vec2(0.18, 0.11)) - uWindTime * 1.6) * 0.5 + 0.5;
+          float flutter = sin(dot(rootPos, vec2(1.7, -1.3)) + uWindTime * 4.0);
           float bend = position.y / ${BLADE_HEIGHT.toFixed(2)};
-          vec3 sway = vec3(0.7, 0.0, 0.45) * (gust * 0.16 + flutter * 0.03) * bend * bend;
+          float lean = gust * (${GRASS_SWAY_CALM.toFixed(2)} + ${GRASS_SWAY_WIND.toFixed(2)} * uWind) + flutter * (0.015 + 0.075 * uWind);
+          vec3 sway = vec3(uWindDir.x, 0.0, uWindDir.y) * lean * bend * bend;
           // 房は Y 軸回転と拡大だけなので、逆行列の代わりに転置 / 拡大率² でローカルへ戻す
           mat3 inst = mat3(instanceMatrix);
           transformed += transpose(inst) * sway / dot(inst[0], inst[0]);
@@ -170,8 +173,7 @@ export class Grass {
   }
 
   /** viewDistance は見えている距離（水中では霧で狭まる）。それより遠くの房は描かない */
-  update(t: number, camera: THREE.Vector3, viewDistance = Infinity): void {
-    this.time.value = t;
+  update(camera: THREE.Vector3, viewDistance = Infinity): void {
     const end = Math.min(DRAW_DISTANCE, viewDistance);
     this.fade.value.set(Math.min(FADE_START, end * 0.7), end);
     for (const { mesh, sphere } of this.chunks) {

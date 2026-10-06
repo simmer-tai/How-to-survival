@@ -4,6 +4,8 @@ import type { Platform } from '../world/props.js';
 import { WORLD_SIZE, terrainHeight } from '../world/terrain.js';
 import { RAPIER, COLLIDE, WATER_LEVEL, type Physics } from '../core/physics.js';
 import { waveOffset } from '../core/waves.js';
+import type { LocationId } from '../world/location.js';
+import type { AvatarPose } from './avatar.js';
 
 const EYE_HEIGHT = 1.7;
 const BODY_RADIUS = 0.4;
@@ -29,8 +31,11 @@ const SLIDE_ANGLE = 75; // これ以上急な斜面には立っていられず�
 const SLIDE_COS = Math.cos(THREE.MathUtils.degToRad(SLIDE_ANGLE));
 const UP = new THREE.Vector3(0, 1, 0);
 
-/** p は足元の位置。yaw・pitch は視点の向き（ラジアン） */
-export interface PlayerSave { p: number[]; yaw: number; pitch: number }
+/**
+ * p は足元の位置。yaw・pitch は視点の向き（ラジアン）。boat は乗っている船の番号（乗っていなければ省く）。
+ * loc はいる場所（島なら省く）。p はその場所の中での位置
+ */
+export interface PlayerSave { p: number[]; yaw: number; pitch: number; boat?: number; loc?: LocationId }
 
 export class Player {
   readonly controls: PointerLockControls;
@@ -48,6 +53,8 @@ export class Player {
   private smoothEye = 0;
   /** いまいる場所の水面の高さ（波で上下する） */
   private surface = WATER_LEVEL;
+  /** 船に座っているか（座っている間は自分では動かず、目の位置は船が決める） */
+  private seated = false;
   private readonly body: RAPIER.RigidBody;
   private readonly collider: RAPIER.Collider;
   private readonly mover: RAPIER.KinematicCharacterController;
@@ -117,6 +124,16 @@ export class Player {
     addEventListener('blur', () => this.keys.clear());
   }
 
+  /** 水平に yaw の向きを見る（rad。three.js のカメラと同じく 0 で -Z を向く） */
+  face(yaw: number): void {
+    this.camera.quaternion.setFromEuler(new THREE.Euler(0, yaw, 0, 'YXZ'));
+  }
+
+  /** プレイヤーの体の剛体（別の場所へ移るときに、止めずに残す） */
+  get rigidBody(): RAPIER.RigidBody {
+    return this.body;
+  }
+
   /** 地面を歩いて（走って）いるか */
   get walking(): boolean {
     return this.onGround && !this.swimming && Math.hypot(this.velocity.x, this.velocity.z) > 0.5;
@@ -132,12 +149,27 @@ export class Player {
     return this.swimming;
   }
 
+  /** 体の様子を out に入れて返す（自分のアバターを動かすのに使う。マルチでは、他の人に見せる分としてこれを送る） */
+  pose(out: AvatarPose): AvatarPose {
+    const look = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+    // 足元の高さは、地面の凹凸をならした目の高さから決める（体ががたつかないように）
+    out.p.set(this.position.x, this.smoothEye - EYE_HEIGHT, this.position.z);
+    out.yaw = look.y;
+    out.pitch = look.x;
+    out.speed = this.seated ? 0 : Math.hypot(this.velocity.x, this.velocity.z);
+    out.state = this.seated ? 'sit' : this.swimming ? 'swim' : this.onGround ? 'ground' : 'air';
+    out.crouch = this.crouchAmount;
+    delete out.bodyYaw;
+    return out;
+  }
+
   serialize(): PlayerSave {
     const look = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
     return { p: [this.position.x, this.position.y - EYE_HEIGHT, this.position.z], yaw: look.y, pitch: look.x };
   }
 
   restore(save: PlayerSave): void {
+    this.seated = false;
     const [x, y, z] = save.p;
     this.position.set(x, y + EYE_HEIGHT, z);
     this.smoothEye = this.position.y;
@@ -155,7 +187,46 @@ export class Player {
     return y;
   }
 
+  /** 船に座る。eye は目の位置（毎フレーム、船の揺れに合わせて渡す） */
+  sitAt(eye: THREE.Vector3): void {
+    if (!this.seated) {
+      this.seated = true;
+      this.velocity.set(0, 0, 0);
+      this.swimming = false;
+      if (this.crouched) this.setCrouched(false);
+    }
+    this.position.copy(eye);
+    this.smoothEye = eye.y;
+    this.camera.position.copy(eye);
+    this.body.setNextKinematicTranslation({ x: eye.x, y: eye.y - EYE_HEIGHT + this.bodyCenter, z: eye.z });
+  }
+
+  /** 足元を feet に置いたとき、体が何にもぶつからないか（船から降りる場所を探すのに使う） */
+  canStandAt(feet: THREE.Vector3): boolean {
+    const hit = this.physics.world.intersectionWithShape(
+      { x: feet.x, y: feet.y + BODY_CENTER, z: feet.z },
+      { x: 0, y: 0, z: 0, w: 1 },
+      new RAPIER.Capsule(BODY_HALF, BODY_RADIUS),
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+      COLLIDE.player,
+      this.collider,
+    );
+    return hit === null && this.inBounds(feet.x, feet.z);
+  }
+
+  /** 船から降りて、足元を feet に置く */
+  standAt(feet: THREE.Vector3): void {
+    this.seated = false;
+    this.position.set(feet.x, feet.y + EYE_HEIGHT, feet.z);
+    this.smoothEye = this.position.y;
+    this.velocity.set(0, 0, 0);
+    this.onGround = false;
+    this.body.setTranslation({ x: feet.x, y: feet.y + this.bodyCenter, z: feet.z }, true);
+    this.camera.position.copy(this.position);
+  }
+
   update(dt: number): void {
+    if (this.seated) return; // 船に座っている間は、船が目の位置を動かす
     // インベントリを開いている間も重力などは働かせ、操作入力だけ止める
     const input = this.controls.isLocked;
 

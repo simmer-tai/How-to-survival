@@ -37,9 +37,12 @@ const snapCenter = (v) => Math.round(v / CELL) * CELL;
 const yaw = (r) => new THREE.Quaternion().setFromAxisAngle(UP, (r * Math.PI) / 2);
 /**
  * 部材が使うグリッドの枠。cell はマス、edge はマスの辺（X 方向の辺と Z 方向の辺は別の枠）。
- * 同じ枠で高さの範囲が重なる部材は置けない。違う枠どうし（床と、その縁の壁など）は重なってよい
+ * 同じ枠で高さの範囲が重なる部材は置けない。違う枠どうし（床と、その縁の壁など）は重なってよい。
+ * free の部材は枠を使わない（null。物とぶつからないかだけで置けるか決める）
  */
 function slotKey(def, x, z, r) {
+    if (def.snap === 'free')
+        return null;
     if (def.snap === 'cell')
         return `c${Math.round(x / CELL)},${Math.round(z / CELL)}`;
     return r % 2 === 0
@@ -50,7 +53,7 @@ function slotKey(def, x, z, r) {
  * 視線の先に部材を置く操作と、狙った部材を壊す操作。
  * ハンマーを持つと、右クリックのメニューで選んだ部材を素材から建てられ、X で壊すと素材が戻る。
  * 斧や素手で叩くと耐久値が減り、0 になると壊れる（素材は戻らない）。
- * 作業台だけはアイテムとして手に持って置く（ハンマーを作るのに作業台が要るので）。
+ * 作業台と焚火はアイテムとして手に持って置く（ハンマーを作るのに作業台が要るので）。
  * 入力側（視線から置き場所を決めてリクエストを作る）と、適用側（apply：コマンドの値だけで世界を変える）を分けている
  */
 export class Builder {
@@ -92,6 +95,10 @@ export class Builder {
     onWork = () => { };
     /** ハンマーで建てる部材を選ぶメニュー */
     menu;
+    /** 建てられない場所（街）にいるか。建てた部材は自分の島にだけ置ける */
+    disabled = false;
+    /** 部材に入れてある物（焚火の燃料など）。ハンマーで解体すると、部材と一緒にインベントリへ戻る */
+    contents = () => [];
     constructor(world, camera, terrain, 
     /** 視線が当たる物（地形・岩・桟橋など）。置いた部材はこの中に足していく */
     targets, 
@@ -146,7 +153,7 @@ export class Builder {
     }
     /** 建築中（ハンマーか部材を手に持っている）か */
     get active() {
-        return this.current !== null;
+        return !this.disabled && this.current !== null;
     }
     /** ハンマーで建てるのに必要な素材がそろっているか */
     affordable(plan) {
@@ -155,6 +162,8 @@ export class Builder {
     /** 視線の先、reach 以内にある部材（何もなければ null）。作業台を使うときに見る */
     aimedPiece(reach) {
         this.raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+        if (!this.builtInReach(reach))
+            return null;
         const hit = this.raycaster.intersectObjects(this.targets, false)[0];
         const b = hit && hit.distance <= reach ? this.byMesh.get(hit.object) : undefined;
         if (!b)
@@ -166,10 +175,28 @@ export class Builder {
     has(pid) {
         return this.pieces.has(pid);
     }
+    /** 置いてある、その種類の部材の一覧 */
+    listOf(id) {
+        const out = [];
+        for (const b of this.pieces.values()) {
+            if (b.def.id !== id)
+                continue;
+            const { x, y, z } = b.mesh.position;
+            out.push({ pid: b.pid, id, p: [x, y, z], r: b.r });
+        }
+        return out;
+    }
+    /** その種類の部材が、島のどこかに1つでも置かれているか */
+    hasKind(id) {
+        for (const b of this.pieces.values())
+            if (b.def.id === id)
+                return true;
+        return false;
+    }
     // ---- 入力側：視線から置き場所を決めて、頼みを出す ----
     /** 視線の先に置けるなら置く。置けたら true */
     place() {
-        const cur = this.current;
+        const cur = this.disabled ? null : this.current;
         const spot = this.spot;
         if (!cur || !spot || !this.valid)
             return false;
@@ -193,6 +220,7 @@ export class Builder {
         const b = hit && this.byMesh.get(hit.object);
         if (!b)
             return false;
+        const inside = this.contents(b.pid); // 取り除くと分からなくなるので、先に見ておく
         if (!this.request({ type: 'removePiece', pid: b.pid }))
             return false;
         // インベントリに入りきらなければ捨てる
@@ -202,6 +230,8 @@ export class Builder {
                 this.inventory.add(item, n);
         else if (b.def.id in ITEMS)
             this.inventory.add(b.def.id, 1);
+        for (const s of inside)
+            this.inventory.add(s.item, s.count, s.dmg);
         this.onWork();
         return true;
     }
@@ -218,9 +248,21 @@ export class Builder {
         const b = this.aimedBuilt(reach);
         return b && b.damage > 0 ? { hp: b.def.hp - b.damage, max: b.def.hp } : null;
     }
+    /**
+     * 視線（setFromCamera 済み）が reach 以内でどれかの部材に当たるか。
+     * 当たらなければ、地形などを含めた重い判定をしなくても「部材は狙っていない」と分かる（毎フレーム呼ばれるので）
+     */
+    builtInReach(reach) {
+        if (this.byMesh.size === 0)
+            return false;
+        const hit = this.raycaster.intersectObjects([...this.byMesh.keys()], false)[0];
+        return hit !== undefined && hit.distance <= reach;
+    }
     /** 叩ける距離で、いちばん手前に見えている部材 */
     aimedBuilt(reach) {
         this.raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+        if (!this.builtInReach(reach))
+            return null;
         const hit = this.raycaster.intersectObjects(this.targets, false)[0];
         const b = hit && hit.distance <= reach ? this.byMesh.get(hit.object) : undefined;
         if (!b)
@@ -243,6 +285,8 @@ export class Builder {
         const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : UP.clone();
         const point = hit.point.clone().addScaledVector(normal, NUDGE);
         const on = this.byMesh.get(hit.object);
+        if (def.snap === 'free')
+            return this.aimFree(def, hit.point, normal, hit.object === this.terrain, on);
         // 同じマスの部材の上面を狙ったとき（床の上で床を選んでいるなど）は、上に重ねずに隣のマスへ広げる
         const extend = on !== undefined && on.def === def && def.snap === 'cell' && normal.y > 0.7;
         // ---- 横の位置と向き ----
@@ -300,14 +344,38 @@ export class Builder {
         }
         return { p: [x, y, z], r };
     }
+    /**
+     * free の部材（作業台・焚火）の置き場所：グリッドに沿わず、狙った点にそのまま置く。
+     * 向きは他の部材と同じく R で 90° ずつ回す。上を向いた面にだけ置ける。部材の上は床・土台にだけ置ける（焚火に焚火を積まない）
+     */
+    aimFree(def, point, normal, onTerrain, on) {
+        if (normal.y < 0.7 || (on && !on.def.platform))
+            return null;
+        const { x, z } = point;
+        const r = this.rotation;
+        let y;
+        if (on)
+            y = on.baseY + on.def.height; // 床などの上に乗せる
+        else if (onTerrain)
+            y = this.groundUnder(def, x, z, r);
+        else
+            y = point.y; // 岩や桟橋の上
+        return { p: [x, y, z], r };
+    }
     /** 部材の底面の範囲で、いちばん高い地面の高さ */
     groundUnder(def, x, z, r) {
-        const hx = (r % 2 === 0 ? def.halfX : def.halfZ) - 0.1;
-        const hz = (r % 2 === 0 ? def.halfZ : def.halfX) - 0.1;
+        const hx = def.halfX - 0.1;
+        const hz = def.halfZ - 0.1;
+        const turn = (r * Math.PI) / 2;
+        const cos = Math.cos(turn);
+        const sin = Math.sin(turn);
         let top = -Infinity;
         for (let i = 0; i <= GROUND_SAMPLES; i++) {
             for (let j = 0; j <= GROUND_SAMPLES; j++) {
-                top = Math.max(top, terrainHeight(x + hx * ((2 * i) / GROUND_SAMPLES - 1), z + hz * ((2 * j) / GROUND_SAMPLES - 1)));
+                // 部材の中の点を、部材の向きに回して地面の高さを調べる
+                const lx = hx * ((2 * i) / GROUND_SAMPLES - 1);
+                const lz = hz * ((2 * j) / GROUND_SAMPLES - 1);
+                top = Math.max(top, terrainHeight(x + lx * cos + lz * sin, z - lx * sin + lz * cos));
             }
         }
         return top;
@@ -352,7 +420,8 @@ export class Builder {
     /** その場所・向きに部材を置けるか（他の部材と枠が重ならず、地形以外の物やプレイヤーにもぶつからない） */
     canPlace(def, [x, y, z], r) {
         const top = y + def.height;
-        const list = this.slots.get(slotKey(def, x, z, r));
+        const key = slotKey(def, x, z, r);
+        const list = key === null ? undefined : this.slots.get(key);
         if (list?.some((b) => y < b.baseY + b.def.height - EPS && b.baseY < top - EPS))
             return false;
         const rotation = yaw(r);
@@ -452,7 +521,7 @@ export class Builder {
             platform = { minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z, top: y + def.height };
             this.platforms.push(platform);
         }
-        const slot = slotKey(def, x, z, r);
+        const slot = slotKey(def, x, z, r) ?? `f${pid}`; // free の部材は自分だけの枠に入れる
         const built = { pid, def, r, mesh, body, slot, baseY: y, platform, pop: pop ? 0 : 1, damage, shake: 0 };
         this.pieces.set(pid, built);
         this.slots.set(slot, [...(this.slots.get(slot) ?? []), built]);
@@ -525,7 +594,7 @@ export class Builder {
         // ハンマーを持ち替えたら、部材を選ぶメニューも閉じる
         if (this.menu.isOpen && !this.hammer)
             this.menu.setOpen(false, false);
-        const cur = this.current;
+        const cur = this.disabled ? null : this.current;
         this.ghost.visible = false;
         this.spot = null;
         if (!cur || this.inventory.isOpen || document.pointerLockElement === null) {
@@ -551,7 +620,7 @@ export class Builder {
         this.ghost.material = ok ? this.okMat : this.ngMat;
     }
     updateHint({ def, name, plan }) {
-        const turn = def.snap === 'cell' ? '[R]：回転' : '[R]：裏返す';
+        const turn = def.snap === 'edge' ? '[R]：裏返す' : '[R]：回転';
         const html = plan
             ? `<b>${name}</b><br>` +
                 `[左]：建てる ／ [右]：部材を選ぶ ／ ${turn} ／ [X]：狙った部材を解体（素材が戻る）`

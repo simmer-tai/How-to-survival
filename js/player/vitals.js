@@ -5,6 +5,7 @@ const THIRST_DECAY = MAX / 420; // 約7分で水分ゲージが空になる
 const STARVE_DAMAGE = 1.5; // 空腹・水分のどちらかが 0 のとき毎秒減る HP
 const REGEN = 0.5; // 空腹・水分が両方十分なとき毎秒回復する HP
 const REGEN_THRESHOLD = 0.8;
+const RAIN_THIRST = 0.5; // いちばん強い雨に打たれているときに、水分の減りを抑える割合
 const css = (c) => '#' + c.toString(16).padStart(6, '0');
 const BARS = [
     {
@@ -70,9 +71,10 @@ export class Vitals {
         this.hp = this.hunger = this.thirst = MAX;
         this.render();
     }
-    update(dt) {
+    /** rain は打たれている雨の強さ（0〜1。屋根の下では 0）。雨に打たれている間は水分が減りにくい */
+    update(dt, rain = 0) {
         this.hunger = clamp(this.hunger - HUNGER_DECAY * dt);
-        this.thirst = clamp(this.thirst - THIRST_DECAY * dt);
+        this.thirst = clamp(this.thirst - THIRST_DECAY * (1 - rain * RAIN_THIRST) * dt);
         if (this.hunger === 0 || this.thirst === 0)
             this.damage(STARVE_DAMAGE * dt);
         else if (this.hunger > MAX * REGEN_THRESHOLD && this.thirst > MAX * REGEN_THRESHOLD) {

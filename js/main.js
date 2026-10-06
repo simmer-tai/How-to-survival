@@ -1,22 +1,31 @@
 import * as THREE from 'three';
 import { PALETTE } from './core/palette.js';
-import { createTerrain } from './world/terrain.js';
+import { createTerrain, islandField, setActiveField, terrainHeight } from './world/terrain.js';
 import { buildProps } from './world/props.js';
+import { buildTown, townField } from './world/town.js';
+import { LOCATIONS, toLocation } from './world/location.js';
 import { Player } from './player/player.js';
 import { Inventory, ITEMS } from './items/inventory.js';
+import { RecipeBook } from './items/recipeBook.js';
 import { Vitals } from './player/vitals.js';
 import { TreeChopper } from './actions/chopping.js';
-import { ToolHand, EmptyHand, ItemHand, VIEW_LAYER, buildAxe, buildFishingRodRig, buildHammer, buildPickaxe, buildStoneKnife } from './player/hand.js';
+import { ToolHand, EmptyHand, ItemHand, VIEW_LAYER, buildAxe, buildFishingRodRig, buildHammer, buildPickaxe, buildShovel, buildSpear, buildStoneKnife, THRUST_MOTION } from './player/hand.js';
 import { ItemDrops } from './items/drops.js';
 import { BushForager } from './actions/foraging.js';
 import { RockMiner } from './actions/mining.js';
+import { GroundDigger } from './actions/digging.js';
 import { Fisher } from './actions/fishing.js';
-import { Physics, WATER_LEVEL } from './core/physics.js';
-import { Sea } from './world/water.js';
+import { FISH_IDS } from './items/fishKinds.js';
+import { COLLIDE, Physics, RAPIER, WATER_LEVEL } from './core/physics.js';
+import { Sea, bakeSeabed } from './world/water.js';
 import { Grass } from './world/grass.js';
-import { setWaveTime, waveOffset } from './core/waves.js';
+import { setWaveScale, setWaveTime, waveOffset } from './core/waves.js';
 import { Builder } from './actions/build.js';
+import { Boats } from './actions/boats.js';
+import { Spears } from './actions/spears.js';
 import { Crafting } from './actions/crafting.js';
+import { Campfires } from './actions/campfire.js';
+import { CampfireMenu } from './actions/campfireMenu.js';
 import { saveWorld, SAVE_VERSION } from './core/save.js';
 import { showTitle, showToast } from './ui/title.js';
 import { setKeyGuide } from './ui/keyGuide.js';
@@ -25,9 +34,21 @@ import { DeathScreen } from './ui/death.js';
 import { installUiScale } from './ui/uiScale.js';
 import { WorldClock } from './world/clock.js';
 import { Sky } from './world/sky.js';
+import { Weather } from './world/weather.js';
+import { Rain } from './world/rain.js';
+import { Wind } from './world/wind.js';
 import { ClockHud } from './ui/clock.js';
 import { BeachPebbles } from './world/pebbles.js';
 import { PickupFeed } from './ui/pickupFeed.js';
+import { ChargeRing } from './ui/chargeRing.js';
+import { FARMER_LOOK, Npc, pierSpot } from './world/npc.js';
+import { Guide } from './story/guide.js';
+import { Shop } from './story/shop.js';
+import { FINISH_TOAST } from './story/quests.js';
+import { SeaMap, travelFade } from './ui/seaMap.js';
+import { Avatar, AVATAR_LAYER, loadLook } from './player/avatar.js';
+import { AvatarMenu } from './ui/avatarEditor.js';
+import { CommandMenu } from './ui/commandMenu.js';
 installUiScale(); // UI の大きさを画面サイズに合わせる
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -59,6 +80,7 @@ sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 300;
 sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.04;
+sun.shadow.camera.layers.enable(AVATAR_LAYER); // 自分の体は一人称でも影を落とす
 scene.add(sun);
 // 影は島全体を毎回描き直すと重いので、何フレームかに1回だけ描き直す（太陽はゆっくりしか動かない）
 const SHADOW_INTERVAL = 2;
@@ -68,6 +90,27 @@ let shadowFrame = 0;
 const clock = new WorldClock();
 const sky = new Sky(scene, hemi, sun);
 const clockHud = new ClockHud();
+// ---- 天気（時刻から決まるので、時刻と一緒にそろう。セーブする物もない） ----
+const weather = new Weather();
+const rain = new Rain();
+scene.add(rain.object);
+const wind = new Wind(); // 草・木の葉・茂みを、天気の風の強さに合わせて揺らす
+const RAIN_FOG_NEAR = 18; // いちばん強い雨のときの霧の始まり（晴れは 50）
+const RAIN_FOG_FAR = 120; // いちばん強い雨のときに見える距離（晴れは 230）
+const SHELTER_HEIGHT = 12; // 頭の上のこの高さまでに屋根などがあれば、雨に打たれない
+const shelterRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+const RAIN_BRIGHT = 1.5; // 雨の色を空の色よりどれだけ明るくするか（暗い空でも見えるように）
+const rainColor = new THREE.Color();
+const RAIN_RAY_ABOVE = 20; // しぶきを出す所を、カメラのどれだけ上から真下へ調べるか
+const rainRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+/** 雨が当たる面の高さ（屋根・地面・岩・水面のいちばん上。しぶきを出す所） */
+const rainSurface = (x, z) => {
+    const top = camera.position.y + RAIN_RAY_ABOVE;
+    rainRay.origin = { x, y: top, z };
+    const hit = physics.world.castRay(rainRay, RAIN_RAY_ABOVE * 3, true, undefined, COLLIDE.shelterQuery);
+    const ground = hit ? top - hit.timeOfImpact : terrainHeight(x, z);
+    return Math.max(ground, WATER_LEVEL + waveOffset(x, z));
+};
 // ---- ワールド ----
 const physics = await Physics.create();
 const terrain = createTerrain();
@@ -80,10 +123,49 @@ scene.add(props.group);
 for (const mesh of props.solids)
     if (!props.rocks.includes(mesh))
         physics.addStatic(mesh); // 岩の当たり判定は RockMiner が付ける
+// 桟橋の前に立っている住人（近づくとこちらを向く）
+const pierNpc = pierSpot(props.pierFoot);
+const npc = new Npc(pierNpc.position, pierNpc.yaw);
+props.group.add(npc.object);
+physics.addStatic(npc.collider);
 const grass = new Grass(props.rocks, props.platforms);
 scene.add(grass.mesh);
+// ---- 街（船で世界の端まで行くと海図が開き、そこから渡る別の場所。今は石造りの港だけ） ----
+// 街の当たり判定は1つの剛体にまとめ、街にいる間だけ動かす
+const town = buildTown();
+scene.add(town.group);
+const townBody = physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setEnabled(false));
+const townTerrainCollider = physics.addTerrain(town.terrain, townBody);
+for (const mesh of town.solids)
+    physics.addStatic(mesh, townBody);
+// 広場の屋台に立っている農家（いつでも取引できる）
+const farmer = new Npc(town.farmerSpot.position, town.farmerSpot.yaw, FARMER_LOOK);
+town.group.add(farmer.object);
+physics.addStatic(farmer.collider, townBody);
+const islandTerrainCollider = physics.terrainCollider;
+// 浅瀬の色と波打ち際の泡に使う海底は、場所ごとに作っておいて差し替える
+const islandSeabed = bakeSeabed((x, z) => islandField.height(x, z));
+const townSeabed = bakeSeabed((x, z) => townField.height(x, z));
 // ---- プレイヤー ----
 const player = new Player(camera, renderer.domElement, physics, props.platforms, props.spawn);
+// ---- 自分の体（アバター）。一人称では影だけ落とし、V で三人称にすると姿が見える。見た目はタイトル画面か一時停止の画面で選ぶ ----
+const THIRD_DIST = 3.4; // 三人称のカメラを、目からどれだけ後ろへ離すか
+const THIRD_SIDE = 0.7; // 右へずらす量（照準の先が自分の頭に隠れないように）
+const THIRD_UP = 0.3; // 上へずらす量
+const CAMERA_MARGIN = 0.25; // 三人称のカメラを、間にある壁や地面からこれだけ手前に置く
+const AIM_RANGE = 40; // 三人称で照準を出す、視線の先の最大の距離
+const VIEW_KEY = 'warfarming:view'; // 視点の好み（このブラウザに覚えておく）
+const avatar = new Avatar(loadLook());
+avatar.object.visible = false; // ワールドを選ぶまでは出さない
+scene.add(avatar.object);
+const avatarPose = { p: new THREE.Vector3(), yaw: 0, pitch: 0, speed: 0, state: 'ground', crouch: 0 };
+let thirdPerson = false;
+try {
+    thirdPerson = localStorage.getItem(VIEW_KEY) === 'third';
+}
+catch {
+    // 読めなければ一人称で始める
+}
 // ---- インベントリ ----
 const inventory = new Inventory();
 // 手に入れた素材を右下に出す
@@ -109,12 +191,16 @@ const hammerHand = new ToolHand(camera, buildHammer());
 const knifeHand = new ToolHand(camera, buildStoneKnife());
 // 石のツルハシは左クリックで振り、岩を叩いて壊す
 const pickaxeHand = new ToolHand(camera, buildPickaxe());
+// 木のスコップは左クリックで振り、地面を掘る
+const shovelHand = new ToolHand(camera, buildShovel());
 // 釣り竿は長いので前へ倒して構える（右クリック長押しで投げ、左クリックで巻く）
 const ROD_LEAN = 0.45;
 const rodRig = buildFishingRodRig();
 const rodHand = new ToolHand(camera, rodRig.root, ROD_LEAN);
-// 木材・板・枝・葉っぱ・魚・ベリーは選んでいる間、手に持って見せる
-const materialHands = ['wood', 'plank', 'stick', 'leaf', 'fish', 'berry'].map((kind) => ({ kind, hand: new ItemHand(camera, kind) }));
+// 石の槍も長いので、釣り竿と同じだけ前へ倒して構える（左クリックで前へ突き、茂みを刈る。右クリック長押しで力を溜めて投げる）
+const spearHand = new ToolHand(camera, buildSpear(), ROD_LEAN, THRUST_MOTION);
+// 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・船・焚火は選んでいる間、手に持って見せる
+const materialHands = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'boatBlueprint', 'boat', 'campfire'].map((kind) => ({ kind, hand: new ItemHand(camera, kind) }));
 // 何も持っていない（空のスロットを選んでいる）ときは素手を見せる
 const emptyHand = new EmptyHand(camera);
 const chopper = new TreeChopper(props.group, props.trees, physics);
@@ -125,7 +211,7 @@ chopper.onSplit = (trunk, wood) => drops.spawn(trunk, wood);
 drops.onCollect = gain;
 // 砂浜には小石（石）が落ちていて、拾われて減ると時間がたつと増える。岩・木・桟橋のそばには置かない
 const PEBBLE_CLEARANCE = 1.2; // 岩や木の縁からこれだけ離す
-const pebbleObstacles = [...props.rocks, ...props.trees.map((t) => t.trunk)].map((o) => {
+const pebbleObstacles = [...props.rocks, ...props.trees.map((t) => t.trunk), npc.collider].map((o) => {
     const sphere = new THREE.Box3().setFromObject(o).getBoundingSphere(new THREE.Sphere());
     return { x: sphere.center.x, z: sphere.center.z, r: Math.min(sphere.radius, 2.5) + PEBBLE_CLEARANCE };
 });
@@ -134,17 +220,19 @@ const pebbles = new BeachPebbles(drops, (x, z) => pebbleObstacles.some((o) => Ma
 // 茂みはこぶし（10回）・石のナイフ・斧（5回）で叩いて壊す。叩くたびに葉っぱ・枝・実が少しずつ採れ、ナイフならツルも採れる。
 // 実は F で1つずつ摘むこともできる（壊れた茂みはしばらくすると生え直す）
 const forager = new BushForager(props.group, props.bushes);
+for (const bush of props.bushes)
+    wind.addSwaying(bush); // 茂みは実ごと風で傾ける
 forager.onHarvest = gain;
 // ---- 食べる・飲む（ベリーを持って右クリックで食べる。水面を見て F で飲む） ----
 const eater = new Eater(inventory, vitals);
 // 視線をさえぎる物（地形・岩・桟橋など）。建てた部材もここに足されていく
-const aimTargets = [terrain, ...props.solids];
+const aimTargets = [terrain, ...props.solids, npc.collider, town.terrain, ...town.solids, farmer.collider]; // 今いない場所の物は隠すので、視線も当たらない
 const drinker = new Drinker(props.group, aimTargets, vitals);
 // 岩は石のツルハシで叩くと石が少しずつ採れ、耐久値が 0 になると石がまとめて採れて、岩は塊にばらけて消える（大きい岩ほど叩く回数も石も多い）
 const miner = new RockMiner(props.group, props.rocks, physics, aimTargets, [...props.trees.map((t) => t.object), ...props.bushes]);
 miner.onHarvest = gain;
-// 釣り：右クリック長押しでゲージを溜めて投げ、左クリック長押しで巻く。かかった魚を岸まで寄せると釣れる
-const fisher = new Fisher(scene, rodHand, rodRig, aimTargets);
+// 釣り：右クリック長押しでゲージを溜めて投げ、左クリック長押しで巻く。かかった魚を岸まで寄せると釣れる（水深と昼夜で釣れる魚が変わる）
+const fisher = new Fisher(scene, rodHand, rodRig, aimTargets, () => clock.isNight);
 fisher.onCatch = (item, count) => {
     gain(item, count);
     wearTool('fishingRod');
@@ -165,9 +253,28 @@ pickaxeHand.onImpact = () => {
     if (miner.mine(camera, 'pickaxe', PICK_REACH))
         wearTool('pickaxe');
 };
+const SHOVEL_REACH = 3; // スコップで掘れる距離・土で穴を埋められる距離
+/** 土を持って右クリック：狙っている穴を、土を1つ使って埋める。埋めたら true */
+const fillHole = () => {
+    if (inventory.count('dirt') < 1 || !digger.fill(camera, SHOVEL_REACH))
+        return false;
+    inventory.remove('dirt', 1);
+    avatar.swing('chop');
+    return true;
+};
+shovelHand.onImpact = () => {
+    if (digger.dig(camera, 'shovel', SHOVEL_REACH))
+        wearTool('shovel');
+};
 knifeHand.onImpact = () => {
     if (forager.harvest(camera, 'knife', KNIFE_REACH))
         wearTool('stoneKnife');
+};
+// 石の槍は先に石のナイフが付いているので、ナイフと同じく茂みを刈れる（ツルも採れる）。柄が長い分だけ遠くまで届く
+const SPEAR_REACH = 3.4;
+spearHand.onImpact = () => {
+    if (forager.harvest(camera, 'knife', SPEAR_REACH))
+        wearTool('spear');
 };
 emptyHand.onImpact = () => {
     if (!builder.strike('fist', PUNCH_REACH) && !forager.harvest(camera, 'fist', PUNCH_REACH))
@@ -176,11 +283,131 @@ emptyHand.onImpact = () => {
 // ---- 建築（ハンマーを持って右クリックで部材を選び、左クリックで視線の先に建てる。X で壊す。作業台はアイテムを持って置く） ----
 const blockers = [...props.trees.map((t) => t.object), ...props.bushes]; // 木や茂みの奥には置けない
 const builder = new Builder(props.group, camera, terrain, aimTargets, blockers, physics, props.platforms, inventory);
-// 建てた床などの下から草が生えないようにする
-builder.onChange = () => grass.setCovered((x, y, z) => builder.covers(x, y, z));
+// 地面はスコップで掘ると小さな穴があき、土が採れる（穴は自分の島の地面にだけ掘れる。建てた部材や桟橋の下は掘れない）
+const digger = new GroundDigger(props.group, terrain, aimTargets, blockers);
+digger.onHarvest = gain;
+digger.canDigAt = (x, z) => !builder.covers(x, islandField.height(x, z), z) &&
+    !(here === 'island' ? props.platforms : islandPlatforms).some((p) => x > p.minX - 0.3 && x < p.maxX + 0.3 && z > p.minZ - 0.3 && z < p.maxZ + 0.3);
+// 建てた床などの下や、掘った穴の中から草が生えないようにする
+const coverGrass = () => grass.setCovered((x, y, z) => builder.covers(x, y, z) || digger.covers(x, z));
+// ---- 焚火（石と枝で作り、手に持って置く。F で燃料の欄を開き、燃料を入れると燃える。燃料の欄と火は共有ワールド） ----
+const campfires = new Campfires(props.group);
+builder.contents = (pid) => campfires.contents(pid); // ハンマーで解体すると、燃料の欄の物も戻る
+builder.onChange = () => {
+    coverGrass();
+    campfires.sync(builder.listOf('campfire'));
+};
+digger.onChange = coverGrass;
 builder.onWork = () => {
     hammerHand.swing();
+    avatar.swing('chop');
     wearTool('hammer'); // 作業台はハンマーなしで置けるので、ハンマーを持っていなければ減らない
+};
+// ---- 船（船を持って左クリックで、視線の先の水面に浮かべる。F で乗り降りし、W/S で漕いで A/D で向きを変える。Q でしまう） ----
+// 船はどの場所にも浮かぶので、島の物（props.group）とは別のグループに入れる（見せるかどうかは船ごとに Boats が決める）
+const boatGroup = new THREE.Group();
+scene.add(boatGroup);
+const boats = new Boats(boatGroup, camera, physics, aimTargets, inventory);
+// ---- 場所（自分の島・街）。プレイヤーはどれか1つの場所にいて、その場所の物だけを描き、その物とだけぶつかる ----
+// 見えなくするのはレイヤーを変えて行う（カメラにも視線のレイキャストにも映らなくなる）
+const HIDDEN_LAYER = 31;
+/** root 以下を見せる・隠す */
+const setShown = (root, shown) => {
+    root.traverse((o) => {
+        if (shown) {
+            o.layers.mask = o.userData.shownLayers ?? 1;
+            delete o.userData.shownLayers;
+        }
+        else if (o.userData.shownLayers === undefined) {
+            o.userData.shownLayers = o.layers.mask;
+            o.layers.set(HIDDEN_LAYER);
+        }
+    });
+};
+setShown(town.group, false);
+/** プレイヤーが今いる場所（自分だけの状態。セーブに入れる） */
+let here = 'island';
+/** 街にいる間に止めている、島の剛体 */
+let parkedIsland = [];
+/** 街にいる間に預かっている、島の上に乗れる所（桟橋・床など） */
+const islandPlatforms = [];
+/** プレイヤーを別の場所へ移す（自分の画面の切り替え。船で渡るときは先に sailBoat を適用しておく） */
+const goTo = (loc) => {
+    if (loc === here)
+        return;
+    const island = loc === 'island';
+    for (const o of [terrain, props.group, grass.mesh])
+        setShown(o, island);
+    setShown(town.group, !island);
+    if (island) {
+        physics.unpark(parkedIsland);
+        parkedIsland = [];
+        townBody.setEnabled(false);
+        props.platforms.splice(0, props.platforms.length, ...islandPlatforms);
+    }
+    else {
+        // 島の物（地形・岩・木・部材・落とし物など）の剛体を止める。プレイヤーと船は残す（船は場所ごとに Boats が切り替える）
+        parkedIsland = physics.park((b) => b === player.rigidBody || b === townBody || boats.owns(b));
+        townBody.setEnabled(true);
+        islandPlatforms.splice(0, islandPlatforms.length, ...props.platforms);
+        props.platforms.splice(0, props.platforms.length, ...town.platforms);
+    }
+    physics.terrainCollider = island ? islandTerrainCollider : townTerrainCollider;
+    setActiveField(island ? islandField : townField);
+    sea.setSeabed(island ? islandSeabed : townSeabed);
+    boats.setLocation(loc);
+    builder.disabled = !island; // 建てた部材は自分の島にだけ置ける
+    here = loc;
+};
+// 船で世界の端まで漕いでいくと海図を開き、ほかの場所を選ぶと暗転して船ごと渡る
+const seaMap = new SeaMap();
+boats.onEdge = () => seaMap.open(here);
+seaMap.onTravel = (to) => {
+    if (to === here)
+        return;
+    travelFade(LOCATIONS[to].name, () => {
+        if (!boats.sail(to))
+            return;
+        goTo(to);
+        const heading = boats.heading;
+        if (heading !== null)
+            player.face(heading); // 着いた場所の島のほうを向く
+    });
+};
+/** 自分の島でしかできないこと（落とし物や刺さった槍などは、まだ場所を持たない）をしようとしたら知らせる。島にいれば true */
+const onIsland = () => {
+    if (here === 'island')
+        return true;
+    showToast('ここではまだできない');
+    return false;
+};
+// ---- 槍を投げる（槍を持って右クリック長押しで力を溜め、離すと視線の向きへ投げる。刺さった槍は F で拾う） ----
+const SPEAR_CHARGE_TIME = 0.9; // いっぱいまで溜まる時間（秒）
+const SPEAR_MIN_CHARGE = 0.15; // これより溜まる前に離したら投げない（右クリックを押しただけで投げてしまわないように）
+// 溜めている間の構え：槍を肩の上へ持ち上げて後ろへ引き、穂先を前へ水平近くまで倒す
+const SPEAR_AIM_POS = [0.04, 0.16, 0.24];
+const SPEAR_AIM_ROT = [-0.95, 0, 0.06];
+const spears = new Spears(props.group, physics);
+spears.onCollect = gain;
+spears.onBreak = () => showToast(`${ITEMS.spear.name}が壊れた`);
+const chargeRing = new ChargeRing();
+/** 溜めている力（0〜1）。溜めていなければ null */
+let spearCharge = null;
+const stopSpearCharge = () => {
+    spearCharge = null;
+    spearHand.pose([0, 0, 0], [0, 0, 0]);
+};
+/** 溜めた力で、持っている槍を投げる（少ししか溜めていなければやめる） */
+const releaseSpear = () => {
+    const charge = spearCharge;
+    stopSpearCharge();
+    if (charge === null || charge < SPEAR_MIN_CHARGE || !spearHand.visible)
+        return;
+    const stack = inventory.take(false);
+    if (!stack)
+        return;
+    if (stack.item !== 'spear' || !spears.throw(stack.dmg, camera.position, camera.getWorldDirection(new THREE.Vector3()), charge))
+        inventory.putBack(stack);
 };
 // ---- ワールドコマンド（共有ワールドの変更はすべてここを通す） ----
 /** コマンドを適用する。マルチでは、ホストから届いたコマンドもここで適用する */
@@ -202,6 +429,29 @@ const applyWorld = (cmd) => {
         case 'mineRock':
             miner.apply(cmd);
             break;
+        case 'digHole':
+        case 'fillHole':
+            digger.apply(cmd);
+            break;
+        case 'placeBoat':
+        case 'pickBoat':
+        case 'boardBoat':
+        case 'leaveBoat':
+        case 'sailBoat':
+            boats.apply(cmd);
+            break;
+        case 'throwSpear':
+        case 'pickSpear':
+            spears.apply(cmd);
+            break;
+        case 'setWeather':
+            weather.apply(cmd);
+            break;
+        case 'addFuel':
+        case 'takeFuel':
+        case 'burnFuel':
+            campfires.apply(cmd);
+            break;
     }
 };
 /** 頼みを出す。ひとりで遊ぶときは自分がホストなので、その場で確かめて適用する。適用できたら true */
@@ -212,7 +462,17 @@ const requestWorld = (req) => {
             ? forager.authorize(req)
             : req.type === 'mineRock'
                 ? miner.authorize(req)
-                : builder.authorize(req);
+                : req.type === 'digHole' || req.type === 'fillHole'
+                    ? digger.authorize(req)
+                    : req.type === 'placeBoat' || req.type === 'pickBoat' || req.type === 'boardBoat' || req.type === 'leaveBoat' || req.type === 'sailBoat'
+                        ? boats.authorize(req)
+                        : req.type === 'throwSpear' || req.type === 'pickSpear'
+                            ? spears.authorize(req)
+                            : req.type === 'setWeather'
+                                ? weather.authorize(req, clock.minutes)
+                                : req.type === 'addFuel' || req.type === 'takeFuel' || req.type === 'burnFuel'
+                                    ? campfires.authorize(req)
+                                    : builder.authorize(req);
     if (!cmd)
         return false;
     applyWorld(cmd);
@@ -223,34 +483,106 @@ drops.request = requestWorld;
 pebbles.request = requestWorld;
 forager.request = requestWorld;
 miner.request = requestWorld;
+digger.request = requestWorld;
+boats.request = requestWorld;
+spears.request = requestWorld;
+campfires.request = requestWorld;
+const campfireMenu = new CampfireMenu(inventory, campfires);
 // ---- クラフト（インベントリを開くと手元の台、作業台で F を押すと天板に素材を置いて作る） ----
 const crafting = new Crafting(props.group, camera, renderer.domElement, inventory);
 crafting.benchExists = (pid) => builder.has(pid);
-// ---- F：拾う・茂みの実を摘む・作業台を使う・水を飲む ----
-const USE_REACH = 3.5; // 作業台を使える距離
+// 設計図で覚えるレシピは、覚えるまで候補に出さない（覚えたレシピは自分だけの状態）
+const recipeBook = new RecipeBook();
+crafting.knows = (recipe) => !recipe.locked || recipeBook.knows(recipe.result);
+/** 設計図なら、右クリックで作り方を覚える（設計図は減らない）。設計図だったら true */
+const learnFrom = (item) => {
+    const result = ITEMS[item].teaches;
+    if (!result)
+        return false;
+    const name = ITEMS[result].name;
+    showToast(recipeBook.learn(result) ? `「${name}」の作り方を覚えた` : `「${name}」の作り方はもう覚えている`);
+    return true;
+};
+// ---- 桟橋の住人の頼みごと（最初の手順の案内。進み具合は自分だけの状態） ----
+const TALK_REACH = 3.5; // 住人に話しかけられる距離
+const guide = new Guide({
+    count: (item) => inventory.count(item),
+    built: (id) => builder.hasKind(id),
+    knows: (item) => recipeBook.knows(item),
+    riding: () => boats.riding,
+    location: () => here,
+}, npc.object.position);
+guide.onFinish = () => showToast(FINISH_TOAST);
+// 作業台の頼みごとを終えたら、話しかけると取引の画面が開く（ベリーをコインに換え、船の設計図を買う。コインはインベントリのお金のマスに入る）。
+// 街へ渡るまでの頼みごとの途中なら、取引の画面に今のヒントを出す。
+// 街の農家とは最初から取引できる（取引の中身は items/trades.ts）
+const shop = new Shop(inventory);
+shop.onGain = gain;
+// ---- F：話しかける・拾う・茂みの実を摘む・船に乗り降りする・作業台や焚火を使う・水を飲む ----
+const USE_REACH = 3.5; // 作業台や焚火を使える距離
 /** 視線の先にある、使える作業台 */
 const aimedWorkbench = () => {
     const piece = builder.aimedPiece(USE_REACH);
     return piece?.id === 'workbench' ? piece : null;
 };
+/** 視線の先にある焚火の番号（低いので、炎のあたりを見ても狙える） */
+const aimedCampfire = () => campfires.aimed(camera, USE_REACH, aimTargets);
 addEventListener('keydown', (e) => {
     if (e.code === 'KeyF' && player.controls.isLocked && !inventory.isOpen) {
-        if (drops.collect(camera, (item) => inventory.room(item)) || forager.pick(camera))
+        // 船に乗っている間は F で降りる（陸や桟橋に立てればそこへ、なければ船の横の水へ）
+        if (boats.riding) {
+            const feet = boats.leave((x, z) => player.groundAt(x, z), (p) => player.canStandAt(p));
+            if (feet)
+                player.standAt(feet);
+            else
+                showToast('ここでは降りられない');
+            return;
+        }
+        if (!guide.talking && guide.trades && npc.aimed(camera, aimTargets, TALK_REACH))
+            return shop.open('pier', guide.tip);
+        if (!guide.talking && farmer.aimed(camera, aimTargets, TALK_REACH))
+            return shop.open('farmer');
+        if (guide.talking || npc.aimed(camera, aimTargets, TALK_REACH))
+            return guide.speak();
+        if (spears.collect(camera, (item) => inventory.room(item)) || drops.collect(camera, (item) => inventory.room(item)) || forager.pick(camera) || boats.board())
             return;
         const bench = aimedWorkbench();
+        const fire = bench ? null : aimedCampfire();
         if (bench)
             crafting.useBench(bench);
+        else if (fire !== null)
+            campfireMenu.open(fire);
         else
             drinker.drink(camera);
     }
 });
+// ---- V：一人称と三人称（自分の姿が見える）を切り替える ----
+addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyV' || e.repeat || !world || !player.controls.isLocked)
+        return;
+    thirdPerson = !thirdPerson;
+    try {
+        localStorage.setItem(VIEW_KEY, thirdPerson ? 'third' : 'first');
+    }
+    catch {
+        // 覚えておけなくても、今の視点はそのまま切り替える
+    }
+    showToast(thirdPerson ? '三人称視点' : '一人称視点');
+});
+// ---- Q：狙っている船をしまう（アイテムに戻す） ----
+addEventListener('keydown', (e) => {
+    if (e.code === 'KeyQ' && player.controls.isLocked && !inventory.isOpen)
+        boats.pick();
+});
 // ---- G：持っている物を1個落とす（Ctrl+G でまるごと）。インベントリを開いているときは、つまんでいる物かマウスが乗っているマス ----
 addEventListener('keydown', (e) => {
-    if (e.code !== 'KeyG' || !world || death.isOpen || builder.menu.isOpen)
+    if (e.code !== 'KeyG' || !world || death.isOpen || builder.menu.isOpen || shop.isOpen)
         return;
     if (!player.controls.isLocked && !inventory.isOpen)
         return;
     e.preventDefault(); // Ctrl+G（ブラウザの「次を検索」）を止める
+    if (!onIsland())
+        return;
     const stack = inventory.take(e.ctrlKey);
     if (!stack)
         return;
@@ -268,17 +600,36 @@ renderer.domElement.addEventListener('mousedown', (e) => {
         return;
     }
     const held = inventory.selectedStack;
+    if (e.button === 0 && held?.item === 'boat') {
+        boats.place();
+        return;
+    }
     if (e.button === 0) {
         hand.swing();
         knifeHand.swing();
+        if (spearCharge === null)
+            spearHand.swing(); // 投げる力を溜めている間は突かない
         pickaxeHand.swing();
+        shovelHand.swing();
         emptyHand.punch();
+        // 三人称の体も、手に持っている物に合わせて振る（槍とこぶしは突き出す）
+        if (spearHand.visible ? spearCharge === null : hand.visible || knifeHand.visible || pickaxeHand.visible || shovelHand.visible || emptyHand.visible) {
+            avatar.swing(spearHand.visible || emptyHand.visible ? 'thrust' : 'chop');
+        }
         if (rodHand.visible)
             fisher.setReeling(true);
     }
     else if (e.button === 2) {
         if (rodHand.visible)
             fisher.startCharge();
+        else if (spearHand.visible) {
+            if (onIsland())
+                spearCharge = 0;
+        }
+        else if (held?.item === 'dirt' && fillHole())
+            return;
+        else if (held && learnFrom(held.item))
+            return;
         else if (held && eater.start(held.item))
             materialHands.find((m) => m.kind === held.item)?.hand.eat(EAT_TIME);
     }
@@ -286,13 +637,16 @@ renderer.domElement.addEventListener('mousedown', (e) => {
 addEventListener('mouseup', (e) => {
     if (e.button === 0)
         fisher.setReeling(false);
-    else if (e.button === 2)
+    else if (e.button === 2) {
         fisher.release(camera);
+        releaseSpear();
+    }
 });
 // 一時停止したら、溜めていたゲージと巻き取りをやめる
 player.controls.addEventListener('unlock', () => {
     fisher.stopCharge();
     fisher.setReeling(false);
+    stopSpearCharge();
 });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 // ---- セーブ（一時停止したとき・30秒ごと・ページを閉じるときに自動で保存する） ----
@@ -302,7 +656,8 @@ let autosaveTimer = 0;
 const startPlayer = player.serialize(); // 新しいワールドの出発地点（タイトル画面ではカメラが島を回るので覚えておく）
 const snapshot = () => ({
     version: SAVE_VERSION,
-    player: player.serialize(),
+    // 乗っている船と、いる場所も覚えておく
+    player: { ...player.serialize(), ...(boats.ridingBid !== null ? { boat: boats.ridingBid } : {}), ...(here !== 'island' ? { loc: here } : {}) },
     inventory: inventory.serialize(),
     vitals: vitals.serialize(),
     trees: chopper.serialize(),
@@ -310,20 +665,37 @@ const snapshot = () => ({
     drops: drops.serialize(),
     pebbles: pebbles.serialize(),
     rocks: miner.serialize(),
+    holes: digger.serialize(),
     built: builder.serialize(),
+    fires: campfires.serialize(),
+    boats: boats.serialize(),
+    spears: spears.serialize(),
     clock: clock.serialize(),
+    weather: weather.serialize(),
+    guide: guide.serialize(),
+    recipes: recipeBook.serialize(),
 });
 const restore = (data) => {
     builder.restore(data.built); // 床などの足場を先に置いてからプレイヤーを戻す
+    campfires.restore(data.fires); // 焚火の部材を置いてから、燃料と火を戻す
+    boats.restore(data.boats);
+    spears.restore(data.spears);
     chopper.restore(data.trees);
     forager.restore(data.bushes);
     miner.restore(data.rocks);
+    digger.restore(data.holes);
     drops.restore(data.drops);
     pebbles.restore(data.pebbles); // 落とし物を戻してから（まだ小石を置いていないワールドなら置く）
     inventory.restore(data.inventory);
     vitals.restore(data.vitals);
     player.restore(data.player);
+    goTo(toLocation(data.player.loc)); // 街にいたら街へ（剛体を全部作り終えてから切り替える）
+    if (data.player.boat !== undefined)
+        boats.boardById(data.player.boat); // 船に乗ったままセーブしていたら乗り直す
     clock.restore(data.clock);
+    weather.restore(data.weather);
+    guide.restore(data.guide);
+    recipeBook.restore(data.recipes);
 };
 const save = (toast = false) => {
     if (!world)
@@ -346,7 +718,9 @@ const pickupHint = document.getElementById('pickup-hint');
 // ---- HP が尽きたら「力尽きた」画面（リスポーンするとスタート地点へ。持ち物はそのまま） ----
 const death = new DeathScreen();
 death.onRespawn = () => {
+    boats.release(); // 船に乗ったまま力尽きたら、船はその場に残す
     vitals.reset();
+    goTo('island'); // 街で力尽きても、自分の島のスタート地点に戻る
     player.restore(startPlayer);
     death.setOpen(false);
     save();
@@ -356,7 +730,56 @@ death.onQuit = () => {
     save();
     location.reload();
 };
-const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen;
+// 一時停止の画面から、アバターの見た目を変える画面を開ける
+const avatarMenu = new AvatarMenu();
+avatarMenu.onChange = (look) => avatar.setLook(look);
+document.getElementById('to-avatar').addEventListener('click', (e) => {
+    e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
+    avatarMenu.setOpen(true);
+});
+// ---- コマンドメニュー（Enter で開く。天気を変えるなど） ----
+const commandMenu = new CommandMenu();
+/** コマンドで打てる天気の名前 */
+const WEATHER_WORDS = {
+    clear: 'clear', sun: 'clear', 晴れ: 'clear', はれ: 'clear',
+    cloudy: 'cloudy', cloud: 'cloudy', くもり: 'cloudy', 曇り: 'cloudy',
+    rain: 'rain', 雨: 'rain', あめ: 'rain',
+    storm: 'storm', thunder: 'storm', 嵐: 'storm', あらし: 'storm',
+    auto: null, 自動: null, じどう: null,
+};
+const WEATHER_LABELS = { clear: '晴れ', cloudy: 'くもり', rain: '雨', storm: '嵐' };
+commandMenu.register({
+    name: 'weather',
+    aliases: ['天気', '天候', 'てんき'],
+    usage: '/weather <晴れ|くもり|雨|嵐|自動>',
+    run: ([word]) => {
+        const key = word?.toLowerCase() ?? '';
+        if (!(key in WEATHER_WORDS))
+            return { message: '天気は 晴れ・くもり・雨・嵐・自動 から選んでください', error: true };
+        const kind = WEATHER_WORDS[key];
+        if (kind === weather.forcedKind)
+            return { message: kind ? `もう${WEATHER_LABELS[kind]}にしています` : 'もう自動になっています', error: true };
+        requestWorld({ type: 'setWeather', kind }); // 共有ワールドの変更なので、ワールドコマンドの頼みにする
+        return { message: kind ? `天気を${WEATHER_LABELS[kind]}にしました` : '天気を自動に戻しました' };
+    },
+});
+commandMenu.addButtons({
+    title: '天気',
+    buttons: [
+        ...Object.keys(WEATHER_LABELS).map((k) => ({ label: WEATHER_LABELS[k], command: `/weather ${k}` })),
+        { label: '自動', command: '/weather auto' },
+    ],
+    current: () => `/weather ${weather.forcedKind ?? 'auto'}`,
+});
+commandMenu.onResult = (message) => showToast(message);
+addEventListener('keydown', (e) => {
+    if (e.code !== 'Enter' && e.code !== 'NumpadEnter')
+        return;
+    if (!world || !player.controls.isLocked || menuOpen())
+        return;
+    commandMenu.setOpen(true);
+});
+const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || avatarMenu.isOpen || commandMenu.isOpen;
 document.getElementById('to-title').addEventListener('click', (e) => {
     e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
     save();
@@ -397,26 +820,39 @@ const onMenuToggle = (open, resume) => {
     refreshOverlay();
 };
 inventory.onToggle = (open, resume) => {
-    if (open)
-        builder.menu.setOpen(false, false); // 部材を選ぶメニューの上からインベントリを開いたら、メニューは閉じる
-    crafting.setOpen(open);
+    if (open) {
+        // 部材を選ぶメニューや取引の画面の上からインベントリを開いたら、そちらは閉じる
+        builder.menu.setOpen(false, false);
+        shop.setOpen(false, false);
+        seaMap.setOpen(false, false);
+        avatarMenu.setOpen(false, false);
+        commandMenu.setOpen(false, false);
+    }
+    // 焚火の燃料の欄を開いているときは、手元のクラフトの台は出さない
+    crafting.setOpen(open && !campfireMenu.isOpen);
+    if (!open)
+        campfireMenu.close();
     onMenuToggle(open, resume);
 };
 builder.menu.onToggle = onMenuToggle;
+shop.onToggle = onMenuToggle;
+seaMap.onToggle = onMenuToggle;
+avatarMenu.onToggle = onMenuToggle;
+commandMenu.onToggle = onMenuToggle;
 addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
 });
-/** 時刻に合わせた空と光にする。水中では光を弱めて青く染め、深いほど暗い霧で視界を狭める（夜はさらに暗く） */
-function applySky(underwater) {
-    sky.update(clock.hour, camera);
+/** 時刻と天気に合わせた空と光にする。雨では霧で遠くをかすませる。水中では光を弱めて青く染め、深いほど暗い霧で視界を狭める（夜はさらに暗く） */
+function applySky(underwater, dt) {
+    sky.update(clock.minutes, weather, camera, dt);
     sky.visible = !underwater;
     sea.setDaylight(THREE.MathUtils.lerp(0.25, 1, sky.daylight));
     if (!underwater) {
         fog.color.copy(sky.color);
-        fog.near = 50;
-        fog.far = 230;
+        fog.near = THREE.MathUtils.lerp(50, RAIN_FOG_NEAR, weather.rain);
+        fog.far = THREE.MathUtils.lerp(230, RAIN_FOG_FAR, weather.rain);
     }
     else {
         const depth = THREE.MathUtils.clamp(WATER_LEVEL - camera.position.y, 0, 8);
@@ -438,6 +874,12 @@ function applySky(underwater) {
         camera.updateProjectionMatrix();
     }
 }
+/** 頭の上に屋根や桟橋などがあるか（雨に打たれないか）。木の葉は雨よけにならない */
+function sheltered() {
+    const p = camera.position;
+    shelterRay.origin = { x: p.x, y: p.y, z: p.z };
+    return physics.world.castRay(shelterRay, SHELTER_HEIGHT, true, undefined, COLLIDE.shelterQuery) !== null;
+}
 /** タイトル画面の背景：島の周りをゆっくり回る */
 function orbitCamera(t) {
     const a = t * 0.05;
@@ -445,21 +887,30 @@ function orbitCamera(t) {
     camera.lookAt(0, 2, 0);
 }
 const timer = new THREE.Clock();
+const seatEye = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
     const dt = Math.min(timer.getDelta(), 0.05);
     const t = timer.elapsedTime;
     setWaveTime(t);
+    weather.update(clock.minutes);
+    setWaveScale(weather.waves); // 嵐では波が高くなる（船の揺れや泳ぎも同じ波の式を使う）
     sea.update(t);
-    grass.update(t, camera.position, fog.far);
+    wind.update(dt, weather.wind);
+    grass.update(camera.position, fog.far);
     if (world)
         player.update(dt);
     else
         orbitCamera(t);
     crafting.update(dt); // 作業台を使っているときは、カメラを天板に寄せる
+    const underwater = camera.position.y < WATER_LEVEL + waveOffset(camera.position.x, camera.position.z);
+    const roofed = weather.rain > 0 && !!world && sheltered();
     if (player.controls.isLocked) {
-        vitals.update(dt); // 一時停止中・インベントリ表示中は減らさない
+        vitals.update(dt, roofed || underwater ? 0 : weather.rain); // 一時停止中・インベントリ表示中は減らさない
         clock.update(dt); // 時間も止める（マルチではホストが止めずに進め、参加者には時刻を配る）
-        pebbles.update(dt); // マルチではホストだけが進める
+        if (here === 'island')
+            pebbles.update(dt); // マルチではホストだけが進める（街にいる間は、島の砂浜に小石を足さない）
+        digger.tick(dt); // 掘った穴は時間がたつと埋まる（マルチではホストだけが進める）
+        campfires.tick(dt); // 焚火の燃料が燃えていく（マルチではホストだけが進める）
         autosaveTimer += dt;
         if (autosaveTimer >= AUTOSAVE_INTERVAL)
             save(true);
@@ -480,8 +931,22 @@ renderer.setAnimationLoop(() => {
     hammerHand.update(dt);
     knifeHand.visible = held?.item === 'stoneKnife';
     knifeHand.update(dt);
+    spearHand.visible = held?.item === 'spear';
+    if (spearCharge !== null) {
+        if (!spearHand.visible)
+            stopSpearCharge(); // 溜めている途中で持ち替えたらやめる
+        else {
+            spearCharge = Math.min(spearCharge + dt / SPEAR_CHARGE_TIME, 1);
+            const k = THREE.MathUtils.smootherstep(spearCharge, 0, 1);
+            spearHand.pose(SPEAR_AIM_POS.map((v) => v * k), SPEAR_AIM_ROT.map((v) => v * k));
+        }
+    }
+    chargeRing.set(spearCharge !== null && player.controls.isLocked ? spearCharge : null);
+    spearHand.update(dt);
     pickaxeHand.visible = held?.item === 'pickaxe';
     pickaxeHand.update(dt);
+    shovelHand.visible = held?.item === 'shovel';
+    shovelHand.update(dt);
     rodHand.visible = held?.item === 'fishingRod';
     rodHand.update(dt);
     fisher.update(dt, camera, rodHand.visible);
@@ -492,37 +957,152 @@ renderer.setAnimationLoop(() => {
     emptyHand.visible = !!world && !held && !builder.active && !crafting.isOpen;
     emptyHand.update(dt, player.walking);
     chopper.update(dt);
+    boats.update(dt); // 漕いだり波に揺れたりする船の当たり判定は、物理を進める前に動かしておく
+    if (boats.riding)
+        player.sitAt(boats.seatEye(seatEye)); // 船に乗っている間は、座り板に座った目の位置にする
     physics.step(dt);
     drops.update(dt, camera.position);
+    spears.update(dt);
     forager.update(dt);
     miner.update(dt);
+    digger.update(dt);
     builder.update(dt);
-    applySky(camera.position.y < WATER_LEVEL + waveOffset(camera.position.x, camera.position.z));
+    campfires.update(dt, t, weather.wind);
+    campfireMenu.update();
+    if (here === 'island')
+        npc.update(dt, camera.position);
+    else
+        farmer.update(dt, camera.position);
+    // 自分の体を、プレイヤーの動きと手に持っている物に合わせて動かす
+    avatar.object.visible = !!world;
+    if (world) {
+        player.pose(avatarPose);
+        if (boats.riding)
+            avatarPose.bodyYaw = boats.heading ?? undefined; // 船では舳先を向いて座る
+        avatar.setHeld(held?.item ?? null);
+        avatar.setCharge(spearCharge);
+        avatar.update(dt, avatarPose);
+    }
+    if (world)
+        guide.update(camera.position);
+    guide.visible = !!world && !death.isOpen;
+    // カメラは船の座席などへ動いたあとなので、水中かどうかを調べ直す
+    const seeingUnderwater = camera.position.y < WATER_LEVEL + waveOffset(camera.position.x, camera.position.z);
+    applySky(seeingUnderwater, dt);
+    rainColor.copy(sky.color).multiplyScalar(RAIN_BRIGHT);
+    rain.update(t, dt, camera.position, seeingUnderwater ? 0 : weather.rain, rainColor, rainSurface);
+    rain.renderOcclusion(renderer, scene, [sky.object, grass.mesh]); // 屋根などの下に雨が降りこまないように
     clockHud.visible = !!world && !death.isOpen;
-    clockHud.update(clock.day, clock.hour, clock.isNight);
-    const pickup = drops.isAiming(camera)
-        ? '[F]：拾う'
-        : forager.canPick(camera)
-            ? '[F]：実を摘む'
-            : aimedWorkbench()
-                ? '[F]：作業台を使う'
-                : vitals.canDrink && drinker.aimed(camera)
-                    ? '[F]：水を飲む'
-                    : held && FOODS[held.item] && vitals.canEat && !builder.active
-                        ? '[右]：食べる'
-                        : '';
-    // 傷ついた部材を見ているときは、のこりの耐久値も出す
-    const durability = builder.durability(AXE_REACH) ?? (held?.item === 'pickaxe' ? miner.durability(camera, PICK_REACH) : null);
-    const hint = [rodHand.visible && (fisher.busy || !pickup) ? fisher.hint : pickup, durability ? `耐久 ${durability.hp}/${durability.max}` : ''].filter(Boolean).join(' ／ ');
+    clockHud.update(clock.day, clock.hour, clock.isNight, weather.kind);
+    // 一時停止中やメニューを開いている間は案内を出さないので、視線の判定もしない
+    const hint = player.controls.isLocked && !menuOpen() ? keyHint(held) : '';
     if (hint)
         setKeyGuide(pickupHint, hint);
-    pickupHint.classList.toggle('hidden', !player.controls.isLocked || menuOpen() || !hint);
+    pickupHint.classList.toggle('hidden', !hint);
     render();
 });
+/** 画面中央に出す操作の案内（視線の判定をいくつも行うので、案内を出している間だけ呼ぶ） */
+function keyHint(held) {
+    // 住人（桟橋の人・街の農家）を見ているときの案内
+    const talkHint = npc.aimed(camera, aimTargets, TALK_REACH)
+        ? guide.trades
+            ? '[F]：取引する'
+            : '[F]：話しかける'
+        : farmer.aimed(camera, aimTargets, TALK_REACH)
+            ? '[F]：取引する'
+            : '';
+    const pickup = guide.talking
+        ? ''
+        : boats.riding
+            ? boats.rideHint
+            : talkHint
+                ? talkHint
+                : spears.isAiming(camera) || drops.isAiming(camera)
+                    ? '[F]：拾う'
+                    : forager.canPick(camera)
+                        ? '[F]：実を摘む'
+                        : boats.isAiming()
+                            ? '[F]：船に乗る ／ [Q]：船をしまう'
+                            : aimedWorkbench()
+                                ? '[F]：作業台を使う'
+                                : aimedCampfire() !== null
+                                    ? '[F]：焚火に燃料を入れる'
+                                    : boats.holding // 船を持っているときは、水を狙っても飲む案内より浮かべる案内を出す
+                                        ? boats.hint
+                                        : vitals.canDrink && drinker.aimed(camera)
+                                            ? '[F]：水を飲む'
+                                            : held && FOODS[held.item] && vitals.canEat && !builder.active
+                                                ? '[右]：食べる'
+                                                : held && ITEMS[held.item].teaches && !recipeBook.knows(ITEMS[held.item].teaches)
+                                                    ? '[右]：作り方を覚える'
+                                                    : held?.item === 'shovel' && digger.canDig(camera, SHOVEL_REACH)
+                                                        ? '[左]：掘る'
+                                                        : held?.item === 'dirt' && digger.canFill(camera, SHOVEL_REACH)
+                                                            ? '[右]：穴を埋める'
+                                                            : '';
+    // 傷ついた部材を見ているときは、のこりの耐久値も出す
+    const durability = builder.durability(AXE_REACH) ?? (held?.item === 'pickaxe' ? miner.durability(camera, PICK_REACH) : null);
+    return [rodHand.visible && (fisher.busy || !pickup) ? fisher.hint : pickup, durability ? `耐久 ${durability.hp}/${durability.max}` : ''].filter(Boolean).join(' ／ ');
+}
+const eyePos = new THREE.Vector3();
+const cameraRay = new THREE.Raycaster();
+const thirdOffset = new THREE.Vector3();
+const aimPoint = new THREE.Vector3();
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
+/**
+ * 三人称のカメラを、目の右後ろへ下げる（間に壁や地面があれば、その手前まで）。描き終えたら restoreEye() で目の位置へ戻す。
+ * 狙いの判定はどれも目から視線の向きへ調べるので、照準は視線の先が画面に映る所へ動かす
+ */
+function placeThirdPerson() {
+    eyePos.copy(camera.position);
+    cameraRay.setFromCamera(SCREEN_CENTER, camera);
+    cameraRay.far = AIM_RANGE;
+    const aimed = cameraRay.intersectObjects(aimTargets, true)[0];
+    if (aimed)
+        aimPoint.copy(aimed.point);
+    else
+        aimPoint.copy(cameraRay.ray.direction).multiplyScalar(AIM_RANGE).add(eyePos);
+    thirdOffset.set(THIRD_SIDE, THIRD_UP, THIRD_DIST).applyQuaternion(camera.quaternion); // カメラの +X が右、+Z が後ろ
+    const dist = thirdOffset.length();
+    cameraRay.set(eyePos, thirdOffset.clone().divideScalar(dist));
+    cameraRay.far = dist;
+    const hit = cameraRay.intersectObjects(aimTargets, true)[0];
+    camera.position.addScaledVector(thirdOffset, (hit ? Math.max(hit.distance - CAMERA_MARGIN, 0.2) : dist) / dist);
+    // 水面より上にいるときは、カメラを水に潜らせない
+    const surface = WATER_LEVEL + waveOffset(eyePos.x, eyePos.z);
+    if (eyePos.y > surface)
+        camera.position.y = Math.max(camera.position.y, surface + 0.3);
+    camera.updateMatrixWorld();
+    const ndc = aimPoint.project(camera);
+    const left = `${((ndc.x + 1) / 2) * 100}%`;
+    const top = `${((1 - ndc.y) / 2) * 100}%`;
+    for (const el of [crosshair, pickupHint]) {
+        el.style.left = left;
+        el.style.top = top;
+    }
+}
+function restoreEye() {
+    camera.position.copy(eyePos);
+    camera.updateMatrixWorld(); // 次のフレームまでのクリックなども、目の位置から狙う
+}
 /** 世界を描いてから、深度を消して手や持ち物を上に重ねる（近くの木や岩に手がめり込まないように） */
 function render() {
+    // 三人称は、ワールドで遊んでいる間だけ（クラフト中は手元の台を見せるので一人称のまま）
+    const third = thirdPerson && !!world && !crafting.isOpen && !death.isOpen;
     camera.layers.set(0);
     renderer.shadowMap.needsUpdate = shadowFrame++ % SHADOW_INTERVAL === 0;
+    if (third) {
+        placeThirdPerson();
+        camera.layers.enable(AVATAR_LAYER);
+        renderer.render(scene, camera); // 手や持ち物は体の手に持たせているので、重ねて描かない
+        restoreEye();
+        camera.layers.set(0);
+        return;
+    }
+    for (const el of [crosshair, pickupHint]) {
+        el.style.left = '';
+        el.style.top = '';
+    }
     renderer.render(scene, camera);
     renderer.autoClear = false;
     renderer.shadowMap.needsUpdate = false; // 手を重ねる2回目は、1回目の影を使う
@@ -545,6 +1125,7 @@ else {
     pebbles.fill();
 }
 world = chosen.meta;
+avatar.setLook(loadLook()); // タイトル画面で選び直した見た目にする
 document.getElementById('world-name').textContent = world.name;
 save(); // 新しいワールドもすぐ一覧に残るように
 refreshOverlay();

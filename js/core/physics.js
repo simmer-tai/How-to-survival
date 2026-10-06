@@ -22,6 +22,12 @@ export const COLLIDE = {
     drop: groups(G.drop, G.ground | G.wood | G.piece | G.drop),
     /** 部材を置けるか調べる問い合わせ。部材どうしの重なりはグリッドで調べるので、ここでは部材以外とだけ比べる */
     placeQuery: groups(G.piece, G.ground | G.wood | G.player),
+    /** 船を浮かべられるか調べる問い合わせ。船は ground の仲間なので、地形・岩・桟橋・ほかの船・丸太・プレイヤー・部材と比べる（落とし物は押しのけるので見ない） */
+    boatQuery: groups(G.ground, G.ground | G.wood | G.player | G.piece),
+    /** 漕いでいる船が進めるか調べる問い合わせ。地形以外の動かない物（岩・桟橋・ほかの船）と部材にだけ止められる（丸太や落とし物は押しのけ、プレイヤーとは比べない） */
+    boatMove: groups(G.ground, G.ground | G.piece),
+    /** 頭の上に雨よけがあるか調べる問い合わせ。地形・岩・桟橋・街の建物と部材に当たる（木の幹・丸太は雨よけにしない） */
+    shelterQuery: groups(G.player, G.ground | G.piece),
 };
 const tmpMatrix = new THREE.Matrix4();
 const tmpVec = new THREE.Vector3();
@@ -53,19 +59,42 @@ export class Physics {
         await RAPIER.init();
         return new Physics();
     }
-    /** 描画している地形の三角形そのものを当たり判定にする */
-    addTerrain(mesh) {
+    /**
+     * 描画している地形の三角形そのものを当たり判定にする。body は付ける剛体（街など別の場所の物は、その場所の剛体に付ける）。
+     * 自分の島の地形（body を省いたとき）は terrainCollider にもする
+     */
+    addTerrain(mesh, body = this.ground) {
         const vertices = mesh.geometry.getAttribute('position').array;
         const indices = Uint32Array.from({ length: vertices.length / 3 }, (_, i) => i);
         const desc = RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES)
             .setCollisionGroups(COLLIDE.ground)
             .setFriction(0.9);
-        this.terrainCollider = this.world.createCollider(desc, this.ground);
+        const collider = this.world.createCollider(desc, body);
+        if (body === this.ground)
+            this.terrainCollider = collider;
+        return collider;
     }
-    /** 動かない物（岩・桟橋など）を形どおりの凸包で置く */
-    addStatic(mesh) {
+    /** 動かない物（岩・桟橋など）を形どおりの凸包で置く。body は付ける剛体 */
+    addStatic(mesh, body = this.ground) {
         const desc = hullDesc(mesh, new THREE.Matrix4()).setCollisionGroups(COLLIDE.ground).setFriction(0.8);
-        return this.world.createCollider(desc, this.ground);
+        return this.world.createCollider(desc, body);
+    }
+    /** keep に当てはまらない、動いている剛体をすべて止める（プレイヤーが別の場所へ移るとき）。止めた剛体を返す */
+    park(keep) {
+        const parked = [];
+        this.world.bodies.forEach((body) => {
+            if (!body.isEnabled() || keep(body))
+                return;
+            body.setEnabled(false);
+            parked.push(body);
+        });
+        return parked;
+    }
+    /** park で止めた剛体を動かし直す（止めている間に消えた剛体は飛ばす） */
+    unpark(parked) {
+        for (const body of parked)
+            if (this.world.bodies.contains(body.handle))
+                body.setEnabled(true);
     }
     /** 剛体の位置・向きを毎フレーム object に写す */
     link(body, object) {
@@ -84,7 +113,7 @@ export class Physics {
     }
     step(dt) {
         for (const { body, radius } of this.floaters) {
-            if (!body.isDynamic())
+            if (!body.isDynamic() || !body.isEnabled())
                 continue;
             const com = body.worldCom();
             const depth = WATER_LEVEL + waveOffset(com.x, com.z) - com.y; // 波に合わせて上下する

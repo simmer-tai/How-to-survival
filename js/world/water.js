@@ -2,21 +2,21 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { WORLD_SIZE, SEA_FLOOR, terrainHeight } from './terrain.js';
 import { WATER_LEVEL } from '../core/physics.js';
-import { WAVE_GLSL, WAVE_FADE_END } from '../core/waves.js';
+import { WAVE_GLSL, WAVE_FADE_END, waveScale } from '../core/waves.js';
 const SEA_SIZE = 1200;
 const SEGMENTS = 300; // 1辺の分割数
 const DENSE_SEGMENTS = 110; // 中心から片側で細かく分割する数（残りは遠くへ引き伸ばす）
 const DENSE_HALF = WAVE_FADE_END + 5;
 const DEPTH_RES = 256;
 const DEPTH_MAX = 4;
-/** 海底の高さを焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う） */
-function bakeSeabed() {
+/** 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る */
+export function bakeSeabed(height = terrainHeight) {
     const data = new Uint8Array(DEPTH_RES * DEPTH_RES);
     for (let j = 0; j < DEPTH_RES; j++) {
         for (let i = 0; i < DEPTH_RES; i++) {
             const x = ((i + 0.5) / DEPTH_RES - 0.5) * WORLD_SIZE;
             const z = ((j + 0.5) / DEPTH_RES - 0.5) * WORLD_SIZE;
-            const k = (terrainHeight(x, z) - SEA_FLOOR) / (DEPTH_MAX - SEA_FLOOR);
+            const k = (height(x, z) - SEA_FLOOR) / (DEPTH_MAX - SEA_FLOOR);
             data[j * DEPTH_RES + i] = Math.round(THREE.MathUtils.clamp(k, 0, 1) * 255);
         }
     }
@@ -49,6 +49,8 @@ export class Sea {
     time = { value: 0 };
     /** 空の明るさ（0 が夜、1 が昼）。水中から見上げた水面の明るさに使う */
     daylight = { value: 1 };
+    /** 今いる場所の海底の高さ */
+    seabed = { value: bakeSeabed() };
     constructor() {
         const material = new THREE.MeshLambertMaterial({
             color: PALETTE.water,
@@ -56,11 +58,15 @@ export class Sea {
             transparent: true,
             opacity: 0.82,
             side: THREE.DoubleSide, // 潜ったときに水面を下から見られるように
+            // 半透明の両面は、ふつう裏と表を2回に分けて描く。海は細かくて画面いっぱいに広がり重いので1回で描く
+            // （波が重なって見えることはほとんどないので、描く順の乱れは目立たない）
+            forceSinglePass: true,
         });
         const uniforms = {
             uTime: this.time,
+            uWaveScale: waveScale,
             uDaylight: this.daylight,
-            uSeabed: { value: bakeSeabed() },
+            uSeabed: this.seabed,
             uShallow: { value: new THREE.Color(PALETTE.sky) },
             uFoam: { value: new THREE.Color(PALETTE.sky).lerp(new THREE.Color(PALETTE.sand), 0.15) },
         };
@@ -125,5 +131,9 @@ export class Sea {
     }
     setDaylight(k) {
         this.daylight.value = k;
+    }
+    /** 別の場所へ移ったときに、その場所の海底（bakeSeabed で作ったもの）にする */
+    setSeabed(tex) {
+        this.seabed.value = tex;
     }
 }

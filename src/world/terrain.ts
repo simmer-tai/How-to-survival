@@ -36,7 +36,7 @@ export function valueNoise(x: number, z: number): number {
   return THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, ux), THREE.MathUtils.lerp(c, d, ux), uz) * 2 - 1;
 }
 
-function fbm(x: number, z: number): number {
+export function fbm(x: number, z: number): number {
   return valueNoise(x, z) * 0.6 + valueNoise(x * 2.1, z * 2.1) * 0.3 + valueNoise(x * 4.3, z * 4.3) * 0.1;
 }
 
@@ -55,33 +55,63 @@ function rawHeight(x: number, z: number): number {
   return h;
 }
 
-// グリッド頂点の高さ（メッシュと歩行判定で共有する）
-const heights = new Float32Array((SEGMENTS + 1) * (SEGMENTS + 1));
-for (let j = 0; j <= SEGMENTS; j++) {
-  for (let i = 0; i <= SEGMENTS; i++) {
-    heights[j * (SEGMENTS + 1) + i] = rawHeight(-HALF + i * STEP, -HALF + j * STEP);
+/**
+ * 場所（島・街）ごとの地形。高さの関数 raw をグリッドの頂点で測り、その三角形を描いて歩く面にもする。
+ * どの場所も WORLD_SIZE 四方で、中心が原点
+ */
+export class HeightField {
+  /** グリッド頂点の高さ（メッシュと歩行判定で共有する） */
+  private readonly heights = new Float32Array((SEGMENTS + 1) * (SEGMENTS + 1));
+
+  constructor(private readonly raw: (x: number, z: number) => number) {
+    for (let j = 0; j <= SEGMENTS; j++) {
+      for (let i = 0; i <= SEGMENTS; i++) {
+        this.heights[j * (SEGMENTS + 1) + i] = raw(-HALF + i * STEP, -HALF + j * STEP);
+      }
+    }
+  }
+
+  private h(i: number, j: number): number {
+    return this.heights[j * (SEGMENTS + 1) + i];
+  }
+
+  /** 描画されている三角形そのものの高さを返す */
+  height(x: number, z: number): number {
+    const gx = (x + HALF) / STEP;
+    const gz = (z + HALF) / STEP;
+    const i = Math.floor(gx);
+    const j = Math.floor(gz);
+    if (i < 0 || j < 0 || i >= SEGMENTS || j >= SEGMENTS) return SEA_FLOOR;
+    const fx = gx - i;
+    const fz = gz - j;
+    const h00 = this.h(i, j);
+    const h10 = this.h(i + 1, j);
+    const h01 = this.h(i, j + 1);
+    const h11 = this.h(i + 1, j + 1);
+    if (fx + fz < 1) return h00 + (h10 - h00) * fx + (h01 - h00) * fz;
+    return h11 + (h01 - h11) * (1 - fx) + (h10 - h11) * (1 - fz);
+  }
+
+  /** 地形のメッシュ（砂浜・草地・岩肌に塗り分ける） */
+  createMesh(): THREE.Mesh {
+    return buildTerrainMesh((i, j) => this.h(i, j), this.raw);
   }
 }
 
-function h(i: number, j: number): number {
-  return heights[j * (SEGMENTS + 1) + i];
+/** 自分の島の地形 */
+export const islandField = new HeightField(rawHeight);
+
+/** 今プレイヤーがいる場所の地形（terrainHeight が使う） */
+let activeField = islandField;
+
+/** プレイヤーがいる場所を変えたときに、その場所の地形にする（自分の画面で使う地形が切り替わる） */
+export function setActiveField(field: HeightField): void {
+  activeField = field;
 }
 
-/** 描画されている三角形そのものの高さを返す */
+/** 今いる場所の、描画されている三角形そのものの高さを返す */
 export function terrainHeight(x: number, z: number): number {
-  const gx = (x + HALF) / STEP;
-  const gz = (z + HALF) / STEP;
-  const i = Math.floor(gx);
-  const j = Math.floor(gz);
-  if (i < 0 || j < 0 || i >= SEGMENTS || j >= SEGMENTS) return SEA_FLOOR;
-  const fx = gx - i;
-  const fz = gz - j;
-  const h00 = h(i, j);
-  const h10 = h(i + 1, j);
-  const h01 = h(i, j + 1);
-  const h11 = h(i + 1, j + 1);
-  if (fx + fz < 1) return h00 + (h10 - h00) * fx + (h01 - h00) * fz;
-  return h11 + (h01 - h11) * (1 - fx) + (h10 - h11) * (1 - fz);
+  return activeField.height(x, z);
 }
 
 const SAND_TOP = 1.5; // これより低いところは砂浜
@@ -107,7 +137,13 @@ export function isGrassAt(x: number, z: number, margin = 0): boolean {
   return 1 / Math.hypot(1, dx, dz) >= 0.8; // 地面の色分けと同じく、急な斜面は岩肌
 }
 
+/** 自分の島の地形のメッシュ */
 export function createTerrain(): THREE.Mesh {
+  return islandField.createMesh();
+}
+
+/** h(i, j) はグリッド頂点の高さ、raw は法線を求める高さの関数 */
+function buildTerrainMesh(h: (i: number, j: number) => number, raw: (x: number, z: number) => number): THREE.Mesh {
   const positions: number[] = [];
   const colors: number[] = [];
   const sand = new THREE.Color(PALETTE.sand);
@@ -173,8 +209,8 @@ export function createTerrain(): THREE.Mesh {
   for (let k = 0; k < positions.length; k += 3) {
     const x = positions[k];
     const z = positions[k + 2];
-    const dx = rawHeight(x + NORMAL_EPS, z) - rawHeight(x - NORMAL_EPS, z);
-    const dz = rawHeight(x, z + NORMAL_EPS) - rawHeight(x, z - NORMAL_EPS);
+    const dx = raw(x + NORMAL_EPS, z) - raw(x - NORMAL_EPS, z);
+    const dz = raw(x, z + NORMAL_EPS) - raw(x, z - NORMAL_EPS);
     n.set(-dx, 2 * NORMAL_EPS, -dz).normalize();
     normals.push(n.x, n.y, n.z);
   }

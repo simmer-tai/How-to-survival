@@ -14,11 +14,12 @@
       #overlay.hidden { display: none; }
       #overlay h1 { margin: 0 0 calc(12 * var(--u)); font-size: calc(32 * var(--u)); letter-spacing: 0.1em; }
       #world-name { margin-bottom: calc(6 * var(--u)); font-size: calc(15 * var(--u)); font-weight: 700; opacity: 0.75; }
-      #to-title {
+      .overlay-buttons { display: flex; gap: calc(8 * var(--u)); justify-content: center; flex-wrap: wrap; }
+      #to-title, #to-avatar {
         margin-top: calc(16 * var(--u)); padding: calc(8 * var(--u)) calc(18 * var(--u)); border: none; border-radius: calc(8 * var(--u)); cursor: pointer;
         font: inherit; font-size: calc(14 * var(--u)); font-weight: 700; color: #fff; background: rgba(255, 255, 255, 0.18);
       }
-      #to-title:hover { background: rgba(255, 255, 255, 0.3); }
+      #to-title:hover, #to-avatar:hover { background: rgba(255, 255, 255, 0.3); }
       #crosshair {
         position: fixed; left: 50%; top: 50%; width: calc(6 * var(--u)); height: calc(6 * var(--u)); margin: calc(-3 * var(--u)) 0 0 calc(-3 * var(--u));
         border-radius: 50%; background: #fff; box-shadow: 0 0 0 calc(2 * var(--u)) #2b2633; pointer-events: none;
@@ -37,7 +38,10 @@
       <div>
         <div id="world-name"></div>
         <h1>クリックして開始</h1>
-        <button id="to-title">セーブしてタイトルへ</button>
+        <div class="overlay-buttons">
+          <button id="to-avatar">アバター</button>
+          <button id="to-title">セーブしてタイトルへ</button>
+        </div>
       </div>
     </div>
     <div id="crosshair"></div>

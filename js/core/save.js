@@ -14,7 +14,19 @@ import { WorldClock } from '../world/clock.js';
 // 8 → 9：インベントリ・落とし物の道具が、使って減った耐久値（dmg）を持つようになった
 // 9 → 10：茂みが、なっている実の数（berries）を持つようになった
 // 10 → 11：岩ののこりの耐久値（rocks）が入った
-export const SAVE_VERSION = 11;
+// 11 → 12：桟橋の住人の頼みごとの進み具合（guide）が入った
+// 12 → 13：お金（wallet）が入った
+// 13 → 14：お金をインベントリのお金のマス（inventory.purse）に入れるようになった（wallet はなくなった）
+// 14 → 15：設計図で覚えたレシピ（recipes）が入った
+// 15 → 16：水に浮かべた船（boats）が入った
+// 16 → 17：プレイヤーが乗っている船の番号（player.boat）が入った
+// 17 → 18：投げて刺さった石の槍（spears）が入った
+// 18 → 19：場所（島・街）が入った。船（boats.list[].loc）とプレイヤー（player.loc）がどの場所にいるか
+// 19 → 20：コマンドメニューで決めた天気（weather）が入った
+// 20 → 21：スコップで掘った穴（holes）が入った
+// 21 → 22：掘った穴が、掘ってからたった時間（holes.list[].t）を持つようになった
+// 22 → 23：焚火の燃料と火（fires）が入った
+export const SAVE_VERSION = 23;
 /** 1 → 2：部材に並び順で ID を付ける */
 function fromV1(old) {
     const pieces = old.built.map((b, i) => ({ ...b, pid: i }));
@@ -84,6 +96,62 @@ function fromV9(old) {
 function fromV10(old) {
     return { ...old, version: 11, rocks: [] };
 }
+/** 11 → 12：頼みごとは最初から。持ち物で達成済みの目標は、読み込んだあとにすぐ進む */
+function fromV11(old) {
+    return { ...old, version: 12, guide: { step: 0 } };
+}
+/** 12 → 13：お金は 0 枚から。インベントリに残っている貝貨は、同じ枚数のコインに換える */
+function fromV12(old) {
+    let coins = 0;
+    const slots = old.inventory.slots.map((s) => {
+        if (s?.item !== 'shell')
+            return s;
+        coins += s.count;
+        return null;
+    });
+    return { ...old, version: 13, inventory: { ...old.inventory, slots }, wallet: { coins } };
+}
+/** 13 → 14：wallet のお金を、インベントリのお金のマスのコインにする */
+function fromV13({ wallet, ...old }) {
+    const coins = Math.min(wallet.coins, ITEMS.coin.maxStack);
+    return { ...old, version: 14, inventory: { ...old.inventory, purse: coins > 0 ? { item: 'coin', count: coins } : null } };
+}
+/** 14 → 15：まだ何も覚えていないとして読む */
+function fromV14(old) {
+    return { ...old, version: 15, recipes: [] };
+}
+/** 15 → 16：船はまだ1つも浮かべていないとして読む */
+function fromV15(old) {
+    return { ...old, version: 16, boats: { next: 0, list: [] } };
+}
+/** 16 → 17：boat がないプレイヤーは船に乗っていないとして読めるので、形はそのまま */
+function fromV16(old) {
+    return { ...old, version: 17 };
+}
+/** 17 → 18：刺さった槍はまだない */
+function fromV17(old) {
+    return { ...old, version: 18, spears: { next: 0, list: [] } };
+}
+/** 18 → 19：loc がない船とプレイヤーは自分の島にいるとして読めるので、形はそのまま */
+function fromV18(old) {
+    return { ...old, version: 19 };
+}
+/** 19 → 20：天気は時刻から決まる、ふだんの天気のまま */
+function fromV19(old) {
+    return { ...old, version: 20, weather: null };
+}
+/** 20 → 21：穴はまだ1つも掘っていない */
+function fromV20(old) {
+    return { ...old, version: 21, holes: { next: 0, list: [] } };
+}
+/** 21 → 22：t がない穴は掘ったばかりとして読めるので、形はそのまま */
+function fromV21(old) {
+    return { ...old, version: 22 };
+}
+/** 22 → 23：焚火はまだ1つも置いていない */
+function fromV22(old) {
+    return { ...old, version: 23, fires: [] };
+}
 const INDEX_KEY = 'warfarming:worlds';
 const dataKey = (id) => `warfarming:world:${id}`;
 /** 最後に遊んだ順 */
@@ -131,6 +199,30 @@ export function loadWorld(id) {
         data = fromV9(data);
     if (data.version === 10)
         data = fromV10(data);
+    if (data.version === 11)
+        data = fromV11(data);
+    if (data.version === 12)
+        data = fromV12(data);
+    if (data.version === 13)
+        data = fromV13(data);
+    if (data.version === 14)
+        data = fromV14(data);
+    if (data.version === 15)
+        data = fromV15(data);
+    if (data.version === 16)
+        data = fromV16(data);
+    if (data.version === 17)
+        data = fromV17(data);
+    if (data.version === 18)
+        data = fromV18(data);
+    if (data.version === 19)
+        data = fromV19(data);
+    if (data.version === 20)
+        data = fromV20(data);
+    if (data.version === 21)
+        data = fromV21(data);
+    if (data.version === 22)
+        data = fromV22(data);
     if (data.version !== SAVE_VERSION)
         throw new Error(`unknown save version: ${data.version}`);
     return data;

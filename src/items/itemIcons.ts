@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
-import { buildAxe, buildFishingRod, buildHammer, buildPickaxe, buildStoneKnife } from '../player/hand.js';
-import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel } from './itemModels.js';
+import { buildAxe, buildFishingRod, buildHammer, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
+import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildSeedModel, buildDirtModel } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
+import { FISH_KINDS, type FishId } from './fishKinds.js';
 import type { ItemId } from './inventory.js';
 
 const ICON_SIZE = 128; // 描画解像度（px）。表示はこれより小さく縮める
@@ -75,13 +76,25 @@ function buildStone(): THREE.Group {
   return g;
 }
 
-/** 芽の出たたね */
+/** 土：ふたつ寄せたかたまりを、少し上から見る */
+function buildDirtIcon(): THREE.Group {
+  const g = new THREE.Group();
+  const big = buildDirtModel();
+  const small = buildDirtModel();
+  small.scale.setScalar(0.6);
+  small.position.set(0.24, -0.06, 0.1);
+  small.rotation.y = 1.4;
+  g.add(big, small);
+  g.rotation.set(0.45, -0.3, 0);
+  return g;
+}
+
+/** 芽の出た木の種 */
 function buildSeed(): THREE.Group {
   const g = new THREE.Group();
-  const seedGeo = new THREE.SphereGeometry(0.12, 10, 8);
   const seed = (x: number, y: number, z: number, tilt: number) => {
-    const s = part(seedGeo, PALETTE.sand, x, y, z);
-    s.scale.set(0.8, 1.15, 0.8);
+    const s = buildSeedModel(); // 手に持つ木の種と同じ形
+    s.position.set(x, y, z);
     s.rotation.z = tilt;
     g.add(s);
   };
@@ -177,19 +190,62 @@ function buildVineIcon(): THREE.Group {
   return g;
 }
 
-/** 魚：頭を左下へ向けて、少し上から見る */
-function buildFishIcon(): THREE.Group {
+/** 魚：頭を左下へ向けて、少し上から見る（平たい魚は上から背中を見せる） */
+function buildFishIcon(id: FishId): THREE.Group {
   const g = new THREE.Group();
-  const fish = buildFishModel();
-  fish.rotation.z = 0.35;
+  const fish = buildFishModel(id);
+  if (FISH_KINDS[id].flat) {
+    fish.rotation.set(0.9, 0, 0.35);
+  } else {
+    fish.rotation.z = 0.35;
+  }
   g.add(fish);
   g.rotation.set(0.35, 0.3, 0);
+  return g;
+}
+
+/** コイン：少しずらして重ねた2枚。上の1枚の面を見せる */
+function buildCoinIcon(): THREE.Group {
+  const g = new THREE.Group();
+  const back = buildCoinModel();
+  back.position.set(0.1, -0.08, -0.06);
+  const front = buildCoinModel();
+  front.position.set(-0.04, 0.03, 0.04);
+  front.rotation.z = 0.2;
+  g.add(back, front);
+  g.rotation.set(-0.35, 0.3, 0);
+  return g;
+}
+
+/** 船：舳先を右へ向けて、斜め上から中が見えるように */
+function buildBoatIcon(): THREE.Group {
+  const g = new THREE.Group();
+  g.add(buildBoatModel());
+  g.rotation.set(0.5, -0.5, 0);
+  return g;
+}
+
+/** 設計図：紙の表（図面）をこちらへ向けて、少し傾ける */
+function buildBlueprintIcon(): THREE.Group {
+  const g = new THREE.Group();
+  const sheet = buildBlueprintModel();
+  sheet.rotation.x = Math.PI / 2 - 0.35;
+  g.add(sheet);
+  g.rotation.set(0, -0.25, 0.1);
   return g;
 }
 
 /** 斧やハンマーやナイフ：刃や打つ面（-Z）を画面の左へ向けて横顔を見せる */
 function sideView(tool: THREE.Group): THREE.Group {
   tool.rotation.y = Math.PI / 2;
+  const g = new THREE.Group();
+  g.add(tool);
+  return g;
+}
+
+/** スコップ：くぼんだ刃の面（-Z）を手前へ向ける */
+function frontView(tool: THREE.Group): THREE.Group {
+  tool.rotation.y = Math.PI;
   const g = new THREE.Group();
   g.add(tool);
   return g;
@@ -202,18 +258,30 @@ const MODELS: Record<ItemId, () => THREE.Object3D> = {
   stick: () => tools(buildStickModel()),
   leaf: buildLeafIcon,
   stone: buildStone,
+  dirt: buildDirtIcon,
   seed: buildSeed,
   berry: buildBerry,
-  fish: buildFishIcon,
+  fish: () => buildFishIcon('fish'),
+  clownfish: () => buildFishIcon('clownfish'),
+  snapper: () => buildFishIcon('snapper'),
+  puffer: () => buildFishIcon('puffer'),
+  flounder: () => buildFishIcon('flounder'),
+  bonito: () => buildFishIcon('bonito'),
+  coin: buildCoinIcon,
+  boatBlueprint: buildBlueprintIcon,
+  boat: buildBoatIcon,
   hoe: () => tools(buildHoe()),
   axe: () => tools(sideView(buildAxe())),
   sword: () => tools(buildSword()),
   stoneKnife: () => tools(sideView(buildStoneKnife())),
+  spear: () => tools(sideView(buildSpear())),
   vine: buildVineIcon,
   hammer: () => tools(sideView(buildHammer())),
   pickaxe: () => tools(sideView(buildPickaxe())),
+  shovel: () => tools(frontView(buildShovel())),
   fishingRod: () => tools(sideView(buildFishingRod())),
   workbench: () => pieceIconModel('workbench'),
+  campfire: () => pieceIconModel('campfire'),
 };
 
 /** 道具は斜めに置いて、少し奥行きが見える角度から見る */

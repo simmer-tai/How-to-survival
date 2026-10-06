@@ -1,5 +1,6 @@
 import { PALETTE } from '../core/palette.js';
 import { keyGuide } from './keyGuide.js';
+import { AvatarEditor } from './avatarEditor.js';
 import { createWorld, deleteWorld, listWorlds, loadWorld } from '../core/save.js';
 const css = (c) => '#' + c.toString(16).padStart(6, '0');
 const DEFAULT_NAME = '新しいワールド';
@@ -18,7 +19,10 @@ const CONTROLS = [
     ['[E] [Tab]', 'インベントリとクラフト（素材をドラッグして台に1つずつ置くと、作れる物の候補が出る。作業台は木材2・枝2）'],
     ['[1]〜[9] [ホイール]', 'アイテムを選ぶ'],
     ['部材を持って', '[左]：設置 ／ [R]：回転'],
+    ['船を持って', '[左]：水に浮かべる ／ 浮かべた船を見て [F]：乗る ・ [Q]：しまう'],
+    ['船に乗って', '[W]/[S]：漕ぐ ／ [A]/[D]：向きを変える ／ [Shift]：力いっぱい漕ぐ ／ [F]：降りる（世界の端まで漕ぐと海図が開き、街へ行ける）'],
     ['[X]', '狙った部材を壊す（部材に戻る）'],
+    ['[V]', '視点を切り替える（自分の姿が見える三人称と、一人称）'],
     ['[Esc]', '一時停止（自動でセーブされます）'],
 ];
 /**
@@ -35,6 +39,7 @@ export function showTitle() {
       <div class="title-menu">
         <button class="title-btn big primary" data-go="worlds">ひとりで遊ぶ</button>
         <button class="title-btn big" disabled title="準備中">みんなで遊ぶ<span class="title-soon">準備中</span></button>
+        <button class="title-btn big" data-go="avatar">アバター</button>
         <button class="title-btn big" data-go="help">遊び方</button>
       </div>
       <div class="title-foot"><span>${VERSION}</span><span>ワールドはこのブラウザに保存されます</span></div>
@@ -47,6 +52,13 @@ export function showTitle() {
           <input class="title-input" maxlength="24" placeholder="${DEFAULT_NAME}">
           <button class="title-btn primary" type="submit">新しく作る</button>
         </form>
+        <button class="title-btn" data-go="home">もどる</button>
+      </div>
+    </section>
+    <section class="title-page" data-page="avatar">
+      <div class="title-panel wide">
+        <div class="title-heading">アバター</div>
+        <div class="title-avatar"></div>
         <button class="title-btn" data-go="home">もどる</button>
       </div>
     </section>
@@ -63,6 +75,9 @@ export function showTitle() {
     const list = root.querySelector('.title-list');
     const form = root.querySelector('.title-new');
     const input = root.querySelector('.title-input');
+    // 自分の見た目を選ぶ（選んだらすぐこのブラウザに保存され、ゲームを始めると体に反映される）
+    const avatar = new AvatarEditor();
+    root.querySelector('.title-avatar').append(avatar.el);
     document.body.append(root);
     document.body.classList.add('on-title');
     let page = 'home';
@@ -73,6 +88,10 @@ export function showTitle() {
         }
         if (next === 'worlds')
             renderWorlds();
+        if (next === 'avatar')
+            avatar.start();
+        else
+            avatar.stop();
     };
     for (const btn of root.querySelectorAll('[data-go]')) {
         btn.addEventListener('click', () => go(btn.dataset.go));
@@ -127,6 +146,7 @@ export function showTitle() {
     return new Promise((resolve) => {
         finish = (meta, data) => {
             removeEventListener('keydown', block, { capture: true });
+            avatar.stop();
             root.remove();
             document.body.classList.remove('on-title');
             resolve({ meta, data });
@@ -213,6 +233,8 @@ function injectStyle() {
       display: flex; flex-direction: column; gap: calc(12 * var(--u));
       padding: calc(20 * var(--u)); border-radius: calc(14 * var(--u)); background: rgba(43, 38, 51, 0.85);
     }
+    .title-panel.wide { width: calc(580 * var(--u)); }
+    .title-avatar { display: flex; flex-direction: column; min-height: 0; }
     .title-heading { font-size: calc(20 * var(--u)); font-weight: 700; letter-spacing: 0.08em; color: ${css(PALETTE.sand)}; }
     .title-text { margin: 0; font-size: calc(14 * var(--u)); line-height: 1.6; opacity: 0.9; }
     .title-list { display: flex; flex-direction: column; gap: calc(6 * var(--u)); overflow-y: auto; min-height: 0; }

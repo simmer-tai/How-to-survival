@@ -4,7 +4,7 @@ import { PALETTE } from '../core/palette.js';
 import { flat, flatVertex } from '../core/materials.js';
 
 // 建築部材の形。ハンマーで素材から建てる（素材は items/recipes.ts の BUILD_PLANS）。
-// 作業台だけはアイテムとしてクラフトし、手に持って設置する（id はアイテムの id と同じ）
+// 作業台と焚火はアイテムとしてクラフトし、手に持って設置する（id はアイテムの id と同じ）
 
 export const CELL = 2; // 建築グリッドの1マス（床1枚の大きさ）
 const WALL_H = 2.4;
@@ -47,16 +47,26 @@ const FENCE_LEAN = 0.035; // 柵の縦板の傾きの最大（rad）
 const FENCE_RAILS = [0.2, 0.7]; // 柵の縦板を裏で支える横木の高さ
 const FLOOR_PLANKS = 5; // 床に張る板の枚数
 const JOIST_W = 0.12; // 床板の下の根太の幅
-const STAIR_SIDE = 0.06; // 階段の両脇の側板の厚み
+const STAIR_POLE = 0.09; // 階段の両脇の斜めの棒と、それを支える脚の太さ
 const STAIR_TREAD = 0.06; // 階段の踏み板の厚み
-const STAIR_RISER = 0.04; // 階段の段の前板の厚み
+const STAIR_TREAD_D = 0.32; // 階段の踏み板の奥行き（段の手前に寄せる。奥はすき間になる）
+const STAIR_INTO = 0.02; // 踏み板の両端を棒に差し込む長さ
+const STAIR_TIE = 0.35; // 後ろの脚どうしをつなぐ横木の高さ
 const BENCH_PLANKS = 3; // 作業台の天板の板の枚数
+export const FIRE_RING = 0.42; // 焚火を囲む石の輪の半径
+const FIRE_STONES = 9; // 焚火を囲む石の数
+const FIRE_LOGS = 4; // 焚火の真ん中に組む薪の数（三角錐に立てかける）
+const FIRE_LOG_LEN = 0.55; // 薪の長さ
+const FIRE_LOG_LEAN = 0.5; // 薪を真ん中へ倒す角度（rad）
+const FIRE_H = 0.3; // 焚火の当たり判定の高さ
+const FIRE_STONE_DETAIL = 1; // 焚火の石の丸さ（多面体を細かく割る回数。0 だと角ばる）
+const FIRE_STONE_SINK = 0.3; // 焚火の石を地面に埋める割合（高さに対して）
 
-export const PIECE_IDS = ['workbench', 'floor', 'wall', 'doorway', 'fence', 'stairs', 'foundation'] as const;
+export const PIECE_IDS = ['workbench', 'floor', 'wall', 'doorway', 'fence', 'stairs', 'foundation', 'campfire'] as const;
 export type PieceId = (typeof PIECE_IDS)[number];
 
-/** cell：マスの中央に置く　edge：マスの辺に沿って置く（壁・柵） */
-export type Snap = 'cell' | 'edge';
+/** cell：マスの中央に置く　edge：マスの辺に沿って置く（壁・柵）　free：グリッドに沿わず、狙った所に置く（作業台・焚火） */
+export type Snap = 'cell' | 'edge' | 'free';
 
 /** 部材を形づくる箱 [幅, 高さ, 奥行き, x, y, z]。y は箱の底面の高さ */
 export type Part = [number, number, number, number, number, number];
@@ -64,8 +74,8 @@ export type Part = [number, number, number, number, number, number];
 /** 箱の傾き [x, y, z]（rad）。箱の中心のまわりに回す */
 type Tilt = [number, number, number];
 
-/** 見た目の箱と、その色、傾き */
-type Look = [Part, number, Tilt?];
+/** 見た目の箱と、その色、傾き。round なら箱でなく、箱に収まる丸い石の形にする */
+type Look = [Part, number, Tilt?, 'round'?];
 
 /** 0〜1 の乱数を返す関数 */
 type Rand = () => number;
@@ -118,9 +128,10 @@ function box([w, h, d, x, y, z]: Part): THREE.BufferGeometry {
   return new THREE.BoxGeometry(w, h, d).translate(x, y + h / 2, z);
 }
 
-/** 頂点に色を塗った箱（傾きがあれば中心のまわりに回す） */
-function coloredBox([[w, h, d, x, y, z], color, tilt]: Look): THREE.BufferGeometry {
-  const g = new THREE.BoxGeometry(w, h, d);
+/** 頂点に色を塗った箱か丸い石（傾きがあれば中心のまわりに回す） */
+function coloredBox([[w, h, d, x, y, z], color, tilt, shape]: Look): THREE.BufferGeometry {
+  // 丸い石は面ごとに頂点を持つ形（インデックスなし）なので、箱とまとめるときは mergeLooks() で形をそろえる
+  const g = shape === 'round' ? new THREE.IcosahedronGeometry(0.5, FIRE_STONE_DETAIL).scale(w, h, d) : new THREE.BoxGeometry(w, h, d);
   if (tilt) g.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(...tilt)));
   g.translate(x, y + h / 2, z);
   const c = new THREE.Color(color);
@@ -129,6 +140,13 @@ function coloredBox([[w, h, d, x, y, z], color, tilt]: Look): THREE.BufferGeomet
   for (let i = 0; i < n; i++) colors.set([c.r, c.g, c.b], i * 3);
   g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   return g;
+}
+
+/** 見た目の箱や石を1つのジオメトリにまとめる（丸い石が混ざっていれば、箱もインデックスなしにそろえる） */
+function mergeLooks(looks: Look[]): THREE.BufferGeometry {
+  const geos = looks.map(coloredBox);
+  const flat = geos.some((g) => !g.index);
+  return mergeGeometries(flat ? geos.map((g) => (g.index ? g.toNonIndexed() : g)) : geos)!;
 }
 
 /** 固定シードの乱数（誰の画面でも同じ並びになる） */
@@ -159,7 +177,7 @@ function define(spec: PieceSpec): PieceDef {
   // 脚は底面いっぱいの箱を、底面から下へ伸ばす
   const legs: Part[] = spec.legs ? [[halfX * 2, spec.legs, halfZ * 2, 0, -spec.legs, 0]] : [];
   const looks = Array.from({ length: LOOK_VARIANTS }, (_, v) => {
-    const g = mergeGeometries([...spec.look(lookRand(spec.id, v)), ...legs.map((p): Look => [p, spec.color])].map(coloredBox))!;
+    const g = mergeLooks([...spec.look(lookRand(spec.id, v)), ...legs.map((p): Look => [p, spec.color])]);
     g.userData.shared = true; // 置いた部材どうしで共有するので、アイコン撮影後などに捨てない
     return g;
   });
@@ -304,21 +322,48 @@ function floorLook(rand: Rand): Look[] {
   return out;
 }
 
-/** 階段：両脇の側板、各段の踏み板（2枚）と前板。中は濃い色の下地 */
+/**
+ * 階段：両脇の斜めの棒を前後の脚で支え、棒のあいだに踏み板を1枚ずつ渡す（下は抜けている）。
+ * いちばん上の段は、板2枚を並べた踊り場
+ */
 function stairsLook(rand: Rand): Look[] {
+  const steps = stairParts();
+  const [, topH, topD, , , topZ] = steps[steps.length - 1];
+  const half = STAIR_POLE / 2;
+  const px = CELL / 2 - half; // 棒と脚の x
+  const inner = CELL - STAIR_POLE * 2; // 両脇の棒のあいだ
+  const slope = WALL_H / CELL;
   const out: Look[] = [];
-  const inner = CELL - STAIR_SIDE * 2;
-  for (const [, h, d, , , z] of stairParts()) {
-    const bottom = h - WALL_H / 4; // 一段下の高さ（前板はここから立ち上がる）
-    for (const sx of [-1, 1]) out.push([[STAIR_SIDE, h, d, sx * (CELL / 2 - STAIR_SIDE / 2), 0, z], PALETTE.trunk]);
-    out.push([[inner, h - STAIR_TREAD, d - STAIR_RISER, 0, 0, z - STAIR_RISER / 2], PALETTE.bark]);
-    out.push([[inner, h - STAIR_TREAD - bottom, STAIR_RISER, 0, bottom, z + d / 2 - STAIR_RISER / 2], PALETTE.trunk]);
-    for (const [tz, td] of split(d, 2, rand)) {
-      const tilt: Tilt = [0, wobble(rand, PLANK_TWIST), 0];
-      const plank: Look = [[inner, STAIR_TREAD, td, wobble(rand, PLANK_SHIFT), h - STAIR_TREAD, z + tz], PALETTE.trunk, tilt];
-      out.push(plank);
-    }
+
+  const tread = (z: number, d: number, y: number) => {
+    const tilt: Tilt = [wobble(rand, PLANK_TWIST), wobble(rand, PLANK_TILT / 2), wobble(rand, PLANK_TWIST)];
+    const plank: Look = [[inner + STAIR_INTO * 2, STAIR_TREAD, d, 0, y - rand() * PLANK_SINK, z + wobble(rand, PLANK_SHIFT)], PALETTE.trunk, tilt];
+    out.push(plank);
+  };
+  // 踏み板：各段の手前に1枚。いちばん上は奥まで2枚
+  for (const [, h, d, , , z] of steps.slice(0, -1)) tread(z + d / 2 - STAIR_TREAD_D / 2, STAIR_TREAD_D, h - STAIR_TREAD);
+  for (const [tz, td] of split(topD, 2, rand)) tread(topZ + tz, td, topH - STAIR_TREAD);
+
+  // 斜めの棒は踏み板の真ん中を通す。手前は短い脚に、奥は踊り場の下の受け木につなぐ
+  const [, h0, d0, , , z0] = steps[0];
+  const tz0 = z0 + d0 / 2 - STAIR_TREAD_D / 2;
+  const ty0 = h0 - STAIR_TREAD / 2;
+  const poleY = (z: number) => ty0 + slope * (tz0 - z); // 棒の中心の高さ
+  const landingY = topH - STAIR_TREAD - STAIR_POLE; // 踊り場の受け木の底
+  const front = CELL / 2 - half;
+  const back = tz0 - (landingY + half - ty0) / slope;
+  const len = Math.hypot(front - back, poleY(back) - poleY(front));
+  const mid = (front + back) / 2;
+  const backPost = -CELL / 2 + half;
+  for (const sx of [-1, 1]) {
+    out.push(
+      [[STAIR_POLE, STAIR_POLE, len, sx * px, poleY(mid) - half, mid], PALETTE.bark, [Math.atan(slope), 0, 0]],
+      [[STAIR_POLE, STAIR_POLE, topD, sx * px, landingY, topZ], PALETTE.bark],
+      [[STAIR_POLE, poleY(front), STAIR_POLE, sx * px, 0, front], PALETTE.bark, [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)]],
+      [[STAIR_POLE, landingY, STAIR_POLE, sx * px, 0, backPost], PALETTE.bark, [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)]],
+    );
   }
+  out.push([[inner, STAIR_POLE, STAIR_POLE, 0, STAIR_TIE, backPost], PALETTE.bark]);
   return out;
 }
 
@@ -339,6 +384,39 @@ function workbenchLook(rand: Rand): Look[] {
     ...rest.map((p): Look => [p, PALETTE.trunk]),
     ...split(sd, 2, rand).flatMap(([z, pd]) => plank(sw, sh, pd, sy, z)),
   ];
+}
+
+/** 焚火：輪に並べた丸い石（大きさと向きがばらつき、少し地面に埋まる）、真ん中の灰、三角錐に立てかけた薪 */
+function campfireLook(rand: Rand): Look[] {
+  const out: Look[] = [[[FIRE_RING * 1.4, 0.03, FIRE_RING * 1.4, 0, 0, 0], PALETTE.bark]]; // 灰
+  for (let i = 0; i < FIRE_STONES; i++) {
+    const a = ((i + wobble(rand, 0.15)) / FIRE_STONES) * Math.PI * 2;
+    const w = 0.24 + rand() * 0.08;
+    const h = 0.17 + rand() * 0.08;
+    const stone: Look = [
+      [w, h, 0.2 + rand() * 0.05, Math.sin(a) * FIRE_RING, -h * FIRE_STONE_SINK, Math.cos(a) * FIRE_RING],
+      PALETTE.rock,
+      [wobble(rand, 0.25), a + wobble(rand, 0.3), wobble(rand, 0.25)], // 長い辺を輪に沿わせる
+      'round',
+    ];
+    out.push(stone);
+  }
+  // 薪は根元を輪の内側に置き、先を真ん中に寄せる（箱は中心のまわりに回すので、中心を内側へずらしておく）
+  const lean = Math.sin(FIRE_LOG_LEAN) * (FIRE_LOG_LEN / 2);
+  for (let i = 0; i < FIRE_LOGS; i++) {
+    const a = ((i + 0.5) / FIRE_LOGS) * Math.PI * 2 + wobble(rand, 0.2);
+    const sx = Math.sin(a);
+    const sz = Math.cos(a);
+    const r = FIRE_RING * 0.5 - lean;
+    const y = (Math.cos(FIRE_LOG_LEAN) * FIRE_LOG_LEN) / 2 - FIRE_LOG_LEN / 2;
+    const log: Look = [
+      [0.07, FIRE_LOG_LEN, 0.07, sx * r, y, sz * r],
+      i % 2 === 0 ? PALETTE.trunk : PALETTE.bark,
+      [-FIRE_LOG_LEAN * sz, 0, FIRE_LOG_LEAN * sx],
+    ];
+    out.push(log);
+  }
+  return out;
 }
 
 /** 階段の当たり判定：-Z へ向かって上る4段（凸包にするのでなめらかな坂になる） */
@@ -412,7 +490,7 @@ function blueprint(): THREE.Object3D {
 }
 
 export const PIECES: PieceDef[] = [
-  define({ id: 'workbench', snap: 'cell', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: blueprint }),
+  define({ id: 'workbench', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: blueprint }),
   define({ id: 'floor', snap: 'cell', color: PALETTE.trunk, look: floorLook, collision: [[CELL, FLOOR_H, CELL, 0, 0, 0]], platform: true, hp: 8 }),
   define({ id: 'wall', snap: 'edge', color: PALETTE.trunk, look: wallLook, collision: [[CELL, WALL_H, WALL_T, 0, 0, 0]], platform: false, hp: 10 }),
   define({ id: 'doorway', snap: 'edge', color: PALETTE.trunk, look: doorwayLook, collision: doorwayParts(), platform: false, hp: 10 }),
@@ -428,6 +506,15 @@ export const PIECES: PieceDef[] = [
     platform: true,
     hp: 20,
   }),
+  define({
+    id: 'campfire',
+    snap: 'free',
+    color: PALETTE.rock,
+    look: campfireLook,
+    collision: [[FIRE_RING * 2 + 0.2, FIRE_H, FIRE_RING * 2 + 0.2, 0, 0, 0]],
+    platform: false,
+    hp: 4,
+  }),
 ];
 const PIECE_BY_ID = new Map<string, PieceDef>(PIECES.map((d) => [d.id, d]));
 
@@ -440,8 +527,8 @@ export function pieceDef(id: string): PieceDef | undefined {
 export function pieceIconModel(id: PieceId): THREE.Object3D {
   const def = PIECE_BY_ID.get(id)!;
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(mergeGeometries(def.look(lookRand(id, 0)).map(coloredBox))!, flatVertex()));
+  g.add(new THREE.Mesh(mergeLooks(def.look(lookRand(id, 0))), flatVertex()));
   if (def.details) g.add(def.details());
-  g.rotation.set(0.45, id === 'stairs' ? 2.4 : -0.6, 0);
+  g.rotation.set(id === 'campfire' ? 0.7 : 0.45, id === 'stairs' ? 2.4 : -0.6, 0);
   return g;
 }

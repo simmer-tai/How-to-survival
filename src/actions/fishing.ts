@@ -4,7 +4,9 @@ import { flat } from '../core/materials.js';
 import { terrainHeight } from '../world/terrain.js';
 import { WATER_LEVEL } from '../core/physics.js';
 import { waveOffset } from '../core/waves.js';
-import { BOBBER_R, buildBobberModel } from '../items/itemModels.js';
+import { BOBBER_R, buildBobberModel, buildFishModel } from '../items/itemModels.js';
+import { FISH_KINDS, pickFish, type FishId } from '../items/fishKinds.js';
+import { itemIcon } from '../items/itemIcons.js';
 import type { ItemId } from '../items/inventory.js';
 import type { FishingRodRig, ToolHand } from '../player/hand.js';
 import type { Vec3 } from '../player/handModel.js';
@@ -50,6 +52,11 @@ const POSE_LINE_OUT: [Vec3, Vec3] = [[0, -0.03, -0.03], [-0.2, 0, 0]]; // 糸を
 const POSE_HOOKED: [Vec3, Vec3] = [[0, -0.02, -0.06], [-0.4, 0, 0]]; // 魚に引かれている間
 const FLICK_TIME = 0.14; // 前へ振り出している時間（秒）
 const POSE_RATE = 14; // 構えが目標に近づく速さ
+const BIG_POWER = 1.3; // 引く強さがこれ以上の魚は、かかったときに「大物だ！」と出す
+const LEAP_TIME = 0.75; // 釣り上げた魚が水から跳ねて手元へ飛んでくる時間（秒）
+const LEAP_HEIGHT = 2.2; // 跳ねる高さ（m）
+const LEAP_MAX_SCALE = 2.4; // 飛んでくる魚の大きさの上限（手に持つモデルの何倍まで実寸に近づけるか）
+const CARD_TIME = 2.6; // 釣れた魚のカードを出しておく時間（秒）
 const SPLASH_GRAVITY = 14;
 const splashGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
 
@@ -57,6 +64,8 @@ const splashGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
 type State = 'idle' | 'charging' | 'flying' | 'out' | 'hooked';
 
 interface Drop { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }
+/** 釣り上げて手元へ飛んでくる魚（自分の画面にだけ出す演出） */
+interface Leap { model: THREE.Group; from: THREE.Vector3; time: number }
 
 export class Fisher {
   private state: State = 'idle';
@@ -81,6 +90,10 @@ export class Fisher {
   private readonly tipPos = new THREE.Vector3();
   private readonly raycaster = new THREE.Raycaster();
   private readonly drops: Drop[] = [];
+  private kind: FishId = 'fish'; // かかっている魚
+  private leap: Leap | null = null;
+  private readonly card: HTMLElement;
+  private cardTimer = 0;
   private readonly gauge: HTMLElement;
   private readonly gaugeFill: HTMLElement;
 
@@ -93,6 +106,8 @@ export class Fisher {
     private readonly rig: FishingRodRig,
     /** 飛んでいるウキが当たって止まる物（地形・岩・建てた部材など） */
     private readonly obstacles: THREE.Object3D[],
+    /** 今が夜か（夜にだけ釣れる魚がいる） */
+    private readonly isNight: () => boolean,
   ) {
     const geo = new THREE.BufferGeometry();
     this.linePos = new THREE.BufferAttribute(new Float32Array(LINE_POINTS * 3), 3);
@@ -108,6 +123,9 @@ export class Fisher {
     this.gaugeFill = document.createElement('div');
     this.gauge.append(this.gaugeFill);
     document.body.append(this.gauge);
+    this.card = document.createElement('div');
+    this.card.className = 'fish-card';
+    document.body.append(this.card);
   }
 
   /** 右クリックを押した：ゲージを溜め始める */
@@ -162,7 +180,7 @@ export class Fisher {
       case 'charging':
         return '[右]を離す：投げる';
       case 'hooked':
-        return 'かかった！ [左長]：巻き上げる';
+        return `${FISH_KINDS[this.kind].power >= BIG_POWER ? '大物だ！' : 'かかった！'} [左長]：巻き上げる`;
       case 'out':
         return this.depth() < MIN_DEPTH ? '[左長]：巻き取る（ここは浅くて魚がかからない）' : '[左長]：巻き取る';
       default:
@@ -173,6 +191,9 @@ export class Fisher {
   /** active は釣り竿を手に持っているか（持っていなければ糸を引き上げる） */
   update(dt: number, camera: THREE.Camera, active: boolean): void {
     this.updateDrops(dt);
+    this.updateLeap(dt, camera);
+    this.cardTimer = Math.max(this.cardTimer - dt, 0);
+    if (this.cardTimer <= 0) this.card.classList.remove('show');
     if (!active) {
       if (this.state !== 'idle') this.cancel();
       this.gauge.classList.add('hidden');
@@ -252,10 +273,12 @@ export class Fisher {
           ? THREE.MathUtils.lerp(RUN_TIME_MIN, RUN_TIME_MAX, Math.random())
           : THREE.MathUtils.lerp(RUN_EVERY_MIN, RUN_EVERY_MAX, Math.random());
       }
-      speed = this.reeling ? HOOKED_REEL_SPEED : -FISH_PULL_SPEED;
-      if (this.running) speed -= RUN_PULL_SPEED;
+      // 強い魚ほど巻くのが重く、沖へ強く引っぱる
+      const { power, patience } = FISH_KINDS[this.kind];
+      speed = this.reeling ? HOOKED_REEL_SPEED / Math.sqrt(power) : -FISH_PULL_SPEED * power;
+      if (this.running) speed -= RUN_PULL_SPEED * power;
       this.escapeTimer = this.reeling ? Math.max(this.escapeTimer - dt, 0) : this.escapeTimer + dt;
-      if (this.escapeTimer >= ESCAPE_TIME) {
+      if (this.escapeTimer >= ESCAPE_TIME * patience) {
         showToast('魚に逃げられた');
         this.state = 'out';
         this.land();
@@ -273,7 +296,7 @@ export class Fisher {
     if (depth > 0.05) {
       // 浮かぶ。魚がかかっていれば沈められて、左右に暴れる
       if (hooked) {
-        const thrash = this.running ? 2 : 1;
+        const thrash = (this.running ? 2 : 1) * Math.min(FISH_KINDS[this.kind].power, 1.5);
         p.y = surface - 0.12 + Math.sin(this.time * 21) * 0.04 * thrash;
         this.bobber.rotation.set(Math.sin(this.time * 17) * 0.5 * thrash, 0, Math.sin(this.time * 13) * 0.5 * thrash);
         this.splashTimer -= dt;
@@ -295,9 +318,7 @@ export class Fisher {
     // 魚がかかったまま陸へ引き上げるか足元まで寄せたら釣れる。何もかかっていなければ手元に戻る
     if (hooked && (depth <= 0.05 || dist < CATCH_DIST)) {
       this.splash(p, 8);
-      this.cancel();
-      showToast('魚が釣れた！');
-      this.onCatch('fish', 1);
+      this.landCatch(p, camera);
       return;
     }
     if (!hooked && this.reeling && dist < CATCH_DIST) {
@@ -310,6 +331,7 @@ export class Fisher {
       this.biteTimer -= dt;
       if (this.biteTimer <= 0) {
         this.state = 'hooked';
+        this.kind = pickFish(depth, this.isNight());
         this.escapeTimer = 0;
         this.running = true; // かかった瞬間に走り出す
         this.runTimer = THREE.MathUtils.lerp(RUN_TIME_MIN, RUN_TIME_MAX, Math.random());
@@ -389,6 +411,65 @@ export class Fisher {
     this.linePos.needsUpdate = true;
   }
 
+  // ---- 釣り上げる ----
+
+  /** かかっていた魚を釣り上げる：インベントリに入れ、水から跳ねて手元へ飛んでくる魚と、名前と大きさのカードを出す */
+  private landCatch(from: THREE.Vector3, camera: THREE.Camera): void {
+    const id = this.kind;
+    const k = FISH_KINDS[id];
+    this.cancel();
+    this.onCatch(id, 1);
+    const cm = Math.round(THREE.MathUtils.lerp(k.sizeCm[0], k.sizeCm[1], Math.pow(Math.random(), 1.6))); // 大きいのはたまにしか釣れない
+
+    this.leap?.model.removeFromParent();
+    const model = buildFishModel(id);
+    model.scale.setScalar(THREE.MathUtils.clamp(cm / 100 / k.length, 0.6, LEAP_MAX_SCALE));
+    this.world.add(model);
+    this.leap = { model, from: from.clone(), time: 0 };
+    this.updateLeap(0, camera);
+
+    this.card.innerHTML = '';
+    const icon = document.createElement('img');
+    icon.src = itemIcon(id);
+    const text = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'fish-card-title';
+    title.textContent = `${k.name}が釣れた！`;
+    const info = document.createElement('div');
+    info.className = 'fish-card-info';
+    const stars = document.createElement('span');
+    stars.className = 'fish-card-stars';
+    stars.textContent = '★'.repeat(k.rarity) + '☆'.repeat(3 - k.rarity);
+    info.append(stars, ` ${cm} cm`);
+    text.append(title, info);
+    this.card.append(icon, text);
+    this.card.classList.remove('show');
+    void this.card.offsetWidth; // 続けて釣れたときも、もう一度ポンと出す
+    this.cardTimer = CARD_TIME;
+    this.card.classList.add('show');
+  }
+
+  /** 跳ねた魚を、水面から放物線を描いて目の前まで飛ばし、体をくねらせる */
+  private updateLeap(dt: number, camera: THREE.Camera): void {
+    const leap = this.leap;
+    if (!leap) return;
+    leap.time += dt;
+    const t = leap.time / LEAP_TIME;
+    if (t >= 1) {
+      leap.model.removeFromParent();
+      this.leap = null;
+      return;
+    }
+    const to = camera.position.clone().add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(1.1));
+    to.y -= 0.25;
+    const m = leap.model;
+    m.position.lerpVectors(leap.from, to, THREE.MathUtils.smoothstep(t, 0, 1));
+    m.position.y += Math.sin(t * Math.PI) * LEAP_HEIGHT;
+    // 体を横に向けて、頭を上げ下げしながら尾を振る
+    const yaw = Math.atan2(to.x - leap.from.x, to.z - leap.from.z) + Math.PI / 2;
+    m.rotation.set(Math.sin(leap.time * 30) * 0.35, yaw + Math.sin(leap.time * 22) * 0.4, (0.5 - t) * 1.6);
+  }
+
   // ---- 水しぶき（自分の画面にだけ出す演出） ----
 
   private splash(point: THREE.Vector3, count: number): void {
@@ -435,6 +516,22 @@ function injectStyle(): void {
       background: linear-gradient(90deg, ${css(PALETTE.grass)}, ${css(PALETTE.sand)});
     }
     .fish-gauge.full > div { background: ${css(PALETTE.accent)}; }
+    .fish-card {
+      position: fixed; left: 50%; top: calc(90 * var(--u)); transform: translateX(-50%) scale(0.6);
+      display: flex; align-items: center; gap: calc(12 * var(--u));
+      padding: calc(10 * var(--u)) calc(22 * var(--u)) calc(10 * var(--u)) calc(12 * var(--u));
+      border-radius: calc(18 * var(--u)); background: ${css(PALETTE.sand)}; color: #2b2633;
+      border: calc(3 * var(--u)) solid #2b2633; box-shadow: 0 calc(5 * var(--u)) 0 rgba(43, 38, 51, 0.35);
+      opacity: 0; pointer-events: none; z-index: 5; transition: opacity 0.2s, transform 0.25s cubic-bezier(.3, 1.6, .5, 1);
+    }
+    .fish-card.show { opacity: 1; transform: translateX(-50%) scale(1); }
+    .fish-card img {
+      width: calc(64 * var(--u)); height: calc(64 * var(--u)); border-radius: calc(12 * var(--u));
+      background: ${css(PALETTE.sky)};
+    }
+    .fish-card-title { font-size: calc(22 * var(--u)); font-weight: bold; }
+    .fish-card-info { font-size: calc(17 * var(--u)); margin-top: calc(2 * var(--u)); }
+    .fish-card-stars { color: ${css(PALETTE.accent)}; letter-spacing: calc(2 * var(--u)); }
   `;
   document.head.append(style);
 }
