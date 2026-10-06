@@ -1,7 +1,10 @@
 // マルチプレイの進め方。部屋を作った人（ホスト）のブラウザが世界の正しい状態を持ち、参加者はホストとだけやりとりする
 // （つなぎ方は link.ts。部屋コードで PeerJS の WebRTC につなぐ）。
 // - 共有ワールドの変更：参加者は頼み（WorldRequest）をホストへ送り、ホストが確かめてコマンドにして、全員が同じように適用する
-// - 物理で動く物（落とし物・倒れた木）の位置と、ワールドの時刻は、ホストがときどき配る
+// - 物理で動く物（落とし物・倒れた木）の位置は、場所ごとの担当がときどき送る。担当はホストが決める：
+//   ホストがいる場所はホスト、いない場所はそこにいる人のうち番号がいちばん小さい人（今いない場所の剛体は止めているので、
+//   その場所にいる人の物理でないと動かない）。参加者が担当なら、ホストへ送り、ホストが自分の記録に写してほかの人へ配る
+// - ワールドの時刻は、ホストがときどき配る
 // - 自分の様子（位置・持ち物など）は各自が送り、ホストがほかの人へ配る
 import { toLook } from '../player/avatar.js';
 import { GuestLink, HostLink } from './link.js';
@@ -43,6 +46,10 @@ export class Multiplayer {
     queue = null;
     poseTimer = 0;
     motionTimer = 0;
+    /** 場所ごとの物理の担当（場所 → 担当の人の番号）。ホストが決めて配る */
+    sims = new Map();
+    /** ホスト：参加者ごとの、いる場所（届いた様子から） */
+    locs = new Map();
     clockTimer = 0;
     /** 人が入った */
     onJoin = () => { };
@@ -168,22 +175,52 @@ export class Multiplayer {
             else
                 this.guestLink?.send({ t: 'pose', pose });
         }
+        if (this.role === 'host')
+            this.assignSims();
+        // 自分が物理の担当になっている場所（いつも自分がいる場所）の、動いている物の位置を送る
+        this.motionTimer += dt;
+        if (this.motionTimer >= MOTION_INTERVAL && this.peers.size > 0) {
+            this.motionTimer = 0;
+            const here = this.hooks.here();
+            if (this.sims.get(here) === this.myId) {
+                const pack = (list) => list.map((row) => row.map((v, i) => (i === 0 ? v : round(v, 3))));
+                const at = this.hooks
+                    .motion([here])
+                    .at.filter(([, d, t]) => d.length > 0 || t.length > 0)
+                    .map(([loc, d, t]) => [loc, pack(d), pack(t)]);
+                if (at.length > 0) {
+                    if (this.role === 'host')
+                        this.toAll({ t: 'motion', at });
+                    else
+                        this.guestLink?.send({ t: 'motion', at });
+                }
+            }
+        }
         if (this.role !== 'host' || this.peers.size === 0)
             return;
-        this.motionTimer += dt;
-        if (this.motionTimer >= MOTION_INTERVAL) {
-            this.motionTimer = 0;
-            const { drops, trees, isles = [] } = this.hooks.motion();
-            const pack = (list) => list.map((row) => row.map((v, i) => (i === 0 ? v : round(v, 3))));
-            const moving = isles.filter(([, d, t]) => d.length > 0 || t.length > 0).map(([i, d, t]) => [i, pack(d), pack(t)]);
-            if (drops.length > 0 || trees.length > 0 || moving.length > 0)
-                this.toAll({ t: 'motion', drops: pack(drops), trees: pack(trees), isles: moving });
-        }
         this.clockTimer += dt;
         if (this.clockTimer >= CLOCK_INTERVAL) {
             this.clockTimer = 0;
             this.toAll({ t: 'clock', minutes: this.hooks.minutes() });
         }
+    }
+    /** ホスト：みんながいる場所から物理の担当を決め直し、変わったら全員に配る */
+    assignSims() {
+        const next = new Map();
+        const claim = (loc, id) => {
+            const cur = next.get(loc);
+            if (cur === undefined || id < cur)
+                next.set(loc, id);
+        };
+        claim(this.hooks.here(), this.myId); // ホストの番号は 0 なので、ホストがいる場所はいつもホスト
+        for (const [id, loc] of this.locs)
+            if (this.peers.has(id))
+                claim(loc, id);
+        const same = next.size === this.sims.size && [...next].every(([loc, id]) => this.sims.get(loc) === id);
+        if (same)
+            return;
+        this.sims = next;
+        this.toAll({ t: 'sims', at: [...next] });
     }
     /** 道具を振った（ほかの人の画面でも体が振る） */
     swing(kind) {
@@ -213,6 +250,7 @@ export class Multiplayer {
                 // 入ってきた人に世界をまるごと送り、ほかの人には入ってきたことを知らせる
                 const peers = [this.mePeer, ...[...this.peers.values()].filter((p) => p.id !== from)];
                 this.toOne(from, { t: 'world', you: from, world: this.world, data: this.hooks.shared(), peers });
+                this.toOne(from, { t: 'sims', at: [...this.sims] });
                 this.toAll({ t: 'peer', peer }, from);
                 this.onJoin(peer.name);
                 return;
@@ -222,6 +260,7 @@ export class Multiplayer {
                 if (!peer)
                     return;
                 this.removePeer(from);
+                this.locs.delete(from);
                 this.hooks.left(from);
                 this.toAll({ t: 'gone', id: from });
                 this.onLeave(peer.name);
@@ -258,6 +297,17 @@ export class Multiplayer {
                 this.others.swing(from, data.kind);
                 this.toAll({ t: 'swing', id: from, kind: data.kind }, from);
                 return;
+            case 'motion': {
+                // その場所の担当から届いた分だけを、自分の記録に写してほかの人へ配る
+                if (!this.peers.has(from) || !Array.isArray(data.at))
+                    return;
+                const at = data.at.filter((e) => Array.isArray(e) && this.sims.get(e[0]) === from);
+                if (at.length === 0)
+                    return;
+                this.hooks.setMotion({ at });
+                this.toAll({ t: 'motion', at }, from);
+                return;
+            }
         }
     }
     /** 参加者：ホスト（とサーバー）から届いたもの。ゲームが組み上がるまではためておく */
@@ -289,8 +339,18 @@ export class Multiplayer {
                 if (Number.isFinite(msg.minutes))
                     this.hooks.setMinutes(msg.minutes);
                 return;
-            case 'motion':
-                this.hooks.setMotion(msg);
+            case 'motion': {
+                // 自分が担当している場所の分は、自分の物理で決めるので使わない
+                if (!Array.isArray(msg.at))
+                    return;
+                const at = msg.at.filter((e) => Array.isArray(e) && this.sims.get(e[0]) !== this.myId);
+                if (at.length > 0)
+                    this.hooks.setMotion({ at });
+                return;
+            }
+            case 'sims':
+                if (Array.isArray(msg.at))
+                    this.sims = new Map(msg.at.filter((e) => Array.isArray(e) && typeof e[0] === 'string' && Number.isInteger(e[1])));
                 return;
             case 'pose':
                 if (msg.id !== this.myId)
@@ -318,6 +378,8 @@ export class Multiplayer {
         }
     }
     takePose(id, pose) {
+        if (this.role === 'host' && typeof pose.loc === 'string')
+            this.locs.set(id, pose.loc);
         this.others.setPose(id, pose);
         if (pose.boat)
             this.hooks.followBoat(...pose.boat);
@@ -345,6 +407,8 @@ export class Multiplayer {
         this.peers.clear();
         this.pending.clear();
         this.others.clear();
+        this.sims.clear();
+        this.locs.clear();
         this.queue = null;
     }
     toAll(data, except) {

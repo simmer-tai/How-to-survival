@@ -664,12 +664,22 @@ const net = new Multiplayer(
     apply: applyWorld,
     undo: undoRequest,
     shared: () => sharedSnapshot(),
-    motion: () => ({ drops: drops.motion(), trees: chopper.motion(), isles: isles.motion() }),
+    // 物理で動く物の位置は、場所ごとに [場所, 落とし物, 木] でやりとりする（計算するのは、その場所の物理の担当）
+    motion: (places) => ({
+      at: places.flatMap((loc): [string, number[][], number[][]][] => {
+        const k = kitAt(toLocation(loc));
+        return k && toLocation(loc) === loc ? [[loc, k.drops.motion(), k.chopper.motion()]] : [];
+      }),
+    }),
     setMotion: (m) => {
-      drops.setMotion(m.drops ?? []);
-      chopper.setMotion(m.trees ?? []);
-      if (Array.isArray(m.isles)) isles.setMotion(m.isles);
+      for (const [loc, d, t] of m.at) {
+        const k = toLocation(loc) === loc ? kitAt(toLocation(loc)) : null;
+        if (!k || !Array.isArray(d) || !Array.isArray(t)) continue;
+        k.drops.setMotion(d);
+        k.chopper.setMotion(t);
+      }
     },
+    here: () => here,
     minutes: () => clock.minutes,
     setMinutes: (minutes) => (clock.minutes = minutes),
     followBoat: (bid, x, z, yaw) => boats.follow(bid, x, z, yaw),

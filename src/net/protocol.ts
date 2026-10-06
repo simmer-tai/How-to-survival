@@ -1,6 +1,7 @@
 // マルチプレイで送り合うメッセージの形。
 // ホストのブラウザと参加者のブラウザが、PeerJS（WebRTC）で直接 JSON を送り合う（つなぎ方は link.ts）。
-// 参加者どうしは直接やりとりせず、いつもホストを通す（ホストが世界の正しい状態を持つ）
+// 参加者どうしは直接やりとりせず、いつもホストを通す（ホストが世界の正しい状態を持つ。
+// ただし物理で動く物の位置だけは、場所ごとの担当（その場所にいる人）が計算して送る）
 
 import type { WorldCommand, WorldRequest } from '../core/commands.js';
 import type { SharedWorld } from '../core/save.js';
@@ -42,16 +43,18 @@ export type GuestMsg =
   | { t: 'req'; n: number; req: WorldRequest }
   | { t: 'pose'; pose: PoseMsg }
   | { t: 'look'; look: AvatarLook }
-  | { t: 'swing'; kind: AvatarSwing };
+  | { t: 'swing'; kind: AvatarSwing }
+  /** 物理の担当になっている場所の、動いている物の位置 */
+  | ({ t: 'motion' } & Motion);
 
 /** ホストの部屋（link.ts の HostLink）が届ける形（from は送った参加者。join・leave はつながり・切れたときに HostLink が知らせる） */
 export interface FromGuest { from: number; data: GuestMsg | { t: 'join' } | { t: 'leave' } }
 
 /**
- * 動いている物の位置（ホストの物理で決めた値）。中身は drops.motion()・chopper.motion() の形。
- * isles は海図に載せた島の分で、[島の番号, 落とし物, 木] の並び（world/isles.ts の motion()）
+ * 動いている物の位置（その場所の物理の担当が計算した値）。場所ごとに [場所（LocationId）, 落とし物, 木] を並べる。
+ * 落とし物・木の中身は drops.motion()・chopper.motion() の形
  */
-export interface Motion { drops: number[][]; trees: number[][]; isles?: [number, number[][], number[][]][] }
+export interface Motion { at: [string, number[][], number[][]][] }
 
 /** ホストから参加者へ */
 export type HostMsg =
@@ -69,7 +72,9 @@ export type HostMsg =
   | { t: 'peer'; peer: PeerInfo }
   /** 人が抜けた */
   | { t: 'gone'; id: number }
-  | { t: 'swing'; id: number; kind: AvatarSwing };
+  | { t: 'swing'; id: number; kind: AvatarSwing }
+  /** 場所ごとの物理の担当 [場所, 担当の人の番号]（だれもいない場所は入らない） */
+  | { t: 'sims'; at: [string, number][] };
 
 /** ホストが送るときの宛先（to の人へ data を届ける。'all' なら except 以外の全員） */
 export interface ToGuests { to: number | 'all'; except?: number; data: HostMsg }

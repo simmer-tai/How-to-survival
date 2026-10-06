@@ -14,6 +14,7 @@ import { addIsle, isleId, isleIndex, setIsles } from './location.js';
 // 島の地図から海図に載せた島（共有ワールド）。島の地図を海図に書き写す（chartIsle）と、誰の海図にも載り、船で渡れるようになる。
 // 島の地面と木・茂み・岩の置き方は島の地図の中身から決めるので、誰の画面でも同じになる（world/isle.ts・world/props.ts）。
 // 木を切る・茂みを刈る・岩を掘る・物を落とす仕組みは、自分の島と同じクラスを島ごとに1組ずつ持つ（番号も島ごとに別々）。
+// 倒れていく木・転がる物の動きは、マルチではその島にいる人（物理の担当）が計算して配る（net/multiplayer.ts）。
 // それぞれのコマンドには loc（どの島か）が入り、main がその島へ振り分ける。
 // 今いない島の剛体は core/physics.ts が止めておき、その島へ移ったときに動かし直す
 const MAX_ISLES = 24; // 海図に載せられる島の数
@@ -73,20 +74,6 @@ export class Isles {
             isle.group.add(isle.grass.mesh);
         }
         return isle.grass;
-    }
-    // ---- マルチ：転がる動きはホストの物理で決めて配る ----
-    /** 島ごとの [島の番号, 落とし物の動き, 木の動き]（ホストがときどき配る） */
-    motion() {
-        return this.list.map((isle, i) => [i, isle.drops.motion(), isle.chopper.motion()]);
-    }
-    setMotion(list) {
-        for (const [i, drops, trees] of list) {
-            const isle = this.list[i];
-            if (!isle || !Array.isArray(drops) || !Array.isArray(trees))
-                continue;
-            isle.drops.setMotion(drops);
-            isle.chopper.setMotion(trees);
-        }
     }
     // ---- セーブ ----
     serialize() {

@@ -147,9 +147,12 @@ export class Physics {
     return parked;
   }
 
-  /** park で止めた剛体を動かし直す（止めている間に消えた剛体は飛ばす） */
+  /**
+   * park で止めた剛体を動かし直す（止めている間に消えた剛体は飛ばす）。
+   * 消えた剛体の番号（handle）は新しい剛体が使い回すことがあるので、番号でなく同じ剛体かどうかで確かめる
+   */
   unpark(parked: RAPIER.RigidBody[]): void {
-    for (const body of parked) if (this.world.bodies.contains(body.handle)) body.setEnabled(true);
+    for (const body of parked) if (this.world.bodies.get(body.handle) === body) body.setEnabled(true);
   }
 
   /** 剛体の位置・向きを毎フレーム object に写す */

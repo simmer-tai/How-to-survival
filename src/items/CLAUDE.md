@@ -13,7 +13,7 @@
 | `recipes.ts` | クラフトのレシピ `RECIPES`（作る場所 `Station`：手元・作業台・製図台、`locked` は設計図で覚えるまで作れない。今は船・ツルハシ・槍・ハンマー・釣り竿・製図台。島の地図は決まったレシピでなく、`actions/crafting.ts` が製図台で候補を出す）と、建築部材に使う素材 `BUILD_PLANS` | — |
 | `recipeBook.ts` | 設計図で覚えたレシピ（`RecipeBook`）。設計図を持って右クリックで覚え、設計図は1枚なくなる（もう覚えていたら減らない） | 自分だけ |
 | `trades.ts` | 住人ごとの取引の一覧 `TRADES`（`MerchantId`：`pier`・`farmer`・`mapmaker`。地図売りは白紙の地図・製図台の設計図・地形のメモを売る）。住人は在庫を持たず、自分のインベントリだけが変わる | 自分だけ |
-| `drops.ts` | 落ちている物（`ItemDrops`）。自分の島と、海図に載せた島ごとに1つずつある（島のものは `at = { loc }` で、コマンドに島が入る）。落とす・拾うはワールドコマンド（`dropItem`・`pickDrop`）。物理で動くので、マルチではホストの物理の位置（`motion()`）を参加者に配る（`setMotion()`） | 共有 |
+| `drops.ts` | 落ちている物（`ItemDrops`）。自分の島と、海図に載せた島ごとに1つずつある（島のものは `at = { loc }` で、コマンドに島が入る）。落とす・拾うはワールドコマンド（`dropItem`・`pickDrop`）。物理で動くので、マルチではその場所の物理の担当が計算した位置（`motion()`）をほかの人に配る（`setMotion()`） | 共有 |
 | `landInfo.ts` | 地形のメモ。地形の種類 `LAND_KINDS` とメモでの呼び名 `LAND_NAMES`（木々の海・風の原・白い渚・灰の牙・空を映す水・切り立つ岸・激流・笹・船喰い・水流・空洞）。アイテムの id は `forestInfo` のように `${地形}Info`（`landInfoId()`）。地図屋で買う。製図台で白紙の地図と組み合わせて島の地図にする | — |
 | `islandChart.ts` | 島の地図の中身。種（seed）と組み合わせたメモ（told）を1つの整数 `chart` にまとめる（`newChart()`・`validChart()`）。本当に島にある地形（lands）と島の名前は、`readChart()` が seed と told からいつも同じ計算で決める。メモの数が多いほど、どの地形も出にくくなり（`SHOW_BASE`・`SHOW_DECAY`）、メモにない地形が混ざりやすくなる（`EXTRA_BASE`・`EXTRA_STEP`）。全部外れたら1つは必ず出す。メモは `CHART_MAX_TOLD`（5）種類まで。地図を作るのは自分だけの行動なので、種は作った人のブラウザで `Math.random()` で決める（釣りの魚と同じ）。出る見込みと lands はプレイヤーに見せない | — |
 | `fishKinds.ts` | 釣れる魚の種類 `FISH_KINDS`（見た目・場所と時間・引きの強さ）。釣りは自分だけの行動なので `Math.random()` で決めてよい | — |
