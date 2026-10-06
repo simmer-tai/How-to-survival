@@ -13,24 +13,24 @@ import {
 const W = 6; // 1階の幅（X）
 const D = 7.2; // 1階の奥行き（Z）
 const PLINTH_H = 0.4; // 1階の足元の、少し張り出した土台の石の高さ
-const GF_H = 2.8; // 1階の壁の高さ
+export const GF_H = 2.8; // 1階の壁の高さ
 const COURSE = 0.4; // 1階の石積みの1段の高さ
 const BLOCK_MIN = 0.55; // 1階の石の長さ（最小・最大）
 const BLOCK_MAX = 1.1;
 const JOINT = 0.05; // 石と石のすきま（目地）
-const BAND = 0.3; // 1階と2階の間の梁の帯の高さ
+export const BAND = 0.3; // 1階と2階の間の梁の帯の高さ
 const JETTY = 0.4; // 2階が1階より外へ張り出す長さ
 const UF_H = 2.4; // 2階の壁の高さ
 const GABLE_JETTY = 0.2; // 妻の三角の壁が2階よりさらに張り出す長さ
 const BAY = 1.3; // 2階の木組みの柱と柱の間隔（目安）
 const TIMBER = 0.16; // 木組みの角材の太さ
 const EAVE_TUCK = 0.14; // 軒の下の面の木組みを、壁の上端からどれだけ下で止めるか
-const UNDER_ROOF = 0.22; // 妻の三角の壁を、屋根の面からどれだけ内側に引っ込めるか（石板の間から見えないように）
+export const UNDER_ROOF = 0.22; // 妻の三角の壁を、屋根の面からどれだけ内側に引っ込めるか（石板の間から見えないように）
 
 // ---- 屋根 ----
-const PITCH = THREE.MathUtils.degToRad(56); // 屋根の傾き
-const EAVE_OVER = 0.45; // 軒が壁より外へ出る長さ
-const GABLE_OVER = 0.35; // 屋根が妻の壁より外へ出る長さ
+export const PITCH = THREE.MathUtils.degToRad(56); // 屋根の傾き
+export const EAVE_OVER = 0.45; // 軒が壁より外へ出る長さ
+export const GABLE_OVER = 0.35; // 屋根が妻の壁より外へ出る長さ
 const TILE_ROW = 0.34; // 石板の1段の間隔（屋根の斜面に沿って）
 const TILE_MIN = 0.34; // 石板の幅（最小・最大）
 const TILE_MAX = 0.5;
@@ -46,7 +46,7 @@ const HOUSE_SEED = 777; // 石や石板の大きさ・色のばらつきを決�
 /** 家を置く位置（1階の床の真ん中）と向き（Y 軸まわり。0 なら妻側の正面が +Z を向く） */
 export interface HouseSpot { x: number; y: number; z: number; yaw: number }
 
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   return () => {
     seed |= 0;
     seed = (seed + 0x6d2b79f5) | 0;
@@ -57,23 +57,23 @@ function mulberry32(seed: number): () => number {
 }
 
 // ---- 色 ----
-const PLASTER = SAND.clone().lerp(ROCK, 0.18); // 漆喰の壁
-const BEAM = BARK.clone().multiplyScalar(0.75); // 木組みの濃い角材
+export const PLASTER = SAND.clone().lerp(ROCK, 0.18); // 漆喰の壁
+export const BEAM = BARK.clone().multiplyScalar(0.75); // 木組みの濃い角材
 const GLASS = WATER.clone().lerp(BARK, 0.55).multiplyScalar(0.45); // 窓ガラス（暗い）
 const SHUTTER = LEAF.clone().lerp(WATER, 0.3).multiplyScalar(0.8); // 窓の板戸
-const SLATE = ROCK.clone().lerp(WATER, 0.3).multiplyScalar(0.72); // 屋根の石板
+export const SLATE = ROCK.clone().lerp(WATER, 0.3).multiplyScalar(0.72); // 屋根の石板
 const POT = ACCENT.clone().lerp(TRUNK, 0.5); // 煙突の素焼きの筒
 
 const UP = new THREE.Vector3(0, 1, 0);
 
 /** 石の色（1階の壁）。窓の縁や角の石は少し明るい */
-const wallStone = (rand: () => number, k = 0.85) => stoneColor(rand, k);
-const trimStone = (rand: () => number) => stoneColor(rand, 1.05).lerp(SAND, 0.12);
+export const wallStone = (rand: () => number, k = 0.85) => stoneColor(rand, k);
+export const trimStone = (rand: () => number) => stoneColor(rand, 1.05).lerp(SAND, 0.12);
 
 // ---- 1階：石積み ----
 
-/** 壁の穴（窓・戸口）。along は a〜e、高さは y0〜y1 */
-interface Opening { a: number; e: number; y0: number; y1: number; door?: boolean; flowers?: boolean }
+/** 壁の穴（窓・戸口）。along は a〜e、高さは y0〜y1。open の戸口は扉を付けず、中へ入れる */
+export interface Opening { a: number; e: number; y0: number; y1: number; door?: boolean; flowers?: boolean; open?: boolean }
 
 /** 穴のまわりで石を積まない範囲（窓台と、上のまぐさ石のぶん広い） */
 const clipOf = (o: Opening) => ({ a: o.a - 0.14, e: o.e + 0.14, y0: o.door ? 0 : o.y0 - 0.14, y1: o.y1 + 0.3 });
@@ -102,7 +102,7 @@ function stone(b: Batch, rand: () => number, f: Face, a: number, e: number, y0: 
 }
 
 /** 1階の壁の面に、段ごとに長さの違う石を積む。穴のまわりは空けておく */
-function stoneWall(b: Batch, rand: () => number, f: Face, openings: Opening[]): void {
+export function stoneWall(b: Batch, rand: () => number, f: Face, openings: Opening[]): void {
   const clips = openings.map(clipOf);
   // 土台：大きめの暗い石を一段、少し張り出して並べる
   const doorCuts = clips.filter((c) => c.y0 < PLINTH_H);
@@ -131,10 +131,8 @@ function stoneWall(b: Batch, rand: () => number, f: Face, openings: Opening[]): 
   for (const o of openings) (o.door ? door : stoneWindow)(b, rand, f, o);
 }
 
-/** 家の四隅に、長い石と短い石を段ごとに互い違いに積む（隅石） */
-function quoins(b: Batch, rand: () => number): void {
-  const hx = W / 2;
-  const hz = D / 2;
+/** 家の四隅に、長い石と短い石を段ごとに互い違いに積む（隅石）。hx・hz は1階の幅と奥行きの半分 */
+export function quoins(b: Batch, rand: () => number, hx = W / 2, hz = D / 2): void {
   for (let y0 = PLINTH_H, row = 0; y0 < GF_H - 0.05; y0 += COURSE, row++) {
     const y1 = Math.min(y0 + COURSE, GF_H) - JOINT / 2;
     for (const sx of [-1, 1]) {
@@ -155,7 +153,7 @@ function quoins(b: Batch, rand: () => number): void {
 }
 
 /** 窓ガラスと、それを十字に区切る木の枠 */
-function windowPane(b: Batch, f: Face, a: number, e: number, y0: number, y1: number, frame: THREE.Color): void {
+export function windowPane(b: Batch, f: Face, a: number, e: number, y0: number, y1: number, frame: THREE.Color): void {
   faceBox(b, f, a, e, y0, y1, -0.05, 0.015, GLASS, [backSide(f)]);
   const t = 0.07;
   faceBox(b, f, a, a + t, y0, y1, 0, 0.06, frame, [backSide(f)]);
@@ -195,19 +193,21 @@ function stoneWindow(b: Batch, rand: () => number, f: Face, o: Opening): void {
   }
 }
 
-/** 戸口：縦板の扉、鉄の帯、上の太い梁、前の踏み石、その上の小さなひさし */
+/** 戸口：縦板の扉、鉄の帯、上の太い梁、前の踏み石、その上の小さなひさし（open なら扉は付けない） */
 function door(b: Batch, rand: () => number, f: Face, o: Opening): void {
   const skip = [backSide(f)];
-  const n = 4;
-  for (let i = 0; i < n; i++) {
-    const a = o.a + ((o.e - o.a) * i) / n;
-    const e = o.a + ((o.e - o.a) * (i + 1)) / n;
-    faceBox(b, f, a + 0.01, e - 0.01, o.y0, o.y1, -0.05, 0.04, TRUNK.clone().multiplyScalar(0.8 + rand() * 0.15), skip);
+  if (!o.open) {
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const a = o.a + ((o.e - o.a) * i) / n;
+      const e = o.a + ((o.e - o.a) * (i + 1)) / n;
+      faceBox(b, f, a + 0.01, e - 0.01, o.y0, o.y1, -0.05, 0.04, TRUNK.clone().multiplyScalar(0.8 + rand() * 0.15), skip);
+    }
+    const iron = BARK.clone().lerp(ROCK, 0.25).multiplyScalar(0.55);
+    for (const y of [o.y0 + 0.45, o.y1 - 0.45]) faceBox(b, f, o.a + 0.06, o.e - 0.2, y - 0.04, y + 0.04, 0.04, 0.06, iron, skip);
+    const knob = facePoint3(f, o.e - 0.15, o.y0 + 1.0, 0.08);
+    b.add(BALL, knob.x, knob.y, knob.z, 0.045, 0.045, 0.045, iron);
   }
-  const iron = BARK.clone().lerp(ROCK, 0.25).multiplyScalar(0.55);
-  for (const y of [o.y0 + 0.45, o.y1 - 0.45]) faceBox(b, f, o.a + 0.06, o.e - 0.2, y - 0.04, y + 0.04, 0.04, 0.06, iron, skip);
-  const knob = facePoint3(f, o.e - 0.15, o.y0 + 1.0, 0.08);
-  b.add(BALL, knob.x, knob.y, knob.z, 0.045, 0.045, 0.045, iron);
   // 戸の枠と上の梁
   faceBox(b, f, o.a - 0.14, o.a, o.y0, o.y1, -0.1, 0.12, BEAM, skip);
   faceBox(b, f, o.e, o.e + 0.14, o.y0, o.y1, -0.1, 0.12, BEAM, skip);
@@ -279,7 +279,7 @@ function joists(b: Batch, f: Face): void {
 }
 
 /** 妻の三角の壁と、その木組み（2本の束、斜めの筋かい、中ほどの横木、小さな窓） */
-function gable(b: Batch, f: Face, base: number, half: number, rise: number): void {
+export function gable(b: Batch, f: Face, base: number, half: number, rise: number): void {
   const out = f.fixed; // 三角の壁の外の面（Z）
   b.oriented(PRISM, new THREE.Vector3(0, base, out - f.out * 0.25), new THREE.Vector3(1, 0, 0), UP, new THREE.Vector3(0, 0, 1), half * 2, rise, 0.5, PLASTER);
   const nrm = faceNormal(f);
@@ -339,7 +339,7 @@ function ridgeCap(b: Batch, rand: () => number, mid: THREE.Vector3, dir: THREE.V
 }
 
 /** 切妻屋根の2つの斜面。halfW は棟から軒先までの水平の幅（軒の出を含む）、along は棟の向き。ridge は棟の真ん中 */
-function gableRoof(b: Batch, rand: () => number, ridge: THREE.Vector3, along: THREE.Vector3, halfW: number, pitch: number, length: number): void {
+export function gableRoof(b: Batch, rand: () => number, ridge: THREE.Vector3, along: THREE.Vector3, halfW: number, pitch: number, length: number): void {
   const side = new THREE.Vector3().crossVectors(UP, along).normalize();
   const slopeLen = halfW / Math.cos(pitch);
   for (const s of [-1, 1]) {
@@ -360,8 +360,8 @@ function gableRoof(b: Batch, rand: () => number, ridge: THREE.Vector3, along: TH
 
 // ---- 家を組み立てる ----
 
-/** 家を1つ建てて group に入れる。当たり判定の見えない箱は solids に足す */
-export function buildHouse(group: THREE.Group, solids: THREE.Mesh[], spot: HouseSpot): void {
+/** 家を1つ建てて group に入れる。当たり判定の見えない箱は solids に足す。真上から見た2階の四隅（置いた先の座標）を返す */
+export function buildHouse(group: THREE.Group, solids: THREE.Mesh[], spot: HouseSpot): THREE.Vector3[] {
   const g = new THREE.Group();
   g.position.set(spot.x, spot.y, spot.z);
   g.rotation.y = spot.yaw;
@@ -468,4 +468,6 @@ export function buildHouse(group: THREE.Group, solids: THREE.Mesh[], spot: House
   // 当たり判定：1階と、張り出した2階
   colliderBox(g, solids, -hx - 0.12, 0, -hz - 0.12, hx + 0.12, GF_H, hz + 0.12);
   colliderBox(g, solids, -ux, GF_H, -uz, ux, eaveY, uz);
+  g.updateMatrixWorld(true);
+  return [[-ux, -uz], [ux, -uz], [ux, uz], [-ux, uz]].map(([x, z]) => new THREE.Vector3(x, 0, z).applyMatrix4(g.matrixWorld));
 }

@@ -27,7 +27,7 @@ const ZOOM_TIME = 0.35; // 作業台に寄る時間
 const MAX_ITEMS = 40; // 台に置ける素材の数
 const HOVER_SCALE = 1.12;
 /** 寝かせて置く素材（道具や枝・葉は立てると不自然なので、アイコンの正面を上に向ける） */
-const FLAT_ITEMS = ['stick', 'leaf', 'vine', 'hoe', 'axe', 'sword', 'stoneKnife', 'spear', 'hammer', 'pickaxe', 'shovel', 'fishingRod', ...FISH_IDS, 'boatBlueprint'];
+const FLAT_ITEMS = ['stick', 'leaf', 'vine', 'hoe', 'axe', 'sword', 'stoneKnife', 'spear', 'hammer', 'pickaxe', 'shovel', 'fishingRod', ...FISH_IDS, 'boatBlueprint', 'map'];
 const UP = new THREE.Vector3(0, 1, 0);
 // ---- 台の上の物理演算 ----
 // 台ごとに小さな物理ワールドを別に作る（本編の物理とは混ぜない）。

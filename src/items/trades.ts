@@ -10,8 +10,8 @@ export interface Trade {
   get: { item: ItemId; count: number };
 }
 
-/** 取引できる住人（pier：自分の島の桟橋の人、farmer：街の広場の農家） */
-export type MerchantId = 'pier' | 'farmer';
+/** 取引できる住人（pier：自分の島の桟橋の人、farmer：街の広場の農家、mapmaker：街の地図屋の地図売り） */
+export type MerchantId = 'pier' | 'farmer' | 'mapmaker';
 
 /** 住人ごとの取引の一覧（上から順に画面に並ぶ。買い取りを先に、売り物をあとに書く） */
 export const TRADES: Record<MerchantId, Trade[]> = {
@@ -31,5 +31,9 @@ export const TRADES: Record<MerchantId, Trade[]> = {
     { give: { leaf: 8 }, get: { item: 'coin', count: 1 } }, // 葉っぱは畑の肥やしにする
     { give: { vine: 4 }, get: { item: 'coin', count: 1 } }, // ツルは作物を支柱に縛るのに使う
     { give: { coin: 2 }, get: { item: 'seed', count: 3 } }, // コイン2枚で木の種3つ
+  ],
+  // 地図売りは地図だけを売る（買い取りはしない）
+  mapmaker: [
+    { give: { coin: 8 }, get: { item: 'map', count: 1 } }, // コイン8枚で地図
   ],
 };

@@ -3,13 +3,14 @@ import { ITEMS, isCurrency } from '../items/inventory.js';
 import { itemIcon } from '../items/itemIcons.js';
 import { TRADES } from '../items/trades.js';
 import { keyGuide } from '../ui/keyGuide.js';
-import { FARMER_NAME, NPC_NAME } from './quests.js';
+import { FARMER_NAME, MAPMAKER_NAME, NPC_NAME } from './quests.js';
 const css = (c) => '#' + c.toString(16).padStart(6, '0');
 const COLS = 5; // 品物のマスを横に並べる数
 /** 取引の画面に出す、住人の名前とひとこと */
 const MERCHANTS = {
     pier: { name: NPC_NAME, say: '何か持ってきたかい？' },
     farmer: { name: FARMER_NAME, say: '島でとれた物なら高く買うよ。木の種も分けてあげよう' },
+    mapmaker: { name: MAPMAKER_NAME, say: 'いらっしゃい。地図があれば、どこにいても迷わないよ。持って[右]で広げてごらん' },
 };
 const TAB_NAMES = { sell: '売る', buy: '買う' };
 const tabOf = (trade) => (isCurrency(trade.get.item) ? 'sell' : 'buy');
@@ -19,7 +20,7 @@ const goods = (trade) => (tabOf(trade) === 'sell' ? give(trade)[0] : trade.get);
 /** マスの下に出す値段（売るならもらうお金、買うなら渡すお金） */
 const price = (trade) => (tabOf(trade) === 'sell' ? trade.get : give(trade)[0]);
 /**
- * 住人と取引する画面（桟橋の人は作業台の頼みごとを終えたあと、街の農家はいつでも、話しかけると開く）。
+ * 住人と取引する画面（桟橋の人は作業台の頼みごとを終えたあと、街の農家と地図売りはいつでも、話しかけると開く）。
  * インベントリと同じマスの見た目で品物を並べ、「売る」「買う」のタブで切り替える。マスを選ぶと下に交換の中身が出る。
  * 変わるのは自分のインベントリだけなので、自分だけの行動としてその場で処理する
  */
@@ -77,12 +78,12 @@ export class Shop {
                 this.setOpen(false, e.code === 'KeyF');
         });
     }
-    /** merchant との取引の画面を開く（「売る」のタブから）。say を渡すと、いつものひとことの代わりに出す（頼みごとのヒントなど） */
+    /** merchant との取引の画面を開く（「売る」のタブから。売る物が無い住人なら「買う」から）。say を渡すと、いつものひとことの代わりに出す（頼みごとのヒントなど） */
     open(merchant, say) {
         this.merchant = merchant;
         this.titleEl.textContent = MERCHANTS[merchant].name;
         this.sayEl.innerHTML = keyGuide(say ?? MERCHANTS[merchant].say);
-        this.tab = 'sell';
+        this.tab = TRADES[merchant].some((t) => tabOf(t) === 'sell') ? 'sell' : 'buy';
         this.selected = 0;
         this.setOpen(true);
     }

@@ -550,6 +550,44 @@ export function buildBlueprintModel(): THREE.Group {
   return g;
 }
 
+const MAP_W = 0.36; // 地図の紙の横
+const MAP_D = 0.28; // 地図の紙の縦
+const MAP_FOLDS = 3; // 地図の折り目で分かれる面の数（横に並ぶ）
+const MAP_FOLD_TILT = 0.05; // 折り目で面を山・谷に傾ける角度（rad）
+
+/** 地図。生成りの紙を三つ折りにした跡が残り、海の中に島が2つと、赤い × の印。紙の表が +Y、原点は紙の中心 */
+export function buildMapModel(): THREE.Group {
+  const g = new THREE.Group();
+  const pw = MAP_W / MAP_FOLDS;
+  const sea = new THREE.Color(PALETTE.water).lerp(new THREE.Color(PALETTE.sand), 0.55).getHex();
+  for (let i = 0; i < MAP_FOLDS; i++) {
+    // 折り目ごとに山と谷を交互に付ける
+    const panel = new THREE.Group();
+    panel.position.x = -MAP_W / 2 + pw * (i + 0.5);
+    panel.rotation.z = (i - (MAP_FOLDS - 1) / 2) * MAP_FOLD_TILT * (i % 2 === 0 ? 1 : -1);
+    panel.add(new THREE.Mesh(new THREE.BoxGeometry(pw, 0.004, MAP_D), flat(PALETTE.sand)));
+    const ink = new THREE.Mesh(new THREE.BoxGeometry(pw - (i === 0 || i === MAP_FOLDS - 1 ? 0.02 : 0), 0.002, MAP_D - 0.03), flat(sea));
+    ink.position.set(i === 0 ? 0.01 : i === MAP_FOLDS - 1 ? -0.01 : 0, 0.003, 0);
+    panel.add(ink);
+    g.add(panel);
+  }
+  // 島（低い楕円）と、宝の在りかのような × 印
+  for (const [x, z, sx, sz, color] of [[-0.09, 0.03, 0.06, 0.045, PALETTE.grass], [0.08, -0.04, 0.07, 0.05, PALETTE.grass], [-0.09, 0.03, 0.03, 0.022, PALETTE.leaf], [0.085, -0.035, 0.035, 0.025, PALETTE.leaf]] as const) {
+    const blob = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.004, 10), flat(color));
+    blob.scale.set(sx, 1, sz);
+    blob.position.set(x, color === PALETTE.leaf ? 0.009 : 0.007, z);
+    g.add(blob);
+  }
+  for (const r of [Math.PI / 4, -Math.PI / 4]) {
+    const stroke = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.004, 0.009), flat(PALETTE.accent));
+    stroke.position.set(0.1, 0.012, -0.05);
+    stroke.rotation.y = r;
+    g.add(stroke);
+  }
+  drawLine(g, -0.06, 0.02, 0.07, -0.03, PALETTE.accent); // 島から島への航路
+  return g;
+}
+
 // ---- 魚 ----
 // 胴は輪切りを並べたローポリで、面ごとに背中→腹のグラデーションと模様を塗り分ける（面の境目がくっきり出る）
 const FISH_RINGS = 16; // 胴の輪切りの数

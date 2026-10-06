@@ -107,6 +107,10 @@ export class OtherPlayers {
     swing(id, kind) {
         this.list.get(id)?.avatar.swing(kind);
     }
+    /** here の場所にいる人の名前と位置（地図に描く） */
+    spots(here) {
+        return [...this.list.values()].filter((o) => o.target?.loc === here).map((o) => ({ name: o.name, x: o.pose.p.x, z: o.pose.p.z }));
+    }
     /** here は自分がいる場所（同じ場所にいる人だけを描く） */
     update(dt, here) {
         const k = 1 - Math.exp(-FOLLOW * dt);

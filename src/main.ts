@@ -43,11 +43,12 @@ import { ClockHud } from './ui/clock.js';
 import { BeachPebbles } from './world/pebbles.js';
 import { PickupFeed } from './ui/pickupFeed.js';
 import { ChargeRing } from './ui/chargeRing.js';
-import { FARMER_LOOK, Npc, pierSpot } from './world/npc.js';
+import { FARMER_LOOK, MAP_LOOK, Npc, pierSpot } from './world/npc.js';
 import { Guide } from './story/guide.js';
 import { Shop } from './story/shop.js';
 import { FINISH_TOAST } from './story/quests.js';
 import { SeaMap, travelFade } from './ui/seaMap.js';
+import { AreaMap } from './ui/areaMap.js';
 import { Avatar, AVATAR_LAYER, loadLook, type AvatarPose, type AvatarSwing } from './player/avatar.js';
 import { AvatarMenu } from './ui/avatarEditor.js';
 import { CommandMenu } from './ui/commandMenu.js';
@@ -158,6 +159,10 @@ for (const mesh of town.solids) physics.addStatic(mesh, townBody);
 const farmer = new Npc(town.farmerSpot.position, town.farmerSpot.yaw, FARMER_LOOK);
 town.group.add(farmer.object);
 physics.addStatic(farmer.collider, townBody);
+// 広場の地図屋の中、売り台の後ろに立っている地図売り（いつでも地図を買える）
+const mapKeeper = new Npc(town.mapKeeperSpot.position, town.mapKeeperSpot.yaw, MAP_LOOK);
+town.group.add(mapKeeper.object);
+physics.addStatic(mapKeeper.collider, townBody);
 const islandTerrainCollider = physics.terrainCollider;
 // 浅瀬の色と波打ち際の泡に使う海底は、場所ごとに作っておいて差し替える
 const islandSeabed = bakeSeabed((x, z) => islandField.height(x, z));
@@ -224,8 +229,8 @@ const rodRig = buildFishingRodRig();
 const rodHand = new ToolHand(camera, rodRig.root, ROD_LEAN);
 // 石の槍も長いので、釣り竿と同じだけ前へ倒して構える（左クリックで前へ突き、茂みを刈る。右クリック長押しで力を溜めて投げる）
 const spearHand = new ToolHand(camera, buildSpear(), ROD_LEAN, THRUST_MOTION);
-// 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・船・焚火は選んでいる間、手に持って見せる
-const materialHands = (['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'boatBlueprint', 'boat', 'campfire'] as const).map((kind) => ({ kind, hand: new ItemHand(camera, kind) }));
+// 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・地図・船・焚火は選んでいる間、手に持って見せる
+const materialHands = (['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'boatBlueprint', 'map', 'boat', 'campfire'] as const).map((kind) => ({ kind, hand: new ItemHand(camera, kind) }));
 // 何も持っていない（空のスロットを選んでいる）ときは素手を見せる
 const emptyHand = new EmptyHand(camera);
 const chopper = new TreeChopper(props.group, props.trees, physics);
@@ -255,7 +260,7 @@ forager.onHarvest = gain;
 // ---- 食べる・飲む（ベリーを持って右クリックで食べる。水面を見て F で飲む） ----
 const eater = new Eater(inventory, vitals);
 // 視線をさえぎる物（地形・岩・桟橋など）。建てた部材もここに足されていく
-const aimTargets: THREE.Object3D[] = [terrain, ...props.solids, npc.collider, town.terrain, ...town.solids, farmer.collider]; // 今いない場所の物は隠すので、視線も当たらない
+const aimTargets: THREE.Object3D[] = [terrain, ...props.solids, npc.collider, town.terrain, ...town.solids, farmer.collider, mapKeeper.collider]; // 今いない場所の物は隠すので、視線も当たらない
 const drinker = new Drinker(props.group, aimTargets, vitals);
 // 岩は石のツルハシで叩くと石が少しずつ採れ、耐久値が 0 になると石がまとめて採れて、岩は塊にばらけて消える（大きい岩ほど叩く回数も石も多い）
 const miner = new RockMiner(props.group, props.rocks, physics, aimTargets, [...props.trees.map((t) => t.object), ...props.bushes]);
@@ -652,6 +657,26 @@ guide.onFinish = () => showToast(FINISH_TOAST);
 const shop = new Shop(inventory);
 shop.onGain = gain;
 
+// ---- 地図（地図屋で買える。持って右クリックで、今いる場所の地図を広げる。自分だけの UI） ----
+const areaMap = new AreaMap();
+areaMap.addSource('island', {
+  field: islandField,
+  platforms: props.platforms,
+  platformColor: PALETTE.trunk,
+  buildings: [],
+  marks: [{ name: '桟橋', x: props.pierFoot.x, z: props.pierFoot.z + 5 }],
+});
+areaMap.addSource('town', { field: townField, platforms: town.platforms, platformColor: PALETTE.rock, buildings: town.buildings, marks: town.marks });
+const mapDir = new THREE.Vector3();
+/** 地図に描く、自分とほかの人の今の位置 */
+const mapView = () => {
+  camera.getWorldDirection(mapDir);
+  mapDir.y = 0;
+  if (mapDir.lengthSq() < 1e-6) mapDir.set(0, 0, -1);
+  mapDir.normalize();
+  return { x: camera.position.x, z: camera.position.z, dx: mapDir.x, dz: mapDir.z, others: others.spots(here) };
+};
+
 // ---- F：話しかける・拾う・茂みの実を摘む・船に乗り降りする・作業台や焚火を使う・水を飲む ----
 const USE_REACH = 3.5; // 作業台や焚火を使える距離
 /** 視線の先にある、使える作業台 */
@@ -672,6 +697,7 @@ addEventListener('keydown', (e) => {
     }
     if (!guide.talking && guide.trades && npc.aimed(camera, aimTargets, TALK_REACH)) return shop.open('pier', guide.tip);
     if (!guide.talking && farmer.aimed(camera, aimTargets, TALK_REACH)) return shop.open('farmer');
+    if (!guide.talking && mapKeeper.aimed(camera, aimTargets, TALK_REACH)) return shop.open('mapmaker');
     if (guide.talking || npc.aimed(camera, aimTargets, TALK_REACH)) return guide.speak();
     if (spears.collect(camera, (item) => inventory.room(item)) || drops.collect(camera, (item) => inventory.room(item)) || forager.pick(camera) || boats.board()) return;
     const bench = aimedWorkbench();
@@ -742,6 +768,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
     }
     else if (held?.item === 'dirt' && fillHole()) return;
     else if (held?.item === 'seed' && plantSeed()) return;
+    else if (held?.item === 'map') areaMap.open(here, mapView());
     else if (held && learnFrom(held.item)) return;
     else if (held && eater.start(held.item)) materialHands.find((m) => m.kind === held.item)?.hand.eat(EAT_TIME);
   }
@@ -903,7 +930,7 @@ addEventListener('keydown', (e) => {
   commandMenu.setOpen(true);
 });
 const menuOpen = () =>
-  inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || avatarMenu.isOpen || commandMenu.isOpen;
+  inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || areaMap.isOpen || avatarMenu.isOpen || commandMenu.isOpen;
 document.getElementById('to-title')!.addEventListener('click', (e) => {
   e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
   save();
@@ -976,6 +1003,7 @@ inventory.onToggle = (open, resume) => {
     builder.menu.setOpen(false, false);
     shop.setOpen(false, false);
     seaMap.setOpen(false, false);
+    areaMap.setOpen(false, false);
     avatarMenu.setOpen(false, false);
     commandMenu.setOpen(false, false);
   }
@@ -987,6 +1015,7 @@ inventory.onToggle = (open, resume) => {
 builder.menu.onToggle = onMenuToggle;
 shop.onToggle = onMenuToggle;
 seaMap.onToggle = onMenuToggle;
+areaMap.onToggle = onMenuToggle;
 avatarMenu.onToggle = onMenuToggle;
 commandMenu.onToggle = onMenuToggle;
 
@@ -1125,7 +1154,10 @@ renderer.setAnimationLoop(() => {
   campfires.update(dt, t, weather.wind);
   campfireMenu.update();
   if (here === 'island') npc.update(dt, camera.position);
-  else farmer.update(dt, camera.position);
+  else {
+    farmer.update(dt, camera.position);
+    mapKeeper.update(dt, camera.position);
+  }
   // 自分の体を、プレイヤーの動きと手に持っている物に合わせて動かす
   avatar.object.visible = !!world;
   if (world) {
@@ -1138,6 +1170,7 @@ renderer.setAnimationLoop(() => {
   // マルチ：自分の様子を送り、ほかの人の体を動かす
   net.update(dt, world ? poseMsg(held?.item ?? null) : null);
   others.update(dt, here);
+  if (areaMap.isOpen) areaMap.update(mapView());
   if (world) guide.update(camera.position);
   guide.visible = !!world && !death.isOpen;
   // カメラは船の座席などへ動いたあとなので、水中かどうかを調べ直す
@@ -1177,12 +1210,12 @@ function poseMsg(held: string | null): PoseMsg {
 
 /** 画面中央に出す操作の案内（視線の判定をいくつも行うので、案内を出している間だけ呼ぶ） */
 function keyHint(held: typeof inventory.selectedStack | null): string {
-  // 住人（桟橋の人・街の農家）を見ているときの案内
+  // 住人（桟橋の人・街の農家・地図売り）を見ているときの案内
   const talkHint = npc.aimed(camera, aimTargets, TALK_REACH)
     ? guide.trades
       ? '[F]：取引する'
       : '[F]：話しかける'
-    : farmer.aimed(camera, aimTargets, TALK_REACH)
+    : farmer.aimed(camera, aimTargets, TALK_REACH) || mapKeeper.aimed(camera, aimTargets, TALK_REACH)
       ? '[F]：取引する'
       : '';
   const pickup = guide.talking
@@ -1215,7 +1248,9 @@ function keyHint(held: typeof inventory.selectedStack | null): string {
                             ? '[右]：穴を埋める'
                             : held?.item === 'seed' && digger.canPlant(camera, SHOVEL_REACH)
                               ? '[右]：種を植える'
-                              : '';
+                              : held?.item === 'map'
+                                ? '[右]：地図を広げる'
+                                : '';
   // 傷ついた部材を見ているときは、のこりの耐久値も出す
   const durability = builder.durability(AXE_REACH) ?? (held?.item === 'pickaxe' ? miner.durability(camera, PICK_REACH) : null);
   return [rodHand.visible && (fisher.busy || !pickup) ? fisher.hint : pickup, durability ? `耐久 ${durability.hp}/${durability.max}` : ''].filter(Boolean).join(' ／ ');

@@ -53,6 +53,7 @@ export const ITEMS = {
     campfire: { id: 'campfire', name: '焚火', maxStack: MAX_STACK }, // 石を輪に並べて枝を組んだ焚火。置いて F で燃料を入れる（actions/campfire.ts）
     coin: { id: 'coin', name: 'コイン', maxStack: MAX_COINS, currency: true }, // 島のお金。桟橋の人との取引で手に入る
     boatBlueprint: { id: 'boatBlueprint', name: '木製の船の設計図', maxStack: 1, teaches: 'boat' }, // 桟橋の人からコインで買う
+    map: { id: 'map', name: '地図', maxStack: 1 }, // 街の地図屋からコインで買う。持って右クリックで、今いる場所の地図を広げる（ui/areaMap.ts）
     boat: { id: 'boat', name: '木製の船', maxStack: 1 }, // 設計図で作り方を覚えると、作業台で作れる。持って左クリックで水に浮かべる（actions/boats.ts。乗るのはこれから）
 };
 /** 減った耐久値として正しい値なら、その値（新品や耐久力の無い物なら undefined） */

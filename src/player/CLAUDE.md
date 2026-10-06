@@ -14,7 +14,7 @@
 | `hand.ts` | 一人称の手。道具のモデル（`buildAxe()`・`buildHammer()`・`buildStoneKnife()`・`buildSpear()`・`buildPickaxe()`・`buildShovel()`・`buildFishingRod()` など）、振る動き（`SwingMotion`）、道具を持つ `ToolHand`、素材や食べ物を持つ `ItemHand`（持ち方は `HOLD_STYLES`）、素手の `EmptyHand`。手は `VIEW_LAYER` に描く |
 | `handModel.ts` | ローポリの右手（スキンメッシュ）と指のポーズ（`HAND_POSES`） |
 | `avatar.ts` | 自分の体（`Avatar`）。見た目 `AvatarLook` はワールドでなくブラウザに保存する（`loadLook()`・`saveLook()`）。動きは `AvatarPose` から決める。一人称では影だけ（`AVATAR_LAYER`）、V で三人称にすると姿が見える。マルチでは他の人の体もこれで描き（`others.ts`）、見た目と様子（`net/protocol.ts` の `PoseMsg`）を送る。届いた見た目は `toLook()` で確かめる |
-| `others.ts` | マルチで同じ部屋にいるほかの人の体と名札（`OtherPlayers`）。体は `Avatar`（レイヤー 0）で描き、届いた様子（`PoseMsg`）へなめらかに寄せる。自分と違う場所にいる人は描かない |
+| `others.ts` | マルチで同じ部屋にいるほかの人の体と名札（`OtherPlayers`）。体は `Avatar`（レイヤー 0）で描き、届いた様子（`PoseMsg`）へなめらかに寄せる。自分と違う場所にいる人は描かない。地図に描く位置は `spots()` |
 | `bodyParts.ts` | 人の体の部品（関節・箱・手足・頭など）。住人（`world/npc.ts`）とアバターで共通 |
 
 ## 書くときの決まり

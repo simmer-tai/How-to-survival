@@ -17,4 +17,8 @@ export const TRADES = {
         { give: { vine: 4 }, get: { item: 'coin', count: 1 } }, // ツルは作物を支柱に縛るのに使う
         { give: { coin: 2 }, get: { item: 'seed', count: 3 } }, // コイン2枚で木の種3つ
     ],
+    // 地図売りは地図だけを売る（買い取りはしない）
+    mapmaker: [
+        { give: { coin: 8 }, get: { item: 'map', count: 1 } }, // コイン8枚で地図
+    ],
 };
