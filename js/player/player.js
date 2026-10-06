@@ -169,6 +169,12 @@ export class Player {
         this.camera.position.copy(eye);
         this.body.setNextKinematicTranslation({ x: eye.x, y: eye.y - EYE_HEIGHT + this.bodyCenter, z: eye.z });
     }
+    /** 船に座るのをやめて、その場に立つ（乗る頼みをホストに断られたときなど） */
+    stand() {
+        if (!this.seated)
+            return;
+        this.standAt(new THREE.Vector3(this.position.x, this.position.y - EYE_HEIGHT, this.position.z));
+    }
     /** 足元を feet に置いたとき、体が何にもぶつからないか（船から降りる場所を探すのに使う） */
     canStandAt(feet) {
         const hit = this.physics.world.intersectionWithShape({ x: feet.x, y: feet.y + BODY_CENTER, z: feet.z }, { x: 0, y: 0, z: 0, w: 1 }, new RAPIER.Capsule(BODY_HALF, BODY_RADIUS), RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, COLLIDE.player, this.collider);

@@ -3,10 +3,11 @@ import { PALETTE } from '../core/palette.js';
 import { flatTransparent } from '../core/materials.js';
 import { RAPIER, COLLIDE, WATER_LEVEL, type Physics } from '../core/physics.js';
 import { waveOffset } from '../core/waves.js';
-import type { BoatCommand, BoatRequest, WorldRequest } from '../core/commands.js';
+import type { BoatCommand, BoatRequest, Requester } from '../core/commands.js';
 import type { Inventory } from '../items/inventory.js';
 import { BOAT_H, BOAT_SEAT, buildBoatModel, buildBoatOpening } from '../items/itemModels.js';
-import { WORLD_SIZE, terrainHeight } from '../world/terrain.js';
+import { WORLD_SIZE, islandField, terrainHeight, type HeightField } from '../world/terrain.js';
+import { townField } from '../world/town.js';
 import { LOCATIONS, toLocation, type LocationId } from '../world/location.js';
 
 const BOAT_SCALE = 3.2; // アイテムのモデル（長さ 1）を何倍にして浮かべるか（長さ約 3.2、人が2人乗れるくらい）
@@ -50,6 +51,9 @@ const SIZE = (() => {
   model.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
   return { halfL: size.x / 2, halfW: size.z / 2, height: size.y, centerY: center.y };
 })();
+/** 場所ごとの地形（今いない場所の浅瀬を調べるのに使う） */
+const FIELDS: Record<LocationId, HeightField> = { island: islandField, town: townField };
+
 /** 水面から、船のモデルの原点までの高さ（船底が DRAFT だけ沈む） */
 const FLOAT_Y = SIZE.height / 2 - SIZE.centerY - DRAFT;
 
@@ -68,8 +72,8 @@ interface Boat {
   object: THREE.Group;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
-  /** 誰かが乗っているか（ホストが判定する。セーブはしない。乗っていた人はロードしたときに乗り直す） */
-  occupied: boolean;
+  /** 乗っている人の番号（誰も乗っていなければ null。ホストが判定する。セーブはしない。乗っていた人はロードしたときに乗り直す） */
+  rider: number | null;
 }
 
 /** 自分が乗っている船。speed は前へ進む速さ、turn は向きを変える速さ（自分だけの状態） */
@@ -157,7 +161,9 @@ export class Boats {
   /** 乗っている船で世界の端まで漕いでいったときに呼ばれる（main が海図を開く） */
   onEdge: () => void = () => {};
   /** 共有ワールドへの頼みを出す（main が設定する）。適用できたら true */
-  request: (req: WorldRequest) => boolean = () => false;
+  request: Requester = () => false;
+  /** 自分の乗っている船が別の場所へ渡り終えたときに呼ばれる（main がプレイヤーの場所を切り替える） */
+  onSail: (loc: LocationId) => void = () => {};
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -215,13 +221,35 @@ export class Boats {
     b.body.setEnabled(here);
   }
 
-  /** 乗っている船で、別の場所 loc へ渡る。渡れたら true（そのあと main がプレイヤーの場所を切り替える） */
+  /** 乗っている船で、別の場所 loc へ渡る頼みを出す。渡り終えたら onSail が呼ばれる（そこで main がプレイヤーの場所を切り替える） */
   sail(loc: LocationId): boolean {
     const b = this.ride && this.boats.get(this.ride.bid);
-    if (!b || !this.request({ type: 'sailBoat', bid: b.bid, loc })) return false;
-    this.ride!.speed = 0;
-    this.ride!.turn = 0;
-    return true;
+    return !!b && this.request({ type: 'sailBoat', bid: b.bid, loc });
+  }
+
+  /** 乗っている船の番号と、漕いで動かした位置・向き [番号, x, z, yaw]（マルチで他の人に配る。乗っていなければ null） */
+  get ridePose(): [number, number, number, number] | null {
+    const b = this.ride && this.boats.get(this.ride.bid);
+    return b ? [b.bid, b.x, b.z, b.yaw] : null;
+  }
+
+  /** ほかの人が漕いでいる船の位置・向きを、その人から届いた値にする（自分が乗っている船は自分で動かすので変えない） */
+  follow(bid: number, x: number, z: number, yaw: number): void {
+    const b = this.boats.get(bid);
+    if (!b || this.ride?.bid === bid || ![x, z, yaw].every(Number.isFinite)) return;
+    b.x = x;
+    b.z = z;
+    b.yaw = yaw;
+  }
+
+  /** その人が乗っている船（ホストが、抜けた人の船を降ろすのに使う） */
+  riddenBy(id: number): { bid: number; p: [number, number]; yaw: number }[] {
+    return [...this.boats.values()].filter((b) => b.rider === id).map((b) => ({ bid: b.bid, p: [b.x, b.z], yaw: b.yaw }));
+  }
+
+  /** 乗る頼みをホストに断られたとき（先に誰かが乗った）、乗ったことを取り消す */
+  cancelRide(bid: number): void {
+    if (this.ride?.bid === bid) this.ride = null;
   }
 
   /** 乗っている船の舳先が向いている向きを、カメラの水平の向き（0 で -Z を向く）にしたもの（乗っていなければ null） */
@@ -269,7 +297,7 @@ export class Boats {
     const b = this.ride ? undefined : this.aimed();
     if (!b) return false;
     if (this.inventory.room('boat') < 1) return true;
-    if (this.request({ type: 'pickBoat', bid: b.bid })) this.inventory.add('boat', 1);
+    this.request({ type: 'pickBoat', bid: b.bid }); // 船のアイテムは、しまえたと決まってから（apply で）受け取る
     return true;
   }
 
@@ -332,7 +360,7 @@ export class Boats {
   private aimed(): Boat | undefined {
     this.raycaster.setFromCamera(SCREEN_CENTER, this.camera);
     this.raycaster.far = PICK_REACH;
-    const objects = [...this.boats.values()].filter((b) => !b.occupied && b.loc === this.location).map((b) => b.object);
+    const objects = [...this.boats.values()].filter((b) => b.rider === null && b.loc === this.location).map((b) => b.object);
     const hit = this.raycaster.intersectObjects(objects, true)[0];
     if (!hit) return undefined;
     const block = this.raycaster.intersectObjects(this.targets, false)[0];
@@ -358,36 +386,55 @@ export class Boats {
 
   // ---- ホスト側：頼みを確かめてコマンドにする ----
 
-  /** 頼みを確かめ、ID を付けたコマンドにする。できない頼みなら null（マルチではホストだけが呼ぶ） */
-  authorize(req: BoatRequest): BoatCommand | null {
+  /**
+   * 頼みを確かめ、ID を付けたコマンドにする。by は頼んだ人（降りる・渡るは、乗っている本人だけができる）。
+   * できない頼みなら null（マルチではホストだけが呼ぶ）
+   */
+  authorize(req: BoatRequest, by: number | null): BoatCommand | null {
     if (req.type === 'placeBoat') {
       const wellFormed = req.p.length === 2 && [...req.p, req.yaw].every(Number.isFinite) && req.loc === toLocation(req.loc);
-      // 浅瀬や物とぶつからないかは、今いる場所の地形と当たり判定で調べる（マルチではホストが場所ごとに調べるようにする）
-      if (!wellFormed || this.check(req.p[0], req.p[1], req.yaw)) return null;
+      if (!wellFormed || this.check(req.loc, req.p[0], req.p[1], req.yaw)) return null;
       return { ...req, bid: this.nextBid++ };
     }
     const b = this.boats.get(req.bid);
     if (!b) return null;
     if (req.type === 'sailBoat') {
-      if (!b.occupied || req.loc !== toLocation(req.loc) || req.loc === b.loc) return null;
+      if (b.rider === null || b.rider !== by || req.loc !== toLocation(req.loc) || req.loc === b.loc) return null;
       return { ...req, ...this.arrival(b, req.loc) };
     }
     if (req.type === 'leaveBoat') {
       const wellFormed = req.p.length === 2 && [...req.p, req.yaw].every(Number.isFinite);
-      return wellFormed && b.occupied ? req : null;
+      return wellFormed && b.rider !== null && b.rider === by ? req : null;
     }
     // 乗っている船はしまえない。同じ船に2人が乗ろうとしたら、先に届いた方だけが乗れる
-    return b.occupied ? null : req;
+    return b.rider !== null || by === null ? null : req;
   }
 
-  /** その場所・向きに船を浮かべられるか。浮かべられなければ理由を返す */
-  private check(x: number, z: number, yaw: number): Blocked {
+  /**
+   * 場所 loc の、その位置・向きに船を浮かべられるか。浮かべられなければ理由を返す。
+   * 浅瀬はその場所の地形で調べる。ぶつかる物は、当たり判定が動いている場所（確かめる人が今いる場所）でしか調べられないので、
+   * ほかの場所なら調べない（マルチでは、頼んだ参加者が自分のいる場所で先に調べている）
+   */
+  private check(loc: LocationId, x: number, z: number, yaw: number): Blocked {
+    if (loc !== this.location) return this.shallowAt(FIELDS[loc], x, z, yaw, MIN_DEPTH) ? 'shallow' : null;
     // 岩・桟橋・ほかの船・部材・プレイヤーとぶつからないか（波で上下しても当たらないよう、水面の上まで高く調べる）
     return this.blockedAt(x, z, yaw, MIN_DEPTH, CHECK_H, COLLIDE.boatQuery);
   }
 
+  /** field の地形で、(x, z) に yaw の向きで浮かぶ船の下が depth より浅いか */
+  private shallowAt(field: HeightField, x: number, z: number, yaw: number, depth: number): boolean {
+    for (let i = 0; i <= DEPTH_SAMPLES; i++) {
+      for (let j = 0; j <= DEPTH_SAMPLES; j++) {
+        const lx = SIZE.halfL * ((2 * i) / DEPTH_SAMPLES - 1);
+        const lz = SIZE.halfW * HULL_SHRINK * ((2 * j) / DEPTH_SAMPLES - 1);
+        if (field.height(...toWorld(x, z, yaw, lx, lz)) > WATER_LEVEL - depth) return true;
+      }
+    }
+    return false;
+  }
+
   /**
-   * 船が (x, z) に yaw の向きで浮かべないか。船の下が depth より浅いか、水面から clear の高さまでに groups の物があれば、その理由を返す。
+   * 船が今いる場所の (x, z) に yaw の向きで浮かべないか。船の下が depth より浅いか、水面から clear の高さまでに groups の物があれば、その理由を返す。
    * self の当たり判定とは比べない（漕いでいる船自身）
    */
   private blockedAt(x: number, z: number, yaw: number, depth: number, clear: number, groups: number, self?: RAPIER.Collider): Blocked {
@@ -490,9 +537,15 @@ export class Boats {
 
   // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
 
-  apply(cmd: BoatCommand): void {
+  /** by は頼んだ人（乗った人として覚える）、mine は自分の頼みか（しまった船を受け取る・渡り終えたら知らせる） */
+  apply(cmd: BoatCommand, by: number | null, mine: boolean): void {
     if (cmd.type === 'placeBoat') return this.add(cmd.bid, cmd.loc, cmd.p[0], cmd.p[1], cmd.yaw);
-    if (cmd.type === 'pickBoat') return this.remove(cmd.bid);
+    if (cmd.type === 'pickBoat') {
+      if (!this.boats.has(cmd.bid)) return;
+      this.remove(cmd.bid);
+      if (mine) this.inventory.add('boat', 1);
+      return;
+    }
     const b = this.boats.get(cmd.bid);
     if (!b) return;
     if (cmd.type === 'sailBoat') {
@@ -500,9 +553,14 @@ export class Boats {
       [b.x, b.z] = cmd.p;
       b.yaw = cmd.yaw;
       this.refresh(b);
+      if (mine && this.ride?.bid === b.bid) {
+        this.ride.speed = 0;
+        this.ride.turn = 0;
+        this.onSail(cmd.loc);
+      }
       return;
     }
-    b.occupied = cmd.type === 'boardBoat';
+    b.rider = cmd.type === 'boardBoat' ? by : null;
     if (cmd.type === 'leaveBoat') {
       [b.x, b.z] = cmd.p;
       b.yaw = cmd.yaw;
@@ -539,7 +597,7 @@ export class Boats {
       .setCollisionGroups(COLLIDE.ground)
       .setFriction(0.8);
     const collider = this.physics.world.createCollider(desc, body);
-    const b: Boat = { bid, loc, x, z, yaw, object, body, collider, occupied: false };
+    const b: Boat = { bid, loc, x, z, yaw, object, body, collider, rider: null };
     this.boats.set(bid, b);
     this.refresh(b);
     this.nextBid = Math.max(this.nextBid, bid + 1);
@@ -572,7 +630,7 @@ export class Boats {
     const spot = this.aim();
     if (!spot) return;
     this.spot = spot;
-    this.blocked = this.check(spot.x, spot.z, spot.yaw);
+    this.blocked = this.check(this.location, spot.x, spot.z, spot.yaw);
     floatPose(spot.x, spot.z, spot.yaw, this.pos, this.rot);
     this.ghost.position.copy(this.pos);
     this.ghost.quaternion.copy(this.rot);

@@ -46,13 +46,14 @@
     </div>
     <div id="crosshair"></div>
     <div id="pickup-hint" class="hidden"></div>
-    <!-- three と物理エンジン Rapier は CDN から読み込む（TS 側の import 文はそのまま使える） -->
+    <!-- three と物理エンジン Rapier、マルチプレイの PeerJS は CDN から読み込む（TS 側の import 文はそのまま使える） -->
     <script type="importmap">
       {
         "imports": {
           "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
           "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-          "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.21.0/dist/rapier.mjs"
+          "@dimforge/rapier3d-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.21.0/dist/rapier.mjs",
+          "peerjs": "https://cdn.jsdelivr.net/npm/peerjs@1.5.5/+esm"
         }
       }
     </script>

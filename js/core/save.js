@@ -27,6 +27,8 @@ import { WorldClock } from '../world/clock.js';
 // 21 → 22：掘った穴が、掘ってからたった時間（holes.list[].t）を持つようになった
 // 22 → 23：焚火の燃料と火（fires）が入った
 export const SAVE_VERSION = 23;
+/** 自分だけの状態（マルチでは各自のブラウザに残す） */
+export const PERSONAL_KEYS = ['player', 'inventory', 'vitals', 'guide', 'recipes'];
 /** 1 → 2：部材に並び順で ID を付ける */
 function fromV1(old) {
     const pieces = old.built.map((b, i) => ({ ...b, pid: i }));
@@ -242,4 +244,28 @@ export function saveWorld(id, data) {
 export function deleteWorld(id) {
     localStorage.removeItem(dataKey(id));
     writeIndex(listWorlds().filter((w) => w.id !== id));
+}
+// ---- マルチの参加者：ほかの人のワールドで遊んだときの、自分だけの状態（位置・持ち物など） ----
+// 共有ワールドはホストのブラウザにセーブされるので、参加者は自分だけの状態だけを、ホストのワールドの id ごとに残す
+const guestKey = (worldId) => `warfarming:guest:${worldId}`;
+/** そのワールドに参加したときの自分だけの状態（初めてなら、読めなければ null） */
+export function loadGuest(worldId) {
+    try {
+        const data = JSON.parse(localStorage.getItem(guestKey(worldId)) ?? 'null');
+        return data?.version === SAVE_VERSION ? data : null;
+    }
+    catch {
+        return null;
+    }
+}
+/** 保存できたら true */
+export function saveGuest(worldId, data) {
+    try {
+        localStorage.setItem(guestKey(worldId), JSON.stringify({ version: SAVE_VERSION, ...data }));
+        return true;
+    }
+    catch (e) {
+        console.error('セーブに失敗しました', e);
+        return false;
+    }
 }

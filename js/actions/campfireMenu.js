@@ -21,12 +21,20 @@ export class CampfireMenu {
     slotHtml = '';
     statusHtml = '';
     noticeTimer = 0;
+    /** 燃料の欄から取り出した物を、つままずにインベントリへ入れるか（Shift+クリック） */
+    takeToBag = false;
     /** 燃料の欄の上でマウスを押したか（欄の上で離したときに、もう一度入れないように） */
     pressed = false;
     constructor(inventory, fires) {
         this.inventory = inventory;
         this.fires = fires;
         injectStyle();
+        fires.onTake = (item, count) => {
+            if (this.takeToBag)
+                this.inventory.add(item, count);
+            else
+                this.inventory.hold({ item, count }, true); // つまんだまま、インベントリのマスへドラッグして置ける
+        };
         this.root = el('div', 'fire-panel');
         const title = el('div', 'fire-title');
         title.textContent = '焚火';
@@ -173,12 +181,10 @@ export class CampfireMenu {
             n = Math.min(n, this.inventory.room(item));
         if (n <= 0)
             return;
+        // 取り出した物は、取り出せたと決まってから onTake で受け取る（マルチではホストの返事を待つ）
+        this.takeToBag = toBag;
         if (!this.fires.request({ type: 'takeFuel', pid: this.pid, count: n }))
             return;
-        if (toBag)
-            this.inventory.add(item, n);
-        else
-            this.inventory.hold({ item, count: n }, true); // つまんだまま、インベントリのマスへドラッグして置ける
         this.update();
     }
     notice(text) {

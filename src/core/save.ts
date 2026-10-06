@@ -79,6 +79,12 @@ export interface WorldData {
   fires: FireSave[];
 }
 
+/** 自分だけの状態（マルチでは各自のブラウザに残す） */
+export const PERSONAL_KEYS = ['player', 'inventory', 'vitals', 'guide', 'recipes'] as const;
+export type PersonalData = Pick<WorldData, (typeof PERSONAL_KEYS)[number]>;
+/** 共有ワールドの状態（マルチでは、途中参加した人にホストがまるごと送る） */
+export type SharedWorld = Omit<WorldData, 'version' | (typeof PERSONAL_KEYS)[number]>;
+
 /** バージョン 1 のセーブデータ（部材に ID がない） */
 type WorldDataV1 = Omit<WorldDataV3, 'version' | 'built'> & { version: 1; built: Omit<PieceSave, 'pid'>[] };
 
@@ -367,4 +373,33 @@ export function saveWorld(id: string, data: WorldData): boolean {
 export function deleteWorld(id: string): void {
   localStorage.removeItem(dataKey(id));
   writeIndex(listWorlds().filter((w) => w.id !== id));
+}
+
+// ---- マルチの参加者：ほかの人のワールドで遊んだときの、自分だけの状態（位置・持ち物など） ----
+// 共有ワールドはホストのブラウザにセーブされるので、参加者は自分だけの状態だけを、ホストのワールドの id ごとに残す
+
+const guestKey = (worldId: string) => `warfarming:guest:${worldId}`;
+
+/** 参加者としてのセーブ（SAVE_VERSION が違う古いものは読まず、はじめからにする） */
+interface GuestSave extends PersonalData { version: number }
+
+/** そのワールドに参加したときの自分だけの状態（初めてなら、読めなければ null） */
+export function loadGuest(worldId: string): PersonalData | null {
+  try {
+    const data = JSON.parse(localStorage.getItem(guestKey(worldId)) ?? 'null') as GuestSave | null;
+    return data?.version === SAVE_VERSION ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 保存できたら true */
+export function saveGuest(worldId: string, data: PersonalData): boolean {
+  try {
+    localStorage.setItem(guestKey(worldId), JSON.stringify({ version: SAVE_VERSION, ...data } satisfies GuestSave));
+    return true;
+  } catch (e) {
+    console.error('セーブに失敗しました', e);
+    return false;
+  }
 }

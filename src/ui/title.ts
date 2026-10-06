@@ -2,10 +2,15 @@ import { PALETTE } from '../core/palette.js';
 import { keyGuide } from './keyGuide.js';
 import { AvatarEditor } from './avatarEditor.js';
 import { createWorld, deleteWorld, listWorlds, loadWorld, type WorldData, type WorldMeta } from '../core/save.js';
+import { cleanCode } from '../net/link.js';
+import { cleanName } from '../net/multiplayer.js';
 
 const css = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const DEFAULT_NAME = '新しいワールド';
 const VERSION = 'v0.1.0';
+const NAME_KEY = 'warfarming:name'; // マルチで出す自分の名前（このブラウザに覚えておく）
+/** URL に ?room=部屋コード を付けて開くと、「みんなで遊ぶ」の画面に部屋コードを入れた状態で始まる（ホストが送る招待リンク） */
+export const ROOM_PARAM = 'room';
 
 const CONTROLS: [string, string][] = [
   ['[W][A][S][D]', '移動'],
@@ -28,9 +33,32 @@ const CONTROLS: [string, string][] = [
   ['[Esc]', '一時停止（自動でセーブされます）'],
 ];
 
-export interface ChosenWorld { meta: WorldMeta; data: WorldData | null }
+/**
+ * タイトル画面で選んだこと。solo：ひとりで遊ぶ、host：そのワールドで部屋を開く（友達が部屋コードで参加できる）、
+ * join：部屋コード code の部屋に参加する。name はマルチで出す自分の名前
+ */
+export type ChosenWorld =
+  | { mode: 'solo' | 'host'; meta: WorldMeta; data: WorldData | null; name: string }
+  | { mode: 'join'; name: string; code: string };
 
-type Page = 'home' | 'worlds' | 'avatar' | 'help';
+type Page = 'home' | 'worlds' | 'multi' | 'avatar' | 'help';
+
+/** マルチで出す自分の名前（覚えていなければ空） */
+function loadName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function saveName(name: string): void {
+  try {
+    localStorage.setItem(NAME_KEY, name);
+  } catch {
+    // 覚えておけなくても、今回はその名前で遊ぶ
+  }
+}
 
 /**
  * タイトル画面を出し、選ばれた（または新しく作った）ワールドを返す。
@@ -45,7 +73,7 @@ export function showTitle(): Promise<ChosenWorld> {
       <h1 class="title-logo">Island</h1>
       <div class="title-menu">
         <button class="title-btn big primary" data-go="worlds">ひとりで遊ぶ</button>
-        <button class="title-btn big" disabled title="準備中">みんなで遊ぶ<span class="title-soon">準備中</span></button>
+        <button class="title-btn big" data-go="multi">みんなで遊ぶ</button>
         <button class="title-btn big" data-go="avatar">アバター</button>
         <button class="title-btn big" data-go="help">遊び方</button>
       </div>
@@ -53,11 +81,27 @@ export function showTitle(): Promise<ChosenWorld> {
     </section>
     <section class="title-page" data-page="worlds">
       <div class="title-panel">
-        <div class="title-heading">ワールドを選ぶ</div>
+        <div class="title-heading" data-worlds-heading>ワールドを選ぶ</div>
         <div class="title-list"></div>
         <form class="title-new">
           <input class="title-input" maxlength="24" placeholder="${DEFAULT_NAME}">
           <button class="title-btn primary" type="submit">新しく作る</button>
+        </form>
+        <button class="title-btn" data-worlds-back>もどる</button>
+      </div>
+    </section>
+    <section class="title-page" data-page="multi">
+      <div class="title-panel">
+        <div class="title-heading">みんなで遊ぶ</div>
+        <p class="title-text">友達と同じ島で遊べます。部屋を開くと「部屋コード」が出るので、友達に教えてください。</p>
+        <label class="title-field">
+          <span>名前</span>
+          <input class="title-input" data-player-name maxlength="16" placeholder="名前を入れてください">
+        </label>
+        <button class="title-btn primary" data-act="host">自分のワールドで部屋を開く</button>
+        <form class="title-join">
+          <input class="title-input title-code" data-room-code maxlength="12" placeholder="部屋コード" autocomplete="off" spellcheck="false">
+          <button class="title-btn primary" type="submit" data-act="join" disabled>参加する</button>
         </form>
         <button class="title-btn" data-go="home">もどる</button>
       </div>
@@ -81,7 +125,22 @@ export function showTitle(): Promise<ChosenWorld> {
     </section>`;
   const list = root.querySelector<HTMLElement>('.title-list')!;
   const form = root.querySelector<HTMLFormElement>('.title-new')!;
-  const input = root.querySelector<HTMLInputElement>('.title-input')!;
+  const input = root.querySelector<HTMLInputElement>('.title-new .title-input')!;
+  const worldsHeading = root.querySelector<HTMLElement>('[data-worlds-heading]')!;
+  const createBtn = form.querySelector<HTMLButtonElement>('button')!;
+  const nameInput = root.querySelector<HTMLInputElement>('[data-player-name]')!;
+  const joinForm = root.querySelector<HTMLFormElement>('.title-join')!;
+  const codeInput = root.querySelector<HTMLInputElement>('[data-room-code]')!;
+  const joinBtn = root.querySelector<HTMLButtonElement>('[data-act="join"]')!;
+  const hostBtn = root.querySelector<HTMLButtonElement>('[data-act="host"]')!;
+  nameInput.value = loadName();
+  codeInput.addEventListener('input', () => (joinBtn.disabled = cleanCode(codeInput.value) === ''));
+  // 招待リンク（?room=部屋コード）から開いたら、部屋コードを入れておく
+  const invited = cleanCode(new URLSearchParams(location.search).get(ROOM_PARAM) ?? '');
+  codeInput.value = invited;
+  joinBtn.disabled = invited === '';
+  /** ワールドを選ぶ画面を、部屋を開くワールドを選ぶために開いているか */
+  let hosting = false;
   // 自分の見た目を選ぶ（選んだらすぐこのブラウザに保存され、ゲームを始めると体に反映される）
   const avatar = new AvatarEditor();
   root.querySelector('.title-avatar')!.append(avatar.el);
@@ -99,8 +158,18 @@ export function showTitle(): Promise<ChosenWorld> {
     else avatar.stop();
   };
   for (const btn of root.querySelectorAll<HTMLElement>('[data-go]')) {
-    btn.addEventListener('click', () => go(btn.dataset.go as Page));
+    btn.addEventListener('click', () => {
+      if (btn.dataset.go === 'worlds') hosting = false;
+      go(btn.dataset.go as Page);
+    });
   }
+  root.querySelector('[data-worlds-back]')!.addEventListener('click', () => go(hosting ? 'multi' : 'home'));
+
+  const playerName = () => {
+    const name = cleanName(nameInput.value);
+    saveName(nameInput.value.trim() ? name : '');
+    return name;
+  };
 
   // 表示中はゲームの操作キー（E でインベントリなど）を効かせない。Esc はホームへ戻る
   const block = (e: KeyboardEvent) => {
@@ -110,10 +179,12 @@ export function showTitle(): Promise<ChosenWorld> {
   addEventListener('keydown', block, { capture: true });
   root.addEventListener('keydown', (e) => e.stopPropagation());
 
-  let finish: (meta: WorldMeta, data: WorldData | null) => void = () => {};
+  let finish: (chosen: ChosenWorld) => void = () => {};
 
   const renderWorlds = () => {
     const worlds = listWorlds();
+    worldsHeading.textContent = hosting ? '部屋を開くワールドを選ぶ' : 'ワールドを選ぶ';
+    createBtn.textContent = hosting ? '新しく作って部屋を開く' : '新しく作る';
     list.innerHTML = '';
     if (worlds.length === 0) list.innerHTML = '<div class="title-empty">まだワールドがありません。名前を付けて作ろう</div>';
     for (const w of worlds) {
@@ -124,7 +195,7 @@ export function showTitle(): Promise<ChosenWorld> {
           <div class="title-world-name"></div>
           <div class="title-world-date">最後に遊んだ日：${formatDate(w.savedAt)}</div>
         </div>
-        <button class="title-btn primary" data-act="play">遊ぶ</button>
+        <button class="title-btn primary" data-act="play">${hosting ? '部屋を開く' : '遊ぶ'}</button>
         <button class="title-btn danger" data-act="delete">削除</button>`;
       row.querySelector('.title-world-name')!.textContent = w.name;
       row.querySelector('[data-act="play"]')!.addEventListener('click', () => {
@@ -136,7 +207,7 @@ export function showTitle(): Promise<ChosenWorld> {
           alert(`「${w.name}」のセーブデータを読み込めませんでした。`);
           return;
         }
-        finish(w, data);
+        finish({ mode: hosting ? 'host' : 'solo', meta: w, data, name: playerName() });
       });
       row.querySelector('[data-act="delete"]')!.addEventListener('click', () => {
         if (!confirm(`「${w.name}」を削除しますか？元に戻せません。`)) return;
@@ -148,18 +219,27 @@ export function showTitle(): Promise<ChosenWorld> {
   };
 
   return new Promise((resolve) => {
-    finish = (meta, data) => {
+    finish = (chosen) => {
       removeEventListener('keydown', block, { capture: true });
       avatar.stop();
       root.remove();
       document.body.classList.remove('on-title');
-      resolve({ meta, data });
+      resolve(chosen);
     };
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      finish(createWorld(input.value.trim() || DEFAULT_NAME), null);
+      finish({ mode: hosting ? 'host' : 'solo', meta: createWorld(input.value.trim() || DEFAULT_NAME), data: null, name: playerName() });
     });
-    go('home');
+    joinForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const code = cleanCode(codeInput.value);
+      if (code) finish({ mode: 'join', name: playerName(), code });
+    });
+    hostBtn.addEventListener('click', () => {
+      hosting = true;
+      go('worlds');
+    });
+    go(invited ? 'multi' : 'home');
   });
 }
 
@@ -230,10 +310,9 @@ function injectStyle(): void {
     .title-btn.primary { background: ${css(PALETTE.grass)}; color: ${ink}; box-shadow: inset 0 calc(-3 * var(--u)) 0 rgba(43, 38, 51, 0.25); }
     .title-btn.primary:hover { background: ${css(PALETTE.grass)}; filter: brightness(1.1); box-shadow: inset 0 calc(-3 * var(--u)) 0 rgba(43, 38, 51, 0.25); }
     .title-btn.danger:hover { background: ${css(PALETTE.accent)}; box-shadow: none; }
-    .title-soon {
-      margin-left: calc(8 * var(--u)); padding: 1px calc(6 * var(--u)); border-radius: calc(4 * var(--u)); font-size: calc(11 * var(--u)); vertical-align: calc(2 * var(--u));
-      background: rgba(255, 255, 255, 0.2);
-    }
+    .title-field { display: flex; align-items: center; gap: calc(10 * var(--u)); font-size: calc(14 * var(--u)); font-weight: 700; }
+    .title-join { display: flex; gap: calc(8 * var(--u)); }
+    .title-code { text-transform: uppercase; letter-spacing: 0.15em; font-weight: 700; }
 
     .title-panel {
       width: calc(480 * var(--u)); max-width: 100%; max-height: 100%; box-sizing: border-box;

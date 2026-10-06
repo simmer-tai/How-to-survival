@@ -1,4 +1,4 @@
-import type { WorldRequest } from '../core/commands.js';
+import type { Requester } from '../core/commands.js';
 import type { ItemDrops } from '../items/drops.js';
 import { isSandAt, terrainHeight } from './terrain.js';
 
@@ -31,7 +31,7 @@ export class BeachPebbles {
   private time = 0;
 
   /** 共有ワールドへの頼みを出す（main が設定する） */
-  request: (req: WorldRequest) => boolean = () => false;
+  request: Requester = () => false;
 
   /** blocked は、岩や木・桟橋などがあって小石を置きたくない場所なら true */
   constructor(
@@ -67,7 +67,7 @@ export class BeachPebbles {
       const z = (rand() - 0.5) * AREA * 2;
       const y = terrainHeight(x, z);
       if (y < PEBBLE_MIN_HEIGHT || !isSandAt(x, z) || this.blocked(x, z)) continue;
-      this.request({ type: 'dropItem', item: 'stone', count: 1, p: [x, y + 0.15, z], v: [0, 0, 0] });
+      this.request({ type: 'dropItem', item: 'stone', count: 1, p: [x, y + 0.15, z], v: [0, 0, 0] }, null);
       return;
     }
   }
@@ -78,7 +78,7 @@ export class BeachPebbles {
     return { seq: this.seq, time: this.time };
   }
 
-  /** 一度も置いていないワールドなら、上限まで置く（落とし物を戻したあとに呼ぶ） */
+  /** 一度も置いていないワールドなら、上限まで置く（落とし物を戻したあとに呼ぶ。マルチの参加者は置かない） */
   restore(save: PebblesSave): void {
     this.seq = save.seq;
     this.time = save.time;

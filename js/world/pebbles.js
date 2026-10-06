@@ -58,7 +58,7 @@ export class BeachPebbles {
             const y = terrainHeight(x, z);
             if (y < PEBBLE_MIN_HEIGHT || !isSandAt(x, z) || this.blocked(x, z))
                 continue;
-            this.request({ type: 'dropItem', item: 'stone', count: 1, p: [x, y + 0.15, z], v: [0, 0, 0] });
+            this.request({ type: 'dropItem', item: 'stone', count: 1, p: [x, y + 0.15, z], v: [0, 0, 0] }, null);
             return;
         }
     }
@@ -66,7 +66,7 @@ export class BeachPebbles {
     serialize() {
         return { seq: this.seq, time: this.time };
     }
-    /** 一度も置いていないワールドなら、上限まで置く（落とし物を戻したあとに呼ぶ） */
+    /** 一度も置いていないワールドなら、上限まで置く（落とし物を戻したあとに呼ぶ。マルチの参加者は置かない） */
     restore(save) {
         this.seq = save.seq;
         this.time = save.time;

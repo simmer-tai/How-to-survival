@@ -19,12 +19,20 @@ export interface HitPiece { type: 'hitPiece'; pid: number; damage: number }
 
 /**
  * アイテムを地面に落とす。did はホストが発行する落とし物の通し番号、p は出てくる位置、v は投げ出す速さ。
- * dmg は使いかけの道具の減った耐久値（拾い直しても耐久値が戻らないように、落とし物にも持たせる）
+ * dmg は使いかけの道具の減った耐久値（拾い直しても耐久値が戻らないように、落とし物にも持たせる）。
+ * q は出てくるときの向き（丸太をばらした木材など。省くと落とし物の番号から決める）
  */
-export interface DropItem { type: 'dropItem'; did: number; item: string; count: number; dmg?: number; p: [number, number, number]; v: [number, number, number] }
+export interface DropItem { type: 'dropItem'; did: number; item: string; count: number; dmg?: number; p: [number, number, number]; v: [number, number, number]; q?: [number, number, number, number] }
 
 /** 落ちている物を count 個拾う（全部拾うと消える） */
 export interface PickDrop { type: 'pickDrop'; did: number; count: number }
+
+/**
+ * 斧で木を1回叩く。tree は木の番号（props の生成順）。立っている木は耐久値が 0 になると away の向きへ倒れ、
+ * 倒れた丸太は 0 になるとばらけて木材の落とし物になる（木材はホストが dropItem で出す）。
+ * p は叩いた所（木くずを出す）、away は叩いた水平の向き [x, z]
+ */
+export interface ChopTree { type: 'chopTree'; tree: number; p: [number, number, number]; away: [number, number] }
 
 /** 茂みを叩くのに使った物。knife（石のナイフ）で叩くとツルも採れる */
 export type HarvestTool = 'fist' | 'knife' | 'axe';
@@ -116,7 +124,7 @@ export interface BurnFuel { type: 'burnFuel'; pid: number }
 
 export type FireCommand = AddFuel | TakeFuel | BurnFuel;
 
-export type WorldCommand = PieceCommand | DropCommand | HarvestBush | PickBerry | MineRock | HoleCommand | BoatCommand | SpearCommand | SetWeather | FireCommand;
+export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | BoatCommand | SpearCommand | SetWeather | FireCommand;
 
 /** 参加者からホストへの頼み。新しく増える物の ID はホストが付けるので、まだ持たない */
 export type PieceRequest = Omit<PlacePiece, 'pid'> | RemovePiece | { type: 'hitPiece'; pid: number; tool: StrikeTool };
@@ -127,4 +135,12 @@ export type HoleRequest = { type: 'digHole'; p: [number, number]; tool: DigTool 
 export type BoatRequest = Omit<PlaceBoat, 'bid'> | PickBoat | BoardBoat | LeaveBoat | Omit<SailBoat, 'p' | 'yaw'>;
 export type SpearRequest = Omit<ThrowSpear, 'sid' | 't' | 'hit'> | PickSpear;
 export type WeatherRequest = Pick<SetWeather, 'type' | 'kind'>;
-export type WorldRequest = PieceRequest | DropRequest | BushRequest | RockRequest | HoleRequest | BoatRequest | SpearRequest | WeatherRequest | FireCommand;
+export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | BoatRequest | SpearRequest | WeatherRequest | FireCommand;
+
+/**
+ * 頼みを出す関数（main の requestWorld）。by は頼んだ人の番号で、省くと自分。
+ * null は人ではなく世界そのものが出す頼み（時間で埋まる穴・燃え尽きる焚火・湧く小石・ばらけた丸太の木材など。ホストだけが出せる）。
+ * 頼んだ人が自分のときだけ、採れた物などを自分のインベントリに入れる。
+ * 適用できたら true（マルチの参加者は、自分の手元で確かめてホストへ送れたら true。ホストに断られたら main が元に戻す）
+ */
+export type Requester = (req: WorldRequest, by?: number | null) => boolean;

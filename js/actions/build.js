@@ -86,7 +86,7 @@ export class Builder {
     debris = [];
     /**
      * 共有ワールドへの頼みを出す。ひとりで遊ぶときはその場でホストとして確かめて適用し、できたら true を返す。
-     * （マルチでは、ホストの返事を待つ形になる）
+     * マルチの参加者は手元で確かめてホストへ送れたら true（ホストに断られたら main が素材を戻す）
      */
     request = () => false;
     /** 部材が増えた・減ったときに呼ばれる */
@@ -213,27 +213,37 @@ export class Builder {
         this.onWork();
         return true;
     }
-    /** 狙っている部材を壊して、素材（作業台ならアイテム）に戻す。壊せたら true */
+    /** 狙っている部材を壊して、素材（作業台ならアイテム）に戻す頼みを出す。壊せたら true（素材は apply で受け取る） */
     dismantle() {
         this.raycaster.setFromCamera(SCREEN_CENTER, this.camera);
         const hit = this.raycaster.intersectObjects(this.targets, false)[0];
         const b = hit && this.byMesh.get(hit.object);
         if (!b)
             return false;
-        const inside = this.contents(b.pid); // 取り除くと分からなくなるので、先に見ておく
         if (!this.request({ type: 'removePiece', pid: b.pid }))
             return false;
-        // インベントリに入りきらなければ捨てる
+        this.onWork();
+        return true;
+    }
+    /** ハンマーで解体した部材の素材（作業台などはそのアイテム）と、中に入れてあった物を受け取る。入りきらなければ捨てる */
+    takeBack(b) {
         const plan = buildPlan(b.def.id);
         if (plan)
             for (const [item, n] of ingredients(plan))
                 this.inventory.add(item, n);
         else if (b.def.id in ITEMS)
             this.inventory.add(b.def.id, 1);
-        for (const s of inside)
+        for (const s of this.contents(b.pid))
             this.inventory.add(s.item, s.count, s.dmg);
-        this.onWork();
-        return true;
+    }
+    /** 建てる頼みをホストに断られたとき、先に減らした素材（部材のアイテム）を戻す */
+    refund(id) {
+        const plan = buildPlan(id);
+        if (plan)
+            for (const [item, n] of ingredients(plan))
+                this.inventory.add(item, n);
+        else if (id in ITEMS)
+            this.inventory.add(id, 1);
     }
     /** 視線の先、reach 以内の部材を叩く。木や茂みのほうが手前にあれば叩かない。部材に当たったら true */
     strike(tool, reach) {
@@ -438,7 +448,8 @@ export class Builder {
         return true;
     }
     // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
-    apply(cmd) {
+    /** mine は自分の頼みか（自分が解体したときだけ、素材を受け取る） */
+    apply(cmd, mine) {
         if (cmd.type === 'placePiece') {
             const def = pieceDef(cmd.id);
             if (!def || this.pieces.has(cmd.pid))
@@ -459,6 +470,11 @@ export class Builder {
             this.removePiece(cmd.pid);
         }
         else {
+            const b = this.pieces.get(cmd.pid);
+            if (!b)
+                return;
+            if (mine)
+                this.takeBack(b); // 燃料の欄などの中身は、取り除くと分からなくなるので先に受け取る
             this.removePiece(cmd.pid);
         }
         this.onChange();

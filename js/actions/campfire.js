@@ -93,6 +93,8 @@ export class Campfires {
     hitPoint = new THREE.Vector3();
     /** 共有ワールドへの頼みを出す（main が requestWorld を入れる）。適用できたら true */
     request = () => false;
+    /** 自分が燃料の欄から取り出した物を受け取る（取り出せたと決まってから呼ばれる。燃料の欄の画面が設定する） */
+    onTake = () => { };
     constructor(world) {
         this.world = world;
     }
@@ -185,7 +187,8 @@ export class Campfires {
         return f.item !== null && f.left <= 0 ? { type: 'burnFuel', pid: req.pid } : null;
     }
     /**
-     * 燃えている燃料の時間を進め、燃え尽きたら次の燃料を燃やす頼みを出す（マルチではホストだけが呼ぶ）。
+     * 燃えている燃料の時間を進め、燃え尽きたら次の燃料を燃やす頼みを出す。
+     * マルチでは全員が時間を進めて残り時間を見せるが、次の燃料を燃やす頼み（世界が出す頼み）はホストのものだけが通る。
      * のこり時間はセーブに入るので、ロードしたあとも続きから燃える
      */
     tick(dt) {
@@ -194,11 +197,12 @@ export class Campfires {
                 continue;
             f.left -= dt;
             if (f.left <= 0)
-                this.request({ type: 'burnFuel', pid: f.pid });
+                this.request({ type: 'burnFuel', pid: f.pid }, null);
         }
     }
     // ---- 適用側：コマンドの値だけで焚火を変える ----
-    apply(cmd) {
+    /** mine は自分の頼みか（自分が取り出したときだけ、取り出した物を受け取る） */
+    apply(cmd, mine) {
         const f = this.fires.get(cmd.pid);
         if (!f)
             return;
@@ -211,8 +215,12 @@ export class Campfires {
         else if (cmd.type === 'takeFuel') {
             if (!f.fuel)
                 return;
-            const count = f.fuel.count - cmd.count;
-            f.fuel = count > 0 ? { item: f.fuel.item, count } : null;
+            const item = f.fuel.item;
+            const taken = Math.min(cmd.count, f.fuel.count);
+            const count = f.fuel.count - taken;
+            f.fuel = count > 0 ? { item, count } : null;
+            if (mine)
+                this.onTake(item, taken);
         }
         else {
             this.burnNext(f);

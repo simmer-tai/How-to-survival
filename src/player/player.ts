@@ -201,6 +201,12 @@ export class Player {
     this.body.setNextKinematicTranslation({ x: eye.x, y: eye.y - EYE_HEIGHT + this.bodyCenter, z: eye.z });
   }
 
+  /** 船に座るのをやめて、その場に立つ（乗る頼みをホストに断られたときなど） */
+  stand(): void {
+    if (!this.seated) return;
+    this.standAt(new THREE.Vector3(this.position.x, this.position.y - EYE_HEIGHT, this.position.z));
+  }
+
   /** 足元を feet に置いたとき、体が何にもぶつからないか（船から降りる場所を探すのに使う） */
   canStandAt(feet: THREE.Vector3): boolean {
     const hit = this.physics.world.intersectionWithShape(

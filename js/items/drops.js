@@ -57,8 +57,6 @@ export class ItemDrops {
     raycaster = new THREE.Raycaster();
     target = new THREE.Vector3();
     nextDid = 0;
-    /** 自分が拾おうとしている落とし物の番号（自分の頼みで適用されたときだけ、手元へ吸い寄せる） */
-    claiming = -1;
     /** 拾った物が手元に届いたときに呼ばれる（dmg は使いかけの道具の減った耐久値） */
     onCollect = () => { };
     /** 共有ワールドへの頼みを出す（main が設定する）。適用できたら true */
@@ -68,7 +66,10 @@ export class ItemDrops {
         this.physics = physics;
         this.raycaster.far = PICKUP_REACH;
     }
-    /** 幹を count 個の木材に切り分けて弾けさせる */
+    /**
+     * 幹を count 個の木材に切り分けて弾けさせる（世界が出す頼みなので、マルチではホストだけが出せる）。
+     * 飛び方はホストが決めてコマンドで配るので、Math.random() でよい
+     */
     spawn(trunk, count) {
         trunk.updateWorldMatrix(true, false);
         const height = trunk.geometry.parameters.height;
@@ -77,14 +78,13 @@ export class ItemDrops {
         for (let n = 0; n < count; n++) {
             const pos = trunk.localToWorld(new THREE.Vector3(0, ((n + 0.5) / count - 0.5) * height, 0));
             pos.y += 0.3;
-            const body = this.add(this.nextDid, 'wood', 1, pos, rotation);
             // 丸太の中心から外へ弾ける
             const out = pos.clone().sub(center).setY(0);
             if (out.lengthSq() < 1e-4)
                 out.set(Math.random() - 0.5, 0, Math.random() - 0.5);
             out.normalize().multiplyScalar(1 + Math.random() * 1.5);
-            body.setLinvel({ x: out.x + (Math.random() - 0.5), y: 3 + Math.random() * 2, z: out.z + (Math.random() - 0.5) }, true);
-            body.setAngvel({ x: (Math.random() - 0.5) * 8, y: (Math.random() - 0.5) * 4, z: (Math.random() - 0.5) * 8 }, true);
+            const v = [out.x + (Math.random() - 0.5), 3 + Math.random() * 2, out.z + (Math.random() - 0.5)];
+            this.request({ type: 'dropItem', item: 'wood', count: 1, p: pos.toArray(), v, q: rotation.toArray() }, null);
         }
     }
     /** 条件に合う落とし物の数（位置はホストの物理で計算したもの） */
@@ -118,9 +118,7 @@ export class ItemDrops {
         const count = Math.min(d.count, room(d.item));
         if (count <= 0)
             return true;
-        this.claiming = d.did;
         this.request({ type: 'pickDrop', did: d.did, count });
-        this.claiming = -1;
         return true;
     }
     /** eye（目の位置）から look の向きへアイテムを投げ出す頼みを出す。落とせたら true */
@@ -141,6 +139,8 @@ export class ItemDrops {
                 return null;
             if (req.dmg !== undefined && validDmg(req.item, req.dmg) === undefined)
                 return null;
+            if (req.q !== undefined && (req.q.length !== 4 || !req.q.every(Number.isFinite)))
+                return null;
             return { ...req, did: this.nextDid++ };
         }
         // 同じ物を2人が拾おうとしたら、先に届いた方だけが拾える（残りの個数を超える分は拾えない）
@@ -150,12 +150,14 @@ export class ItemDrops {
         return { ...req, count: Math.min(req.count, d.count) };
     }
     // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
-    apply(cmd) {
+    /** mine は自分の頼みか（自分が拾ったときだけ、手元へ吸い寄せてインベントリに入れる） */
+    apply(cmd, mine) {
         if (cmd.type === 'dropItem') {
             if (this.drops.has(cmd.did))
                 return;
             const rand = seeded(cmd.did);
-            const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(rand() * 6.3, rand() * 6.3, rand() * 6.3));
+            const euler = new THREE.Euler(rand() * 6.3, rand() * 6.3, rand() * 6.3);
+            const rotation = cmd.q ? new THREE.Quaternion(...cmd.q).normalize() : new THREE.Quaternion().setFromEuler(euler);
             const body = this.add(cmd.did, cmd.item, cmd.count, new THREE.Vector3(...cmd.p), rotation, cmd.dmg);
             body.setLinvel({ x: cmd.v[0], y: cmd.v[1], z: cmd.v[2] }, true);
             body.setAngvel({ x: (rand() - 0.5) * 6, y: (rand() - 0.5) * 6, z: (rand() - 0.5) * 6 }, true);
@@ -165,7 +167,6 @@ export class ItemDrops {
         if (!d)
             return;
         const count = Math.min(cmd.count, d.count);
-        const mine = cmd.did === this.claiming;
         if (count < d.count) {
             d.count -= count;
             // 一部だけ拾ったときは、拾った分の見た目を別に作って吸い寄せる
@@ -181,6 +182,31 @@ export class ItemDrops {
         else {
             d.mesh.removeFromParent();
             disposeModel(d.mesh);
+        }
+    }
+    // ---- マルチ：転がる動きはホストの物理で決めて配る ----
+    /** 動いている落とし物の位置・向き・速さ。1つにつき [番号, x, y, z, qx, qy, qz, qw, vx, vy, vz]（ホストがときどき配る） */
+    motion() {
+        const out = [];
+        for (const d of this.drops.values()) {
+            if (d.body.isSleeping() || !d.body.isEnabled())
+                continue;
+            const t = d.body.translation();
+            const r = d.body.rotation();
+            const v = d.body.linvel();
+            out.push([d.did, t.x, t.y, t.z, r.x, r.y, r.z, r.w, v.x, v.y, v.z]);
+        }
+        return out;
+    }
+    /** ホストから届いた動きに合わせる（参加者が呼ぶ。あいだは自分の物理でつなぐ） */
+    setMotion(list) {
+        for (const [did, x, y, z, qx, qy, qz, qw, vx, vy, vz] of list) {
+            const d = this.drops.get(did);
+            if (!d)
+                continue;
+            d.body.setTranslation({ x, y, z }, true);
+            d.body.setRotation({ x: qx, y: qy, z: qz, w: qw }, true);
+            d.body.setLinvel({ x: vx, y: vy, z: vz }, true);
         }
     }
     // ---- セーブ ----

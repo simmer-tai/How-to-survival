@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import type { FireCommand, WorldRequest } from '../core/commands.js';
+import type { FireCommand, Requester } from '../core/commands.js';
 import { ITEMS, type ItemId, type Stack } from '../items/inventory.js';
 import type { PieceInfo } from './build.js';
 import { FIRE_RING } from './pieces.js';
@@ -155,7 +155,9 @@ export class Campfires {
   private readonly hitPoint = new THREE.Vector3();
 
   /** 共有ワールドへの頼みを出す（main が requestWorld を入れる）。適用できたら true */
-  request: (req: WorldRequest) => boolean = () => false;
+  request: Requester = () => false;
+  /** 自分が燃料の欄から取り出した物を受け取る（取り出せたと決まってから呼ばれる。燃料の欄の画面が設定する） */
+  onTake: (item: ItemId, count: number) => void = () => {};
 
   constructor(private readonly world: THREE.Object3D) {}
 
@@ -243,20 +245,22 @@ export class Campfires {
   }
 
   /**
-   * 燃えている燃料の時間を進め、燃え尽きたら次の燃料を燃やす頼みを出す（マルチではホストだけが呼ぶ）。
+   * 燃えている燃料の時間を進め、燃え尽きたら次の燃料を燃やす頼みを出す。
+   * マルチでは全員が時間を進めて残り時間を見せるが、次の燃料を燃やす頼み（世界が出す頼み）はホストのものだけが通る。
    * のこり時間はセーブに入るので、ロードしたあとも続きから燃える
    */
   tick(dt: number): void {
     for (const f of this.fires.values()) {
       if (f.item === null) continue;
       f.left -= dt;
-      if (f.left <= 0) this.request({ type: 'burnFuel', pid: f.pid });
+      if (f.left <= 0) this.request({ type: 'burnFuel', pid: f.pid }, null);
     }
   }
 
   // ---- 適用側：コマンドの値だけで焚火を変える ----
 
-  apply(cmd: FireCommand): void {
+  /** mine は自分の頼みか（自分が取り出したときだけ、取り出した物を受け取る） */
+  apply(cmd: FireCommand, mine: boolean): void {
     const f = this.fires.get(cmd.pid);
     if (!f) return;
     if (cmd.type === 'addFuel') {
@@ -265,8 +269,11 @@ export class Campfires {
       if (f.item === null) this.burnNext(f); // 消えていたら、入れた燃料ですぐ燃え上がる
     } else if (cmd.type === 'takeFuel') {
       if (!f.fuel) return;
-      const count = f.fuel.count - cmd.count;
-      f.fuel = count > 0 ? { item: f.fuel.item, count } : null;
+      const item = f.fuel.item;
+      const taken = Math.min(cmd.count, f.fuel.count);
+      const count = f.fuel.count - taken;
+      f.fuel = count > 0 ? { item, count } : null;
+      if (mine) this.onTake(item, taken);
     } else {
       this.burnNext(f);
     }

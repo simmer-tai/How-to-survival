@@ -35,7 +35,6 @@ export class BushForager {
     onHarvest = () => { };
     /** 共有ワールドを変える頼みを出す（main.ts が差し替える）。適用できたら true */
     request = () => false;
-    claiming = -1; // 自分が採ろうとしている茂みの番号（自分の頼みの結果だけインベントリに入れる）
     constructor(world, bushes) {
         this.world = world;
         bushes.forEach((mesh, i) => {
@@ -61,10 +60,7 @@ export class BushForager {
         const s = this.aimed(camera, reach);
         if (!s)
             return false;
-        this.claiming = this.list.indexOf(s);
-        const ok = this.request({ type: 'harvestBush', bush: this.claiming, tool });
-        this.claiming = -1;
-        return ok;
+        return this.request({ type: 'harvestBush', bush: this.list.indexOf(s), tool });
     }
     /** F で実を摘める茂みに視線が合っているか */
     canPick(camera) {
@@ -75,10 +71,7 @@ export class BushForager {
         const s = this.aimed(camera, BERRY_REACH);
         if (!s || s.berries <= 0)
             return false;
-        this.claiming = this.list.indexOf(s);
-        const ok = this.request({ type: 'pickBerry', bush: this.claiming });
-        this.claiming = -1;
-        return ok;
+        return this.request({ type: 'pickBerry', bush: this.list.indexOf(s) });
     }
     // ---- ホスト側：頼みを確かめてコマンドにする ----
     /** 頼みを確かめてコマンドにする。叩くなら減る耐久値とその1回で採れる物を決める。できなければ null（マルチではホストだけが呼ぶ） */
@@ -107,8 +100,8 @@ export class BushForager {
         return { type: 'harvestBush', bush: req.bush, damage, items };
     }
     // ---- 全員：コマンドを適用する ----
-    /** 茂みの耐久値を減らす（実を摘むなら1つ減らす）。壊れたら縮んで消え、自分の頼みなら採れた物を受け取る */
-    apply(cmd) {
+    /** 茂みの耐久値を減らす（実を摘むなら1つ減らす）。壊れたら縮んで消え、自分の頼み（mine）なら採れた物を受け取る */
+    apply(cmd, mine) {
         const s = this.list[cmd.bush];
         if (!s || s.phase !== 'full' || s.hp <= 0)
             return;
@@ -117,7 +110,7 @@ export class BushForager {
                 return;
             s.berries--;
             showBerries(s);
-            if (cmd.bush === this.claiming)
+            if (mine)
                 this.onHarvest('berry', 1);
             return;
         }
@@ -127,7 +120,7 @@ export class BushForager {
         showBerries(s);
         s.shake = SHAKE_TIME;
         this.spawnParticles(s.mesh);
-        if (cmd.bush === this.claiming) {
+        if (mine) {
             for (const [item, count] of cmd.items)
                 if (item in ITEMS)
                     this.onHarvest(item, count);

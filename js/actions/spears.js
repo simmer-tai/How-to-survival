@@ -36,8 +36,6 @@ export class Spears {
     spears = new Map();
     raycaster = new THREE.Raycaster();
     nextSid = 0;
-    /** 自分が拾おうとしている槍の番号（自分の頼みで適用されたときだけ、インベントリに入れる） */
-    claiming = -1;
     /** 自分が投げた槍の番号（壊れたときに知らせる） */
     mine = new Set();
     supportTimer = 0;
@@ -57,11 +55,7 @@ export class Spears {
     throw(dmg, eye, look, charge) {
         const p = eye.clone().addScaledVector(look, THROW_FORWARD);
         const v = look.clone().normalize().multiplyScalar(THREE.MathUtils.lerp(MIN_SPEED, MAX_SPEED, charge));
-        const sid = this.nextSid;
-        const ok = this.request({ type: 'throwSpear', ...(dmg ? { dmg } : {}), p: p.toArray(), v: v.toArray() });
-        if (ok)
-            this.mine.add(sid); // ひとりで遊ぶときは自分が発行した番号（マルチではホストから返った番号にする）
-        return ok;
+        return this.request({ type: 'throwSpear', ...(dmg ? { dmg } : {}), p: p.toArray(), v: v.toArray() });
     }
     /** 画面中央で狙っている、刺さった槍（届く距離のもの） */
     aimed(camera) {
@@ -84,9 +78,7 @@ export class Spears {
             return false;
         if (room('spear') <= 0)
             return true;
-        this.claiming = s.sid;
         this.request({ type: 'pickSpear', sid: s.sid });
-        this.claiming = -1;
         return true;
     }
     // ---- ホスト側：頼みを確かめてコマンドにする ----
@@ -121,11 +113,14 @@ export class Spears {
         return { t: MAX_FLIGHT, hit: false };
     }
     // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
-    apply(cmd) {
+    /** mine は自分の頼みか（自分が投げた槍は壊れたら知らせ、自分が拾った槍はインベントリに入れる） */
+    apply(cmd, mine) {
         if (cmd.type === 'throwSpear') {
             if (this.spears.has(cmd.sid))
                 return;
             const s = this.add(cmd.sid, cmd.dmg);
+            if (mine)
+                this.mine.add(cmd.sid);
             s.from.fromArray(cmd.p);
             s.velocity.fromArray(cmd.v);
             s.flight = cmd.t;
@@ -138,7 +133,7 @@ export class Spears {
         if (!s)
             return;
         this.remove(s);
-        if (cmd.sid === this.claiming)
+        if (mine)
             this.onCollect('spear', 1, s.dmg);
     }
     // ---- セーブ ----
@@ -242,8 +237,8 @@ export class Spears {
                 continue;
             const center = s.mesh.localToWorld(new THREE.Vector3(0, SPEAR_LENGTH / 2, 0));
             const dmg = s.dmg;
-            if (this.request({ type: 'pickSpear', sid: s.sid })) {
-                this.request({ type: 'dropItem', item: 'spear', count: 1, ...(dmg ? { dmg } : {}), p: center.toArray(), v: [0, 0, 0] });
+            if (this.request({ type: 'pickSpear', sid: s.sid }, null)) {
+                this.request({ type: 'dropItem', item: 'spear', count: 1, ...(dmg ? { dmg } : {}), p: center.toArray(), v: [0, 0, 0] }, null);
             }
         }
     }

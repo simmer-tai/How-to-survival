@@ -4,7 +4,7 @@ import { flat, flatVertex } from '../core/materials.js';
 import { WATER_LEVEL } from '../core/physics.js';
 import { ITEMS, type ItemId } from '../items/inventory.js';
 import { islandField } from '../world/terrain.js';
-import type { DigHole, DigTool, FillHole, HoleCommand, HoleRequest, WorldRequest } from '../core/commands.js';
+import type { DigHole, DigTool, FillHole, HoleCommand, HoleRequest, Requester } from '../core/commands.js';
 
 const HOLE_RADIUS = 0.32; // 穴の口の半径（m）
 const HOLE_DEPTH = 0.22; // 穴の深さ（m）
@@ -70,14 +70,13 @@ export class GroundDigger {
   private readonly raycaster = new THREE.Raycaster();
   private readonly clods: Clod[] = [];
   private nextHid = 0;
-  private claiming = false; // 自分の頼みを適用している間だけ true（自分の頼みの結果だけインベントリに入れる）
 
   /** 採れたアイテムごとに呼ばれる */
   onHarvest: (item: ItemId, count: number) => void = () => {};
   /** 穴が増えたり減ったりしたら呼ばれる（穴の中から草が生えないようにする） */
   onChange: () => void = () => {};
   /** 共有ワールドを変える頼みを出す（main.ts が差し替える）。適用できたら true */
-  request: (req: WorldRequest) => boolean = () => false;
+  request: Requester = () => false;
   /** (x, z) に穴を掘ってよいか（建てた部材や桟橋の下などを除く。main.ts が差し替える） */
   canDigAt: (x: number, z: number) => boolean = () => true;
 
@@ -129,10 +128,7 @@ export class GroundDigger {
   dig(camera: THREE.Camera, tool: DigTool, reach: number): boolean {
     const p = this.aimed(camera, reach);
     if (!p) return false;
-    this.claiming = true;
-    const ok = this.request({ type: 'digHole', p, tool });
-    this.claiming = false;
-    return ok;
+    return this.request({ type: 'digHole', p, tool });
   }
 
   /** 狙っている所を掘れるか（操作の案内に使う） */
@@ -158,7 +154,7 @@ export class GroundDigger {
   tick(dt: number): void {
     for (const h of this.holes.values()) {
       h.age += dt;
-      if (h.age >= FILL_TIME) this.request({ type: 'fillHole', hid: h.hid });
+      if (h.age >= FILL_TIME) this.request({ type: 'fillHole', hid: h.hid }, null);
     }
   }
 
@@ -181,17 +177,18 @@ export class GroundDigger {
 
   // ---- 全員：コマンドを適用する ----
 
-  apply(cmd: HoleCommand): void {
-    if (cmd.type === 'digHole') this.applyDig(cmd);
+  /** mine は自分の頼みか（自分が掘ったときだけ、採れた土を受け取る） */
+  apply(cmd: HoleCommand, mine: boolean): void {
+    if (cmd.type === 'digHole') this.applyDig(cmd, mine);
     else this.applyFill(cmd);
   }
 
   /** 穴をあける。自分の頼みなら採れた物を受け取る */
-  private applyDig(cmd: DigHole): void {
+  private applyDig(cmd: DigHole, mine: boolean): void {
     if (this.holes.has(cmd.hid)) return;
     this.addHole(cmd.hid, cmd.p[0], cmd.p[1], 0);
     this.nextHid = Math.max(this.nextHid, cmd.hid + 1);
-    if (this.claiming) {
+    if (mine) {
       for (const [item, count] of cmd.items) if (item in ITEMS) this.onHarvest(item as ItemId, count);
     }
     this.spawnClods(cmd.p[0], cmd.p[1]);

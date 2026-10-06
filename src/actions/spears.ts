@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RAPIER, COLLIDE, type Physics } from '../core/physics.js';
-import type { SpearCommand, SpearRequest, WorldRequest } from '../core/commands.js';
+import type { Requester, SpearCommand, SpearRequest } from '../core/commands.js';
 import { ITEMS, validDmg, type ItemId } from '../items/inventory.js';
 import { SPEAR_LENGTH, buildSpear } from '../player/hand.js';
 
@@ -62,8 +62,6 @@ export class Spears {
   private readonly spears = new Map<number, Spear>();
   private readonly raycaster = new THREE.Raycaster();
   private nextSid = 0;
-  /** 自分が拾おうとしている槍の番号（自分の頼みで適用されたときだけ、インベントリに入れる） */
-  private claiming = -1;
   /** 自分が投げた槍の番号（壊れたときに知らせる） */
   private readonly mine = new Set<number>();
   private supportTimer = 0;
@@ -73,7 +71,7 @@ export class Spears {
   /** 自分が投げた槍が刺さった拍子に壊れたときに呼ばれる */
   onBreak: () => void = () => {};
   /** 共有ワールドへの頼みを出す（main が設定する）。適用できたら true */
-  request: (req: WorldRequest) => boolean = () => false;
+  request: Requester = () => false;
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -88,10 +86,7 @@ export class Spears {
   throw(dmg: number | undefined, eye: THREE.Vector3, look: THREE.Vector3, charge: number): boolean {
     const p = eye.clone().addScaledVector(look, THROW_FORWARD);
     const v = look.clone().normalize().multiplyScalar(THREE.MathUtils.lerp(MIN_SPEED, MAX_SPEED, charge));
-    const sid = this.nextSid;
-    const ok = this.request({ type: 'throwSpear', ...(dmg ? { dmg } : {}), p: p.toArray(), v: v.toArray() });
-    if (ok) this.mine.add(sid); // ひとりで遊ぶときは自分が発行した番号（マルチではホストから返った番号にする）
-    return ok;
+    return this.request({ type: 'throwSpear', ...(dmg ? { dmg } : {}), p: p.toArray(), v: v.toArray() });
   }
 
   /** 画面中央で狙っている、刺さった槍（届く距離のもの） */
@@ -114,9 +109,7 @@ export class Spears {
     const s = this.aimed(camera);
     if (!s) return false;
     if (room('spear') <= 0) return true;
-    this.claiming = s.sid;
     this.request({ type: 'pickSpear', sid: s.sid });
-    this.claiming = -1;
     return true;
   }
 
@@ -153,10 +146,12 @@ export class Spears {
 
   // ---- 適用側：コマンドの値だけで世界を変える（カメラや入力は見ない） ----
 
-  apply(cmd: SpearCommand): void {
+  /** mine は自分の頼みか（自分が投げた槍は壊れたら知らせ、自分が拾った槍はインベントリに入れる） */
+  apply(cmd: SpearCommand, mine: boolean): void {
     if (cmd.type === 'throwSpear') {
       if (this.spears.has(cmd.sid)) return;
       const s = this.add(cmd.sid, cmd.dmg);
+      if (mine) this.mine.add(cmd.sid);
       s.from.fromArray(cmd.p);
       s.velocity.fromArray(cmd.v);
       s.flight = cmd.t;
@@ -168,7 +163,7 @@ export class Spears {
     const s = this.spears.get(cmd.sid);
     if (!s) return;
     this.remove(s);
-    if (cmd.sid === this.claiming) this.onCollect('spear', 1, s.dmg);
+    if (mine) this.onCollect('spear', 1, s.dmg);
   }
 
   // ---- セーブ ----
@@ -279,8 +274,8 @@ export class Spears {
       if (touching) continue;
       const center = s.mesh.localToWorld(new THREE.Vector3(0, SPEAR_LENGTH / 2, 0));
       const dmg = s.dmg;
-      if (this.request({ type: 'pickSpear', sid: s.sid })) {
-        this.request({ type: 'dropItem', item: 'spear', count: 1, ...(dmg ? { dmg } : {}), p: center.toArray(), v: [0, 0, 0] });
+      if (this.request({ type: 'pickSpear', sid: s.sid }, null)) {
+        this.request({ type: 'dropItem', item: 'spear', count: 1, ...(dmg ? { dmg } : {}), p: center.toArray(), v: [0, 0, 0] }, null);
       }
     }
   }

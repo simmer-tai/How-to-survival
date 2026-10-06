@@ -86,16 +86,21 @@ export const DEFAULT_LOOK: AvatarLook = { skin: 1, hair: 1, hairStyle: 0, hat: 0
 
 const LOOK_KEY = 'warfarming:avatar';
 
+/** 保存してあった値や、マルチでほかの人から届いた値を見た目にする（おかしな値の所は最初の見た目にする） */
+export function toLook(value: unknown): AvatarLook {
+  const saved = (typeof value === 'object' && value !== null ? value : {}) as Partial<AvatarLook>;
+  const look = { ...DEFAULT_LOOK };
+  for (const key of Object.keys(LOOK_PARTS) as (keyof AvatarLook)[]) {
+    const v = saved[key];
+    if (Number.isInteger(v) && v! >= 0 && v! < LOOK_PARTS[key]) look[key] = v!;
+  }
+  return look;
+}
+
 /** ブラウザに保存した見た目を読む（なければ、読めなければ最初の見た目） */
 export function loadLook(): AvatarLook {
   try {
-    const saved = JSON.parse(localStorage.getItem(LOOK_KEY) ?? '{}') as Partial<AvatarLook>;
-    const look = { ...DEFAULT_LOOK };
-    for (const key of Object.keys(LOOK_PARTS) as (keyof AvatarLook)[]) {
-      const v = saved[key];
-      if (Number.isInteger(v) && v! >= 0 && v! < LOOK_PARTS[key]) look[key] = v!;
-    }
-    return look;
+    return toLook(JSON.parse(localStorage.getItem(LOOK_KEY) ?? '{}'));
   } catch {
     return { ...DEFAULT_LOOK };
   }
@@ -208,7 +213,8 @@ export class Avatar {
   private grip: Grip = 'none';
   private heldModel: THREE.Object3D | null = null;
 
-  constructor(look: AvatarLook) {
+  /** layer は体を描くレイヤー（自分の体は AVATAR_LAYER。マルチで描く他の人の体は、いつも見える 0） */
+  constructor(look: AvatarLook, private readonly layer = AVATAR_LAYER) {
     this.look = look;
     this.tilt.position.y = SWIM_PIVOT;
     this.body.position.y = -SWIM_PIVOT;
@@ -610,10 +616,10 @@ export class Avatar {
     }
   }
 
-  /** 体の部品を AVATAR_LAYER に移し、影を落とすようにする */
+  /** 体の部品を体のレイヤーに移し、影を落とすようにする */
   private toLayer(root: THREE.Object3D): void {
     root.traverse((o) => {
-      o.layers.set(AVATAR_LAYER);
+      o.layers.set(this.layer);
       if (o instanceof THREE.Mesh) {
         o.castShadow = true;
         o.receiveShadow = true;

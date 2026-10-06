@@ -57,7 +57,6 @@ export class GroundDigger {
     raycaster = new THREE.Raycaster();
     clods = [];
     nextHid = 0;
-    claiming = false; // 自分の頼みを適用している間だけ true（自分の頼みの結果だけインベントリに入れる）
     /** 採れたアイテムごとに呼ばれる */
     onHarvest = () => { };
     /** 穴が増えたり減ったりしたら呼ばれる（穴の中から草が生えないようにする） */
@@ -117,10 +116,7 @@ export class GroundDigger {
         const p = this.aimed(camera, reach);
         if (!p)
             return false;
-        this.claiming = true;
-        const ok = this.request({ type: 'digHole', p, tool });
-        this.claiming = false;
-        return ok;
+        return this.request({ type: 'digHole', p, tool });
     }
     /** 狙っている所を掘れるか（操作の案内に使う） */
     canDig(camera, reach) {
@@ -143,7 +139,7 @@ export class GroundDigger {
         for (const h of this.holes.values()) {
             h.age += dt;
             if (h.age >= FILL_TIME)
-                this.request({ type: 'fillHole', hid: h.hid });
+                this.request({ type: 'fillHole', hid: h.hid }, null);
         }
     }
     /** (x, z) が穴の口の中か（穴の中から草が生えないようにする） */
@@ -165,19 +161,20 @@ export class GroundDigger {
         return { type: 'digHole', hid: this.nextHid, p: [x, z], items: [['dirt', dirt]] };
     }
     // ---- 全員：コマンドを適用する ----
-    apply(cmd) {
+    /** mine は自分の頼みか（自分が掘ったときだけ、採れた土を受け取る） */
+    apply(cmd, mine) {
         if (cmd.type === 'digHole')
-            this.applyDig(cmd);
+            this.applyDig(cmd, mine);
         else
             this.applyFill(cmd);
     }
     /** 穴をあける。自分の頼みなら採れた物を受け取る */
-    applyDig(cmd) {
+    applyDig(cmd, mine) {
         if (this.holes.has(cmd.hid))
             return;
         this.addHole(cmd.hid, cmd.p[0], cmd.p[1], 0);
         this.nextHid = Math.max(this.nextHid, cmd.hid + 1);
-        if (this.claiming) {
+        if (mine) {
             for (const [item, count] of cmd.items)
                 if (item in ITEMS)
                     this.onHarvest(item, count);

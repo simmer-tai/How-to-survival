@@ -3,6 +3,7 @@ import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import type { Tree } from '../world/props.js';
 import { RAPIER, COLLIDE, hullDesc, type Physics } from '../core/physics.js';
+import type { ChopTree, Requester } from '../core/commands.js';
 
 const REACH = 3.2; // 斧が届く距離
 const LOG_REACH = 4.2; // 地面に横たわる丸太は少し遠くまで届く
@@ -49,7 +50,10 @@ interface Chip { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }
 /** セーブデータ上の木1本。null は丸太をばらして消えた木。log は倒れた丸太の位置・向き [x, y, z, qx, qy, qz, qw] */
 export type TreeSave = { hp: number; log?: number[] } | null;
 
-/** 斧で木を叩いて切り倒し、倒れた丸太をばらして木材にする */
+/**
+ * 斧で木を叩いて切り倒し、倒れた丸太をばらして木材にする。
+ * 叩く操作はワールドコマンド（chopTree）にして、木の番号で適用する。倒れる・転がる動きはホストの物理で決めて配る
+ */
 export class TreeChopper {
   private readonly states = new Map<THREE.Object3D, TreeState>();
   /** セーブデータでの木の並び（props の生成順） */
@@ -58,8 +62,10 @@ export class TreeChopper {
   private readonly chips: Chip[] = [];
   private readonly q = new THREE.Quaternion();
 
-  /** 丸太をばらしたときに呼ばれる（幹のメッシュと、散らばる木材の数） */
+  /** 丸太をばらしたときに呼ばれる（幹のメッシュと、散らばる木材の数。木材の落とし物はホストが出す） */
   onSplit: (trunk: THREE.Mesh, wood: number) => void = () => {};
+  /** 共有ワールドを変える頼みを出す（main.ts が差し替える） */
+  request: Requester = () => false;
 
   constructor(
     private readonly world: THREE.Object3D,
@@ -99,14 +105,39 @@ export class TreeChopper {
     this.raycaster.far = LOG_REACH;
   }
 
-  /** 画面中央の先にある木・丸太を叩く。当たったら true */
+  // ---- 入力側：視線から叩く木を決めて、頼みを出す ----
+
+  /** 画面中央の先にある木・丸太を叩く頼みを出す。当たったら true */
   chop(camera: THREE.Camera): boolean {
     const target = this.aim(camera);
     if (!target) return false;
     const { obj, s, hit, away } = target;
     if (s.phase === 'standing' && hit.distance > REACH) return false;
+    return this.request({ type: 'chopTree', tree: this.order.indexOf(obj), p: hit.point.toArray(), away: [away.x, away.z] });
+  }
 
-    this.spawnChips(hit.point, away, CHIP_COUNT);
+  // ---- ホスト側：頼みを確かめてコマンドにする ----
+
+  /** 立っている木か、倒れきった丸太なら叩ける（倒れている途中は叩けない）。できなければ null（マルチではホストだけが呼ぶ） */
+  authorize(req: ChopTree): ChopTree | null {
+    const obj = this.order[req.tree];
+    const s = obj && this.states.get(obj);
+    const wellFormed = req.p.length === 3 && req.away.length === 2 && [...req.p, ...req.away].every(Number.isFinite);
+    if (!s || !wellFormed || (s.phase !== 'standing' && s.phase !== 'log')) return null;
+    return { type: 'chopTree', tree: req.tree, p: [...req.p], away: [...req.away] };
+  }
+
+  // ---- 適用側：コマンドの値だけで木を変える（カメラや入力は見ない） ----
+
+  /** 耐久値を1減らす。立っている木は 0 で叩いた向きの奥へ倒れ、丸太は 0 でばらけて木材になる（木材は onSplit でホストが出す） */
+  apply(cmd: ChopTree): void {
+    const obj = this.order[cmd.tree];
+    const s = obj && this.states.get(obj);
+    if (!s || (s.phase !== 'standing' && s.phase !== 'log')) return;
+    const away = new THREE.Vector3(cmd.away[0], 0, cmd.away[1]);
+    if (away.lengthSq() < 1e-8) away.set(1, 0, 0);
+    away.normalize();
+    this.spawnChips(new THREE.Vector3(...cmd.p), away, CHIP_COUNT);
     s.hp--;
 
     if (s.phase === 'log') {
@@ -114,17 +145,49 @@ export class TreeChopper {
         // 重心ごと小さく跳ねるだけにする（叩いた点に押すと回って転がっていく）
         const m = s.body.mass();
         s.body.applyImpulse({ x: away.x * m * LOG_HIT.push, y: m * LOG_HIT.hop, z: away.z * m * LOG_HIT.push }, true);
-        return true;
+        return;
       }
       this.breakLog(obj, s, away);
-      return true;
+      return;
     }
 
-    if (s.hp > 0) return true;
+    if (s.hp > 0) return;
     // 叩いた向きの奥へ倒れるようにする
     s.axis.crossVectors(UP, away).normalize();
     this.topple(obj, s);
-    return true;
+  }
+
+  // ---- マルチ：倒れている木・丸太の動きはホストの物理で決めて配る ----
+
+  /**
+   * 物理で動いている木（倒れている途中・丸太）の位置・向き・速さ。
+   * 1つにつき [木の番号, x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]（ホストがときどき配る）
+   */
+  motion(): number[][] {
+    const out: number[][] = [];
+    this.order.forEach((obj, i) => {
+      const s = this.states.get(obj);
+      if (!s || (s.phase !== 'falling' && s.phase !== 'log') || s.body.isSleeping()) return;
+      const t = s.body.translation();
+      const r = s.body.rotation();
+      const v = s.body.linvel();
+      const w = s.body.angvel();
+      out.push([i, t.x, t.y, t.z, r.x, r.y, r.z, r.w, v.x, v.y, v.z, w.x, w.y, w.z]);
+    });
+    return out;
+  }
+
+  /** ホストから届いた動きに合わせる（参加者が呼ぶ。あいだは自分の物理でつなぐ） */
+  setMotion(list: number[][]): void {
+    for (const [i, x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz] of list) {
+      const obj = this.order[i];
+      const s = obj && this.states.get(obj);
+      if (!s || (s.phase !== 'falling' && s.phase !== 'log')) continue;
+      s.body.setTranslation({ x, y, z }, true);
+      s.body.setRotation({ x: qx, y: qy, z: qz, w: qw }, true);
+      s.body.setLinvel({ x: vx, y: vy, z: vz }, true);
+      s.body.setAngvel({ x: wx, y: wy, z: wz }, true);
+    }
   }
 
   /** 素手で殴る。木は傷つかず、木くずが少し飛ぶだけ（自分の画面だけの演出）。当たったら true */

@@ -4,7 +4,7 @@ import { flat } from '../core/materials.js';
 import type { Physics, RAPIER } from '../core/physics.js';
 import { ITEMS, type ItemId } from '../items/inventory.js';
 import { terrainHeight } from '../world/terrain.js';
-import type { MineRock, MineTool, RockRequest, WorldRequest } from '../core/commands.js';
+import type { MineRock, MineTool, Requester, RockRequest } from '../core/commands.js';
 
 const HP_PER_SIZE = 5; // 岩の大きさ 1 あたりの耐久値（大きい岩ほど叩く回数が多い）
 const MIN_HP = 3;
@@ -68,8 +68,7 @@ export class RockMiner {
   /** 採れたアイテムごとに呼ばれる */
   onHarvest: (item: ItemId, count: number) => void = () => {};
   /** 共有ワールドを変える頼みを出す（main.ts が差し替える）。適用できたら true */
-  request: (req: WorldRequest) => boolean = () => false;
-  private claiming = -1; // 自分が叩いている岩の番号（自分の頼みの結果だけインベントリに入れる）
+  request: Requester = () => false;
 
   /**
    * targets は視線をさえぎる物（地形・岩・桟橋・建てた部材）、blockers は木や茂み。岩はこの中で一番手前のときだけ叩ける。
@@ -110,10 +109,7 @@ export class RockMiner {
   mine(camera: THREE.Camera, tool: MineTool, reach: number): boolean {
     const r = this.aimed(camera, reach);
     if (!r) return false;
-    this.claiming = this.list.indexOf(r);
-    const ok = this.request({ type: 'mineRock', rock: this.claiming, tool });
-    this.claiming = -1;
-    return ok;
+    return this.request({ type: 'mineRock', rock: this.list.indexOf(r), tool });
   }
 
   /** 狙っている岩ののこりの耐久値（傷ついていなければ null） */
@@ -139,13 +135,13 @@ export class RockMiner {
 
   // ---- 全員：コマンドを適用する ----
 
-  /** 岩の耐久値を減らす。壊れたら大きな塊にばらけて消え、自分の頼みなら採れた物を受け取る */
-  apply(cmd: MineRock): void {
+  /** 岩の耐久値を減らす。壊れたら大きな塊にばらけて消え、自分の頼み（mine）なら採れた物を受け取る */
+  apply(cmd: MineRock, mine: boolean): void {
     const r = this.list[cmd.rock];
     if (!r || r.phase !== 'full' || r.hp <= 0) return;
     r.hp = Math.max(r.hp - cmd.damage, 0);
     r.shake = SHAKE_TIME;
-    if (cmd.rock === this.claiming) {
+    if (mine) {
       for (const [item, count] of cmd.items) if (item in ITEMS) this.onHarvest(item as ItemId, count);
     }
     this.spawnChips(r.mesh, CHIPS_PER_HIT);

@@ -26,8 +26,8 @@ import { Spears } from './actions/spears.js';
 import { Crafting } from './actions/crafting.js';
 import { Campfires } from './actions/campfire.js';
 import { CampfireMenu } from './actions/campfireMenu.js';
-import { saveWorld, SAVE_VERSION } from './core/save.js';
-import { showTitle, showToast } from './ui/title.js';
+import { loadGuest, saveGuest, saveWorld, SAVE_VERSION } from './core/save.js';
+import { ROOM_PARAM, showTitle, showToast } from './ui/title.js';
 import { setKeyGuide } from './ui/keyGuide.js';
 import { Eater, Drinker, EAT_TIME, FOODS } from './actions/food.js';
 import { DeathScreen } from './ui/death.js';
@@ -49,6 +49,9 @@ import { SeaMap, travelFade } from './ui/seaMap.js';
 import { Avatar, AVATAR_LAYER, loadLook } from './player/avatar.js';
 import { AvatarMenu } from './ui/avatarEditor.js';
 import { CommandMenu } from './ui/commandMenu.js';
+import { OtherPlayers } from './player/others.js';
+import { Multiplayer } from './net/multiplayer.js';
+import { RoomInfo } from './ui/roomInfo.js';
 installUiScale(); // UI の大きさを画面サイズに合わせる
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -166,6 +169,11 @@ try {
 catch {
     // 読めなければ一人称で始める
 }
+/** 自分の体で道具を振る（マルチでは、ほかの人の画面の自分の体も振る） */
+const swingBody = (kind) => {
+    avatar.swing(kind);
+    net.swing(kind);
+};
 // ---- インベントリ ----
 const inventory = new Inventory();
 // 手に入れた素材を右下に出す
@@ -259,7 +267,7 @@ const fillHole = () => {
     if (inventory.count('dirt') < 1 || !digger.fill(camera, SHOVEL_REACH))
         return false;
     inventory.remove('dirt', 1);
-    avatar.swing('chop');
+    swingBody('chop');
     return true;
 };
 shovelHand.onImpact = () => {
@@ -300,7 +308,7 @@ builder.onChange = () => {
 digger.onChange = coverGrass;
 builder.onWork = () => {
     hammerHand.swing();
-    avatar.swing('chop');
+    swingBody('chop');
     wearTool('hammer'); // 作業台はハンマーなしで置けるので、ハンマーを持っていなければ減らない
 };
 // ---- 船（船を持って左クリックで、視線の先の水面に浮かべる。F で乗り降りし、W/S で漕いで A/D で向きを変える。Q でしまう） ----
@@ -365,14 +373,14 @@ boats.onEdge = () => seaMap.open(here);
 seaMap.onTravel = (to) => {
     if (to === here)
         return;
-    travelFade(LOCATIONS[to].name, () => {
-        if (!boats.sail(to))
-            return;
-        goTo(to);
-        const heading = boats.heading;
-        if (heading !== null)
-            player.face(heading); // 着いた場所の島のほうを向く
-    });
+    travelFade(LOCATIONS[to].name, () => boats.sail(to));
+};
+// 渡り終えたら（マルチではホストが渡る先を決めて配ってから）、プレイヤーもその場所へ移る
+boats.onSail = (to) => {
+    goTo(to);
+    const heading = boats.heading;
+    if (heading !== null)
+        player.face(heading); // 着いた場所の島のほうを向く
 };
 /** 自分の島でしかできないこと（落とし物や刺さった槍などは、まだ場所を持たない）をしようとしたら知らせる。島にいれば true */
 const onIsland = () => {
@@ -410,39 +418,78 @@ const releaseSpear = () => {
         inventory.putBack(stack);
 };
 // ---- ワールドコマンド（共有ワールドの変更はすべてここを通す） ----
-/** コマンドを適用する。マルチでは、ホストから届いたコマンドもここで適用する */
-const applyWorld = (cmd) => {
+/** 頼みを確かめ、ホストが決める値を入れたコマンドにする（by は頼んだ人）。できない頼みなら null */
+const authorizeWorld = (req, by) => {
+    switch (req.type) {
+        case 'dropItem':
+        case 'pickDrop':
+            return drops.authorize(req);
+        case 'chopTree':
+            return chopper.authorize(req);
+        case 'harvestBush':
+        case 'pickBerry':
+            return forager.authorize(req);
+        case 'mineRock':
+            return miner.authorize(req);
+        case 'digHole':
+        case 'fillHole':
+            return digger.authorize(req);
+        case 'placeBoat':
+        case 'pickBoat':
+        case 'boardBoat':
+        case 'leaveBoat':
+        case 'sailBoat':
+            return boats.authorize(req, by);
+        case 'throwSpear':
+        case 'pickSpear':
+            return spears.authorize(req);
+        case 'setWeather':
+            return weather.authorize(req, clock.minutes);
+        case 'addFuel':
+        case 'takeFuel':
+        case 'burnFuel':
+            return campfires.authorize(req);
+        default:
+            return builder.authorize(req);
+    }
+};
+/** コマンドを適用する（by は頼んだ人。自分の頼みなら、採れた物などを自分のインベントリに入れる）。マルチではホストから届いたコマンドもここで適用する */
+const applyWorld = (cmd, by) => {
+    const mine = by !== null && by === net.myId;
     switch (cmd.type) {
         case 'placePiece':
         case 'removePiece':
         case 'hitPiece':
-            builder.apply(cmd);
+            builder.apply(cmd, mine);
             break;
         case 'dropItem':
         case 'pickDrop':
-            drops.apply(cmd);
+            drops.apply(cmd, mine);
+            break;
+        case 'chopTree':
+            chopper.apply(cmd);
             break;
         case 'harvestBush':
         case 'pickBerry':
-            forager.apply(cmd);
+            forager.apply(cmd, mine);
             break;
         case 'mineRock':
-            miner.apply(cmd);
+            miner.apply(cmd, mine);
             break;
         case 'digHole':
         case 'fillHole':
-            digger.apply(cmd);
+            digger.apply(cmd, mine);
             break;
         case 'placeBoat':
         case 'pickBoat':
         case 'boardBoat':
         case 'leaveBoat':
         case 'sailBoat':
-            boats.apply(cmd);
+            boats.apply(cmd, by, mine);
             break;
         case 'throwSpear':
         case 'pickSpear':
-            spears.apply(cmd);
+            spears.apply(cmd, mine);
             break;
         case 'setWeather':
             weather.apply(cmd);
@@ -450,34 +497,72 @@ const applyWorld = (cmd) => {
         case 'addFuel':
         case 'takeFuel':
         case 'burnFuel':
-            campfires.apply(cmd);
+            campfires.apply(cmd, mine);
             break;
     }
 };
-/** 頼みを出す。ひとりで遊ぶときは自分がホストなので、その場で確かめて適用する。適用できたら true */
-const requestWorld = (req) => {
-    const cmd = req.type === 'dropItem' || req.type === 'pickDrop'
-        ? drops.authorize(req)
-        : req.type === 'harvestBush' || req.type === 'pickBerry'
-            ? forager.authorize(req)
-            : req.type === 'mineRock'
-                ? miner.authorize(req)
-                : req.type === 'digHole' || req.type === 'fillHole'
-                    ? digger.authorize(req)
-                    : req.type === 'placeBoat' || req.type === 'pickBoat' || req.type === 'boardBoat' || req.type === 'leaveBoat' || req.type === 'sailBoat'
-                        ? boats.authorize(req)
-                        : req.type === 'throwSpear' || req.type === 'pickSpear'
-                            ? spears.authorize(req)
-                            : req.type === 'setWeather'
-                                ? weather.authorize(req, clock.minutes)
-                                : req.type === 'addFuel' || req.type === 'takeFuel' || req.type === 'burnFuel'
-                                    ? campfires.authorize(req)
-                                    : builder.authorize(req);
-    if (!cmd)
-        return false;
-    applyWorld(cmd);
-    return true;
+/**
+ * マルチの参加者：自分の頼みをホストに断られた（ほかの人が先に拾った・乗った、など）。
+ * 頼んだときに先に減らした持ち物などを元に戻す
+ */
+const undoRequest = (req) => {
+    switch (req.type) {
+        case 'placePiece':
+            builder.refund(req.id);
+            break;
+        case 'dropItem':
+            if (req.item in ITEMS)
+                gain(req.item, req.count, req.dmg);
+            break;
+        case 'throwSpear':
+            gain('spear', 1, req.dmg);
+            break;
+        case 'placeBoat':
+            gain('boat', 1);
+            break;
+        case 'fillHole':
+            gain('dirt', 1);
+            break;
+        case 'addFuel':
+            if (req.item in ITEMS)
+                gain(req.item, req.count);
+            break;
+        case 'boardBoat':
+            boats.cancelRide(req.bid);
+            player.stand();
+            break;
+        default:
+            return; // 叩く・拾うなどは、断られても戻す物がない
+    }
+    showToast('ほかの人と重なって、できなかった');
 };
+// ---- マルチプレイ（部屋コードで、PeerJS の WebRTC でブラウザ同士を直接つなぐ） ----
+const others = new OtherPlayers(scene); // 同じ部屋にいる、ほかの人の体
+const net = new Multiplayer({
+    authorize: authorizeWorld,
+    apply: applyWorld,
+    undo: undoRequest,
+    shared: () => sharedSnapshot(),
+    motion: () => ({ drops: drops.motion(), trees: chopper.motion() }),
+    setMotion: (m) => {
+        drops.setMotion(m.drops ?? []);
+        chopper.setMotion(m.trees ?? []);
+    },
+    minutes: () => clock.minutes,
+    setMinutes: (minutes) => (clock.minutes = minutes),
+    followBoat: (bid, x, z, yaw) => boats.follow(bid, x, z, yaw),
+    // 抜けた人が乗っていた船は、その場に残す
+    left: (id) => {
+        for (const b of boats.riddenBy(id))
+            requestWorld({ type: 'leaveBoat', bid: b.bid, p: b.p, yaw: b.yaw }, id);
+    },
+}, others);
+/**
+ * 頼みを出す。ひとりで遊ぶとき・ホストは、その場で確かめて適用する（ホストは全員にも配る）。
+ * マルチの参加者は手元で確かめてからホストへ送る。適用できたら（送れたら）true
+ */
+const requestWorld = (req, by) => net.request(req, by);
+chopper.request = requestWorld;
 builder.request = requestWorld;
 drops.request = requestWorld;
 pebbles.request = requestWorld;
@@ -614,7 +699,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
         emptyHand.punch();
         // 三人称の体も、手に持っている物に合わせて振る（槍とこぶしは突き出す）
         if (spearHand.visible ? spearCharge === null : hand.visible || knifeHand.visible || pickaxeHand.visible || shovelHand.visible || emptyHand.visible) {
-            avatar.swing(spearHand.visible || emptyHand.visible ? 'thrust' : 'chop');
+            swingBody(spearHand.visible || emptyHand.visible ? 'thrust' : 'chop');
         }
         if (rodHand.visible)
             fisher.setReeling(true);
@@ -654,12 +739,19 @@ const AUTOSAVE_INTERVAL = 30;
 let world = null; // タイトル画面でワールドを選ぶまでは null
 let autosaveTimer = 0;
 const startPlayer = player.serialize(); // 新しいワールドの出発地点（タイトル画面ではカメラが島を回るので覚えておく）
-const snapshot = () => ({
-    version: SAVE_VERSION,
+/** マルチの参加者として遊んでいるか（共有ワールドはホストがセーブするので、自分だけの状態だけをセーブする） */
+let joined = false;
+/** 自分だけの状態 */
+const personalSnapshot = () => ({
     // 乗っている船と、いる場所も覚えておく
     player: { ...player.serialize(), ...(boats.ridingBid !== null ? { boat: boats.ridingBid } : {}), ...(here !== 'island' ? { loc: here } : {}) },
     inventory: inventory.serialize(),
     vitals: vitals.serialize(),
+    guide: guide.serialize(),
+    recipes: recipeBook.serialize(),
+});
+/** 共有ワールドの状態（マルチでは、途中参加した人にまるごと送る） */
+const sharedSnapshot = () => ({
     trees: chopper.serialize(),
     bushes: forager.serialize(),
     drops: drops.serialize(),
@@ -672,11 +764,11 @@ const snapshot = () => ({
     spears: spears.serialize(),
     clock: clock.serialize(),
     weather: weather.serialize(),
-    guide: guide.serialize(),
-    recipes: recipeBook.serialize(),
 });
-const restore = (data) => {
-    builder.restore(data.built); // 床などの足場を先に置いてからプレイヤーを戻す
+const snapshot = () => ({ version: SAVE_VERSION, ...personalSnapshot(), ...sharedSnapshot() });
+/** 共有ワールドを戻す（床などの足場を先に置いてから、restorePersonal でプレイヤーを戻す） */
+const restoreShared = (data) => {
+    builder.restore(data.built);
     campfires.restore(data.fires); // 焚火の部材を置いてから、燃料と火を戻す
     boats.restore(data.boats);
     spears.restore(data.spears);
@@ -686,14 +778,17 @@ const restore = (data) => {
     digger.restore(data.holes);
     drops.restore(data.drops);
     pebbles.restore(data.pebbles); // 落とし物を戻してから（まだ小石を置いていないワールドなら置く）
+    clock.restore(data.clock);
+    weather.restore(data.weather);
+};
+/** 自分だけの状態を戻す（共有ワールドを戻したあとに呼ぶ） */
+const restorePersonal = (data) => {
     inventory.restore(data.inventory);
     vitals.restore(data.vitals);
     player.restore(data.player);
     goTo(toLocation(data.player.loc)); // 街にいたら街へ（剛体を全部作り終えてから切り替える）
     if (data.player.boat !== undefined)
         boats.boardById(data.player.boat); // 船に乗ったままセーブしていたら乗り直す
-    clock.restore(data.clock);
-    weather.restore(data.weather);
     guide.restore(data.guide);
     recipeBook.restore(data.recipes);
 };
@@ -701,13 +796,17 @@ const save = (toast = false) => {
     if (!world)
         return;
     autosaveTimer = 0;
-    const ok = saveWorld(world.id, snapshot());
+    // 参加者は、ホストのワールドの id ごとに自分だけの状態を残す（共有ワールドはホストがセーブする）
+    const ok = joined ? saveGuest(world.id, personalSnapshot()) : saveWorld(world.id, snapshot());
     if (!ok)
         showToast('セーブに失敗しました');
     else if (toast)
         showToast('セーブしました');
 };
-addEventListener('pagehide', () => save());
+addEventListener('pagehide', () => {
+    save();
+    net.leave(); // 部屋を開いていたら閉じる（参加者は抜ける）
+});
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden')
         save();
@@ -732,7 +831,10 @@ death.onQuit = () => {
 };
 // 一時停止の画面から、アバターの見た目を変える画面を開ける
 const avatarMenu = new AvatarMenu();
-avatarMenu.onChange = (look) => avatar.setLook(look);
+avatarMenu.onChange = (look) => {
+    avatar.setLook(look);
+    net.setLook(look);
+};
 document.getElementById('to-avatar').addEventListener('click', (e) => {
     e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
     avatarMenu.setOpen(true);
@@ -783,9 +885,42 @@ const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen |
 document.getElementById('to-title').addEventListener('click', (e) => {
     e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
     save();
+    net.leave(); // 部屋を開いていたら閉じる（参加者は抜ける）
     location.reload(); // 読み込み直してタイトル画面に戻る
 });
+// 一時停止の画面に、部屋にいる人と、友達が参加するときに開くアドレスを出す
+const roomInfo = new RoomInfo(document.getElementById('world-name'));
+/** 開くとそのまま部屋コードが入る招待リンク */
+const inviteLink = () => {
+    if (!net.code)
+        return null;
+    const url = new URL(location.href);
+    url.search = `?${ROOM_PARAM}=${net.code}`;
+    url.hash = '';
+    return url.href;
+};
+const refreshRoom = () => roomInfo.render({ role: net.role, names: net.names, code: net.code, invite: inviteLink() });
+net.onJoin = (name) => {
+    showToast(`${name}が参加しました`);
+    refreshRoom();
+};
+net.onLeave = (name) => {
+    showToast(`${name}が抜けました`);
+    refreshRoom();
+};
+net.onClosed = () => {
+    refreshRoom();
+    if (!joined) {
+        showToast('部屋が閉じました。ひとりで続けます');
+        return;
+    }
+    save(); // 自分だけの状態を残してからタイトルへ
+    world = null;
+    alert('ホストとのつながりが切れました。タイトル画面に戻ります。');
+    location.reload();
+};
 const refreshOverlay = () => {
+    refreshRoom();
     // controls.isLocked は lock/unlock イベントの「後」に更新されるので、実際のロック状態を直接見る
     const locked = document.pointerLockElement === renderer.domElement;
     overlay.classList.toggle('hidden', !world || locked || menuOpen());
@@ -906,11 +1041,16 @@ renderer.setAnimationLoop(() => {
     const roofed = weather.rain > 0 && !!world && sheltered();
     if (player.controls.isLocked) {
         vitals.update(dt, roofed || underwater ? 0 : weather.rain); // 一時停止中・インベントリ表示中は減らさない
-        clock.update(dt); // 時間も止める（マルチではホストが止めずに進め、参加者には時刻を配る）
-        if (here === 'island')
-            pebbles.update(dt); // マルチではホストだけが進める（街にいる間は、島の砂浜に小石を足さない）
-        digger.tick(dt); // 掘った穴は時間がたつと埋まる（マルチではホストだけが進める）
-        campfires.tick(dt); // 焚火の燃料が燃えていく（マルチではホストだけが進める）
+    }
+    // ワールドの時間は、ひとりで遊ぶときは一時停止中に止める。マルチでは一時停止中も進める（参加者にはホストが時刻を配る）
+    if (world && (player.controls.isLocked || net.online)) {
+        clock.update(dt);
+        if (net.authority) {
+            if (here === 'island')
+                pebbles.update(dt); // 街にいる間は、島の砂浜に小石を足さない
+            digger.tick(dt); // 掘った穴は時間がたつと埋まる
+        }
+        campfires.tick(dt); // 焚火の燃料が燃えていく（次の燃料を燃やすのはホストだけが決める）
         autosaveTimer += dt;
         if (autosaveTimer >= AUTOSAVE_INTERVAL)
             save(true);
@@ -983,6 +1123,9 @@ renderer.setAnimationLoop(() => {
         avatar.setCharge(spearCharge);
         avatar.update(dt, avatarPose);
     }
+    // マルチ：自分の様子を送り、ほかの人の体を動かす
+    net.update(dt, world ? poseMsg(held?.item ?? null) : null);
+    others.update(dt, here);
     if (world)
         guide.update(camera.position);
     guide.visible = !!world && !death.isOpen;
@@ -1001,6 +1144,25 @@ renderer.setAnimationLoop(() => {
     pickupHint.classList.toggle('hidden', !hint);
     render();
 });
+/** ほかの人に見せる自分の様子（avatarPose を作ったあとに呼ぶ。小数は丸めて送る量を減らす） */
+function poseMsg(held) {
+    const r = (v) => Math.round(v * 1000) / 1000;
+    const p = avatarPose;
+    const boat = boats.ridePose;
+    return {
+        p: [r(p.p.x), r(p.p.y), r(p.p.z)],
+        yaw: r(p.yaw),
+        pitch: r(p.pitch),
+        speed: r(p.speed),
+        state: p.state,
+        crouch: r(p.crouch),
+        ...(p.bodyYaw !== undefined ? { body: r(p.bodyYaw) } : {}),
+        held,
+        charge: spearCharge === null ? null : r(spearCharge),
+        loc: here,
+        ...(boat ? { boat: [boat[0], r(boat[1]), r(boat[2]), r(boat[3])] } : {}),
+    };
+}
 /** 画面中央に出す操作の案内（視線の判定をいくつも行うので、案内を出している間だけ呼ぶ） */
 function keyHint(held) {
     // 住人（桟橋の人・街の農家）を見ているときの案内
@@ -1118,14 +1280,48 @@ function render() {
 }
 // ---- タイトル画面でワールドを選んでから遊び始める（選んでいる間も島は背景として描画しておく） ----
 const chosen = await showTitle();
-if (chosen.data)
-    restore(chosen.data);
-else {
-    player.restore(startPlayer);
-    pebbles.fill();
-}
-world = chosen.meta;
 avatar.setLook(loadLook()); // タイトル画面で選び直した見た目にする
-document.getElementById('world-name').textContent = world.name;
+if (chosen.mode === 'join') {
+    // 開いている部屋に参加する：共有ワールドはホストから受け取り、自分だけの状態はこのブラウザに残したものを使う
+    try {
+        const joinedRoom = await net.join(chosen.code, { name: chosen.name, look: avatar.currentLook });
+        restoreShared(joinedRoom.data);
+        const personal = loadGuest(joinedRoom.world.id);
+        if (personal)
+            restorePersonal(personal);
+        else
+            player.restore(startPlayer);
+        joined = true;
+        world = { id: joinedRoom.world.id, name: joinedRoom.world.name, createdAt: 0, savedAt: 0 };
+        net.ready();
+    }
+    catch (e) {
+        net.leave();
+        alert(`参加できませんでした：${e.message}`);
+        location.reload();
+        throw e; // 読み込み直すまで、ここから先へ進まない
+    }
+}
+else {
+    if (chosen.data) {
+        restoreShared(chosen.data);
+        restorePersonal(chosen.data);
+    }
+    else {
+        player.restore(startPlayer);
+        pebbles.fill();
+    }
+    world = chosen.meta;
+    if (chosen.mode === 'host') {
+        try {
+            await net.host({ id: chosen.meta.id, name: chosen.meta.name }, { name: chosen.name, look: avatar.currentLook });
+            showToast(`部屋を開きました。部屋コード：${net.code}（一時停止の画面にも出ます）`);
+        }
+        catch (e) {
+            alert(`部屋を開けませんでした：${e.message}\nひとりで遊びます。`);
+        }
+    }
+}
+document.getElementById('world-name').textContent = joined ? `${world.name}（参加中）` : world.name;
 save(); // 新しいワールドもすぐ一覧に残るように
 refreshOverlay();

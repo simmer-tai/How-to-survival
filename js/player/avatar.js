@@ -69,17 +69,21 @@ export const LOOK_PARTS = {
 };
 export const DEFAULT_LOOK = { skin: 1, hair: 1, hairStyle: 0, hat: 0, shirt: 3, pants: 4 };
 const LOOK_KEY = 'warfarming:avatar';
+/** 保存してあった値や、マルチでほかの人から届いた値を見た目にする（おかしな値の所は最初の見た目にする） */
+export function toLook(value) {
+    const saved = (typeof value === 'object' && value !== null ? value : {});
+    const look = { ...DEFAULT_LOOK };
+    for (const key of Object.keys(LOOK_PARTS)) {
+        const v = saved[key];
+        if (Number.isInteger(v) && v >= 0 && v < LOOK_PARTS[key])
+            look[key] = v;
+    }
+    return look;
+}
 /** ブラウザに保存した見た目を読む（なければ、読めなければ最初の見た目） */
 export function loadLook() {
     try {
-        const saved = JSON.parse(localStorage.getItem(LOOK_KEY) ?? '{}');
-        const look = { ...DEFAULT_LOOK };
-        for (const key of Object.keys(LOOK_PARTS)) {
-            const v = saved[key];
-            if (Number.isInteger(v) && v >= 0 && v < LOOK_PARTS[key])
-                look[key] = v;
-        }
-        return look;
+        return toLook(JSON.parse(localStorage.getItem(LOOK_KEY) ?? '{}'));
     }
     catch {
         return { ...DEFAULT_LOOK };
@@ -117,6 +121,7 @@ const damp = THREE.MathUtils.damp;
  * 自分の体は、一人称では影だけ、三人称（V キー）では姿も見える。マルチでは他の人の体もこれで描く
  */
 export class Avatar {
+    layer;
     object = new THREE.Group();
     tilt = new THREE.Group();
     body = new THREE.Group();
@@ -143,7 +148,9 @@ export class Avatar {
     held = null;
     grip = 'none';
     heldModel = null;
-    constructor(look) {
+    /** layer は体を描くレイヤー（自分の体は AVATAR_LAYER。マルチで描く他の人の体は、いつも見える 0） */
+    constructor(look, layer = AVATAR_LAYER) {
+        this.layer = layer;
         this.look = look;
         this.tilt.position.y = SWIM_PIVOT;
         this.body.position.y = -SWIM_PIVOT;
@@ -537,10 +544,10 @@ export class Avatar {
             }
         }
     }
-    /** 体の部品を AVATAR_LAYER に移し、影を落とすようにする */
+    /** 体の部品を体のレイヤーに移し、影を落とすようにする */
     toLayer(root) {
         root.traverse((o) => {
-            o.layers.set(AVATAR_LAYER);
+            o.layers.set(this.layer);
             if (o instanceof THREE.Mesh) {
                 o.castShadow = true;
                 o.receiveShadow = true;

@@ -45,7 +45,6 @@ export class RockMiner {
     onHarvest = () => { };
     /** 共有ワールドを変える頼みを出す（main.ts が差し替える）。適用できたら true */
     request = () => false;
-    claiming = -1; // 自分が叩いている岩の番号（自分の頼みの結果だけインベントリに入れる）
     /**
      * targets は視線をさえぎる物（地形・岩・桟橋・建てた部材）、blockers は木や茂み。岩はこの中で一番手前のときだけ叩ける。
      * 岩の当たり判定はここで付ける（壊れたら外すため）
@@ -82,10 +81,7 @@ export class RockMiner {
         const r = this.aimed(camera, reach);
         if (!r)
             return false;
-        this.claiming = this.list.indexOf(r);
-        const ok = this.request({ type: 'mineRock', rock: this.claiming, tool });
-        this.claiming = -1;
-        return ok;
+        return this.request({ type: 'mineRock', rock: this.list.indexOf(r), tool });
     }
     /** 狙っている岩ののこりの耐久値（傷ついていなければ null） */
     durability(camera, reach) {
@@ -107,14 +103,14 @@ export class RockMiner {
         return { type: 'mineRock', rock: req.rock, damage, items: n > 0 ? [['stone', n]] : [] };
     }
     // ---- 全員：コマンドを適用する ----
-    /** 岩の耐久値を減らす。壊れたら大きな塊にばらけて消え、自分の頼みなら採れた物を受け取る */
-    apply(cmd) {
+    /** 岩の耐久値を減らす。壊れたら大きな塊にばらけて消え、自分の頼み（mine）なら採れた物を受け取る */
+    apply(cmd, mine) {
         const r = this.list[cmd.rock];
         if (!r || r.phase !== 'full' || r.hp <= 0)
             return;
         r.hp = Math.max(r.hp - cmd.damage, 0);
         r.shake = SHAKE_TIME;
-        if (cmd.rock === this.claiming) {
+        if (mine) {
             for (const [item, count] of cmd.items)
                 if (item in ITEMS)
                     this.onHarvest(item, count);
