@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { buildAxe, buildFishingRod, buildHammer, buildHoe, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
-import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel, buildTorchModel } from './itemModels.js';
+import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel, buildIronOreModel, buildTorchModel } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
 import { FISH_KINDS } from './fishKinds.js';
 import { perLandInfo } from './landInfo.js';
@@ -65,6 +65,19 @@ function buildStone() {
     const pebble = part(new THREE.DodecahedronGeometry(0.13, 0), PALETTE.rock, 0.3, -0.12, 0.12);
     pebble.rotation.set(0.8, 0.2, 0.4);
     g.add(rock, pebble);
+    g.rotation.set(0.4, -0.3, 0);
+    return g;
+}
+/** 鉄鉱石：ふたつ寄せたかたまりを、少し上から見る */
+function buildIronOreIcon() {
+    const g = new THREE.Group();
+    const big = buildIronOreModel();
+    big.scale.setScalar(1.6);
+    const small = buildIronOreModel();
+    small.scale.setScalar(1.0);
+    small.position.set(0.3, -0.1, 0.12);
+    small.rotation.y = 1.4;
+    g.add(big, small);
     g.rotation.set(0.4, -0.3, 0);
     return g;
 }
@@ -245,6 +258,7 @@ const MODELS = {
     leaf: buildLeafIcon,
     stone: buildStone,
     dirt: buildDirtIcon,
+    ironOre: buildIronOreIcon,
     seed: buildSeed,
     berry: buildBerry,
     fish: () => buildFishIcon('fish'),

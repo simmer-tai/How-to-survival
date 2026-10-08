@@ -26,6 +26,7 @@ const BUSHES = { with: 180, without: 30 }; // 風の原：茂み
 const ROCKS = { with: 150, without: 40 }; // 灰の牙：岩
 const BIG_ROCKS = 1.4; // 灰の牙：岩の大きさの倍率
 const REEF = 60; // 船喰い：沖の浅瀬に突き出た岩
+const ORE = { min: 1, max: 3 }; // 鉄鉱脈：洞窟の地下の部屋1つに置く鉄の鉱脈の数
 export class Isles {
     hooks;
     list = [];
@@ -118,6 +119,7 @@ export class Isles {
             rocks: pick(ROCKS, 'crag'),
             big: has('crag') ? BIG_ROCKS : 1,
             reef: has('reef') ? REEF : 0,
+            ore: has('iron') ? ORE : null,
         };
         const terrain = shape.field.createMesh();
         const props = withField(shape.field, () => buildIsleProps(chart.seed, counts, shape.caves));

@@ -4,6 +4,7 @@ import { flatVertex, solid, treeFlat, treeVertex } from '../core/materials.js';
 import { terrainHeight } from './terrain.js';
 import { domeQ, nearCave, type Cave } from './cave.js';
 import { swayDepthMaterial, swayMaterial } from './wind.js';
+import { ORE_BIT, ORE_ROCK } from '../items/itemModels.js';
 
 export interface Platform { minX: number; maxX: number; minZ: number; maxZ: number; top: number }
 /**
@@ -486,6 +487,26 @@ function rock(rand: () => number, size: number): THREE.Mesh {
   return m;
 }
 
+/** 鉄の鉱脈。暗い岩に、さびた赤茶色の鉄の粒がいくつも顔を出す。掘ると鉄鉱石が採れる（userData.yield。actions/mining.ts） */
+function oreVein(rand: () => number, size: number): THREE.Mesh {
+  const m = solid(GEO.rock, ORE_ROCK);
+  m.scale.set(size * (0.8 + rand() * 0.6), size * (0.5 + rand() * 0.4), size * (0.8 + rand() * 0.6));
+  m.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+  m.userData.yield = 'ironOre';
+  const bits = ORE_BITS.min + Math.floor(rand() * (ORE_BITS.max - ORE_BITS.min + 1));
+  for (let i = 0; i < bits; i++) {
+    // 岩の表面のあちこちに埋める（岩の中の座標なので、岩の伸び縮みと一緒に動く）
+    const dir = new THREE.Vector3(rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1).normalize();
+    const bit = solid(GEO.rock, ORE_BIT);
+    bit.castShadow = false; // 小さいので影は落とさない
+    bit.position.copy(dir.multiplyScalar(0.85));
+    bit.scale.setScalar(ORE_BIT_SIZE * (0.7 + rand() * 0.6));
+    bit.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+    m.add(bit);
+  }
+  return m;
+}
+
 const PIER_TOP = 1.0; // 桟橋の板の上面の高さ
 const PIER_LAND = 4; // 桟橋が海岸線から陸側へ入る長さ
 const PIER_SEA = 15; // 桟橋が海岸線から海側へ出る長さ
@@ -701,9 +722,15 @@ export interface IsleCounts {
   big: number;
   /** 沖の浅瀬に突き出た岩（船喰い） */
   reef: number;
+  /** 洞窟の地下の部屋1つに置く鉄の鉱脈の数（鉄鉱脈。ない島は 0） */
+  ore: { min: number; max: number } | null;
 }
 
 const CAVE_ROCKS = { min: 2, max: 4 }; // 洞窟の地下の部屋1つに置く岩の数
+const ORE_SEED = 11000; // 鉄の鉱脈の乱数の種のずらし（ほかの物の置き方を変えないよう、別の乱数で置く）
+const ORE_SIZE = { min: 0.6, max: 1.0 }; // 鉄の鉱脈の大きさ
+const ORE_BITS = { min: 6, max: 10 }; // 鉱脈の岩肌に顔を出す鉄の粒の数
+const ORE_BIT_SIZE = 0.22; // 鉄の粒の大きさ（鉱脈の大きさに対する割合）
 const ISLE_SPREAD = 250; // 海図に載せた島の物を置く範囲（中心からの四角の一辺。陸は中心から 124m に収まる）
 
 /**
@@ -806,6 +833,30 @@ export function buildIsleProps(seed: number, counts: IsleCounts, caves: Cave[] =
       if (!isFree(x, z, 2.5)) continue;
       addRock(x, z, r.floor, 0.7 + rand() * 0.7);
       i++;
+    }
+  }
+
+  // 地下の部屋の鉄の鉱脈（鉄鉱脈。掘ると鉄鉱石が採れる）。ほかの岩のあとに足すので、岩の番号は変わらない
+  const ore = counts.ore;
+  if (ore) {
+    const oreRand = mulberry32(seed + ORE_SEED);
+    for (const r of caves.flatMap((c) => c.rooms)) {
+      const n = ore.min + Math.floor(oreRand() * (ore.max - ore.min + 1));
+      for (let i = 0, tries = 0; i < n && tries < 200; tries++) {
+        const l = (oreRand() * 2 - 1) * r.a;
+        const s = (oreRand() * 2 - 1) * r.b;
+        const x = r.x + l * Math.cos(r.yaw) - s * Math.sin(r.yaw);
+        const z = r.z + l * Math.sin(r.yaw) + s * Math.cos(r.yaw);
+        if (domeQ(r, x, z) > 0.5 || !isFree(x, z, 2.5)) continue;
+        const size = ORE_SIZE.min + oreRand() * (ORE_SIZE.max - ORE_SIZE.min);
+        const vein = oreVein(oreRand, size);
+        vein.position.set(x, r.floor + size * 0.2, z);
+        group.add(vein);
+        solids.push(vein);
+        rocks.push(vein);
+        placed.push(new THREE.Vector2(x, z));
+        i++;
+      }
     }
   }
 

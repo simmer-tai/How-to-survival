@@ -101,6 +101,35 @@ export function buildSeedModel(): THREE.Group {
   return g;
 }
 
+// 鉄鉱石：暗い岩のかたまりに、さびた赤茶色の粒が顔を出す（洞窟の鉱脈 world/props.ts の oreVein() と同じ色）
+export const ORE_ROCK = shade(PALETTE.rock, 0.62); // 鉱石の地の岩の色
+export const ORE_BIT = shade(PALETTE.accent, 0.78); // 鉄の粒の色
+const ORE_BITS: [number, number, number, number][] = [
+  // 鉄の粒 [x, y, z, 大きさ]（かたまりの表面から少し出る）
+  [0.1, 0.07, 0.05, 0.05],
+  [-0.09, 0.05, 0.08, 0.045],
+  [0.02, 0.1, -0.08, 0.04],
+  [-0.06, -0.04, -0.1, 0.04],
+  [0.12, -0.05, -0.04, 0.035],
+];
+
+/** 鉄鉱石ひとかたまり。原点はかたまりの中心 */
+export function buildIronOreModel(): THREE.Group {
+  const g = new THREE.Group();
+  const lump = new THREE.Mesh(GEO.clod, flat(ORE_ROCK));
+  lump.scale.set(0.16, 0.12, 0.14);
+  lump.rotation.set(0.4, 0.9, 0.2);
+  g.add(lump);
+  ORE_BITS.forEach(([x, y, z, s], i) => {
+    const bit = new THREE.Mesh(GEO.clod, flat(ORE_BIT));
+    bit.position.set(x, y, z);
+    bit.scale.setScalar(s);
+    bit.rotation.set(i * 0.9, i * 1.7, i * 0.5);
+    g.add(bit);
+  });
+  return g;
+}
+
 const DIRT_CLODS: [number, number, number, number][] = [
   // 土のかたまりを作る土くれ [x, y, z, 大きさ]
   [0, 0, 0, 0.17],
@@ -950,6 +979,15 @@ const LAND_DRAWINGS: Record<LandKind, (g: THREE.Group) => void> = {
     patch(g, -0.1, 0.022, 0.1, 0.045, PALETTE.grass, 2);
     polyline(g, [[-0.07, -0.01], [-0.055, -0.03], [-0.04, -0.035]], PALETTE.bark);
     polyline(g, [[0.05, -0.04], [0.065, -0.02]], PALETTE.bark);
+  },
+  // 鉄鉱脈：岩肌を走る赤茶色の筋と、つるはし
+  iron: (g) => {
+    blot(g, 0, -0.005, 0.1, 0.06, PALETTE.rock);
+    polyline(g, [[-0.08, 0.03], [-0.04, 0.0], [-0.01, 0.01], [0.03, -0.03], [0.07, -0.04]], ORE_BIT);
+    polyline(g, [[-0.07, 0.035], [-0.035, 0.008], [-0.005, 0.018], [0.035, -0.022], [0.075, -0.03]], ORE_BIT);
+    for (const [x, z] of [[-0.05, -0.03], [0.02, 0.03], [0.06, 0.005]]) blot(g, x, z, 0.01, 0.008, ORE_BIT, 1);
+    drawLine(g, 0.03, -0.075, 0.075, -0.035, PALETTE.trunk);
+    polyline(g, [[0.035, -0.03], [0.05, -0.058], [0.08, -0.068]], PALETTE.bark);
   },
 };
 
