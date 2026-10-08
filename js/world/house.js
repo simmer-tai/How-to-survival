@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ACCENT, BALL, BARK, BOX, Batch, CYL, LEAF, MORTAR, PRISM, ROCK, SAND, TRUNK, WATER, backSide, colliderBox, faceBox, faceNormal, facePoint3, markStone, stoneColor, } from './townKit.js';
+import { ACCENT, BALL, BARK, BOX, Batch, CYL, LEAF, MORTAR, PRISM, ROCK, SAND, TRUNK, WATER, backSide, colliderBox, faceBox, faceNormal, facePoint3, markPlaster, markStone, stoneColor, } from './townKit.js';
 // 街の家。1階は石積み、2階は外へ張り出した木組みの漆喰壁、その上に急な石板ぶきの切妻屋根がのる。
 // 屋根には小さな屋根窓と石の煙突が付く。
 // 家の中で組み立て（原点は1階の床の真ん中、妻側の正面が +Z、棟は Z に沿う）、置く位置と向きは buildHouse に渡す。
@@ -44,7 +44,7 @@ export function mulberry32(seed) {
     };
 }
 // ---- 色 ----
-export const PLASTER = SAND.clone().lerp(ROCK, 0.18); // 漆喰の壁
+export const PLASTER = markPlaster(SAND.clone().lerp(ROCK, 0.18)); // 漆喰の壁（漆喰のドット絵を付ける）
 export const BEAM = BARK.clone().multiplyScalar(0.75); // 木組みの濃い角材
 const GLASS = WATER.clone().lerp(BARK, 0.55).multiplyScalar(0.45); // 窓ガラス（暗い）
 const SHUTTER = LEAF.clone().lerp(WATER, 0.3).multiplyScalar(0.8); // 窓の板戸

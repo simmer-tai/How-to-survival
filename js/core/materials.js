@@ -176,16 +176,28 @@ export const TIMBER_BLOTCH = {
     darkRate: 0.18,
     fade: 60,
 };
+/** 街の漆喰の壁のドット絵（塗りムラのような、少し大きめでごく薄いムラ） */
+export const PLASTER_BLOTCH = {
+    dot: 0.12, // 1ドットの大きさ（m）
+    stretch: 1,
+    sizes: [3, 2, 1],
+    bright: 1.03,
+    dark: 0.96,
+    brightRate: 0.14,
+    darkRate: 0.18,
+    fade: 60,
+};
 let townVertexMat = null;
 /**
- * flatVertex() に、頂点の aStone（1 が石）の所に石のドット絵（STONE_BLOTCH）、aWood（1 が木材）の所に木のドット絵（TIMBER_BLOTCH）を
- * 足したもの（街のまとめたメッシュに使う）
+ * flatVertex() に、頂点の aStone（1 が石）の所に石のドット絵（STONE_BLOTCH）、aWood（1 が木材）の所に木のドット絵（TIMBER_BLOTCH）、
+ * aPlaster（1 が漆喰）の所に漆喰のドット絵（PLASTER_BLOTCH）を足したもの（街のまとめたメッシュに使う）
  */
 export function townVertex() {
     if (!townVertexMat) {
         townVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
         withBlotch(townVertexMat, STONE_BLOTCH, 'stone', 'aStone');
         withBlotch(townVertexMat, TIMBER_BLOTCH, 'wood', 'aWood');
+        withBlotch(townVertexMat, PLASTER_BLOTCH, 'plaster', 'aPlaster');
     }
     return townVertexMat;
 }
