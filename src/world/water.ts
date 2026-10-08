@@ -15,48 +15,17 @@ const DEPTH_MAX = 4;
 const DRY = 255; // 海底のテクスチャの、海の水を描かない所の値（ほかの所は DRY - 1 まで）
 
 
-// 水面のドット絵（木目と同じく、明るさだけの模様を色に掛ける）。大きさの違う四角いムラを敷きつめ、横（x）に少し長い。
-// 1 が地の明るさで、0 は地より明るいムラ（さざ波の光）、2・3 は暗いムラ
-const WATER_DOTS = [
-  '1111000111122211',
-  '1111000111122211',
-  '2211111133111100',
-  '2211111133111100',
-  '1111222111110001',
-  '0001222111110001',
-  '0001111110003311',
-  '1133311110003311',
-  '1133311222111111',
-  '1111111222111222',
-  '1000011111133222',
-  '1000011111133111',
-  '1111222100011111',
-  '3311222100011000',
-  '3311111111111000',
-  '1111110003311111',
-];
-const WATER_SHADES = [1.14, 1, 0.88, 0.78]; // 模様の数字ごとの明るさ（水面は斜めから見るので木目より差を大きくする）
-const WATER_SPAN = 10; // 模様1枚が覆う長さ（m）。1ドットが約60cm で、ムラは1〜3m の大きめの四角になる
+// 水面のドット絵（木目と同じく、明るさだけの模様を掛ける）。四角いムラを、ドットの番号から決めた乱数で散らす
+// （くり返しの模様が見えないように。番号から決めるので誰の画面でも同じ）。大・中・小のムラを重ね、横（x）に少し長い
+const WATER_DOT = 0.6; // 1ドットの大きさ（m）
+const WATER_DOT_STRETCH = 1.3; // ドットを横（x）に伸ばす割合
+const WATER_BLOTCHES = [3, 2, 1]; // 重ねるムラの大きさ（ドット数）。大きい順に塗り、小さいムラが上に乗る
+const WATER_BRIGHT = 1.08; // 明るいムラの明るさ（さざ波の光）
+const WATER_DARK = 0.93; // 暗いムラの明るさ
+const WATER_BRIGHT_RATE = 0.12; // ムラのうち明るくなる割合（大きさごと）
+const WATER_DARK_RATE = 0.16; // ムラのうち暗くなる割合（大きさごと）
 const WATER_DRIFT = [0.18, 0.07]; // 模様が流れる速さ（m／秒。x・z）
 const WATER_DOT_FADE = 150; // カメラからこの距離（m）までに、模様をだんだん薄くして消す（遠くでちらつかないように）
-const SHADE_SCALE = 200; // 明るさをテクスチャの 0〜255 に入れるときの倍率
-
-/** 水面のドット絵のテクスチャ（明るさ × SHADE_SCALE を入れる。近くでもドットがくっきり見えるように補間しない） */
-function waterDots(): THREE.DataTexture {
-  const w = WATER_DOTS[0].length;
-  const h = WATER_DOTS.length;
-  const data = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) data[y * w + x] = Math.round(WATER_SHADES[Number(WATER_DOTS[y][x])] * SHADE_SCALE);
-  }
-  const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
-
 
 /**
  * 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る。size は場所の広さ。
@@ -133,7 +102,6 @@ export class Sea {
       uShallow: { value: new THREE.Color(PALETTE.sky) },
       uFoam: { value: new THREE.Color(PALETTE.sky).lerp(new THREE.Color(PALETTE.sand), 0.15) },
       uSkyColor: this.skyColor,
-      uDots: { value: waterDots() },
     };
     material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
@@ -157,7 +125,8 @@ export class Sea {
           uniform vec3 uShallow;
           uniform vec3 uFoam;
           uniform vec3 uSkyColor;
-          uniform sampler2D uDots;
+          // ドットの番号から 0〜1 の乱数（誰の画面でも同じ）
+          float seaHash(vec2 c) { return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453); }
           varying vec3 vSeaPos;`,
         )
         .replace(
@@ -188,9 +157,12 @@ export class Sea {
           shallow = floor(shallow * 3.0 + 0.5) / 3.0;
           diffuseColor.rgb = mix(diffuseColor.rgb, uShallow, shallow * 0.45);
           diffuseColor.a = mix(diffuseColor.a, diffuseColor.a * 0.7, shallow);
-          // 水面のドット絵：ゆっくり流れる大きめの四角いムラ。遠くでは薄くして消す
-          vec2 dotUv = (vSeaPos.xz - vec2(${WATER_DRIFT[0].toFixed(3)}, ${WATER_DRIFT[1].toFixed(3)}) * uTime) / ${WATER_SPAN.toFixed(2)};
-          float dotShade = texture2D(uDots, dotUv).r * ${(255 / SHADE_SCALE).toFixed(4)};
+          // 水面のドット絵：ゆっくり流れる、乱数で散らした四角いムラ。遠くでは薄くして消す
+          vec2 dotP = (vSeaPos.xz - vec2(${WATER_DRIFT[0].toFixed(3)}, ${WATER_DRIFT[1].toFixed(3)}) * uTime) / (${WATER_DOT.toFixed(2)} * vec2(${WATER_DOT_STRETCH.toFixed(2)}, 1.0));
+          float dotShade = 1.0;
+${WATER_BLOTCHES.map((n, k) => `          { float h = seaHash(floor((dotP + vec2(${(k * 1.7).toFixed(1)}, ${(k * 2.3).toFixed(1)})) / ${n.toFixed(1)}) + ${(k * 31).toFixed(1)});
+            if (h < ${WATER_DARK_RATE.toFixed(3)}) dotShade = ${WATER_DARK.toFixed(3)};
+            else if (h > ${(1 - WATER_BRIGHT_RATE).toFixed(3)}) dotShade = ${WATER_BRIGHT.toFixed(3)}; }`).join('\n')}
           float dotNear = 1.0 - smoothstep(${(WATER_DOT_FADE * 0.5).toFixed(1)}, ${WATER_DOT_FADE.toFixed(1)}, length(vViewPosition));
           float dotMul = mix(1.0, dotShade, dotNear);
           // 波打ち際の泡：岸に貼りつく泡と、沖から寄せてくる泡の線
