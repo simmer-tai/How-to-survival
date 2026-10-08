@@ -187,6 +187,17 @@ export const PLASTER_BLOTCH = {
     darkRate: 0.18,
     fade: 60,
 };
+/** 洞窟の岩肌のドット絵（壁をはっきりごつごつ見せるため、ほかより大きく濃いムラ） */
+export const CAVE_BLOTCH = {
+    dot: 0.18, // 1ドットの大きさ（m）
+    stretch: 1,
+    sizes: [6, 3, 2, 1],
+    bright: 1.14,
+    dark: 0.78,
+    brightRate: 0.16,
+    darkRate: 0.24,
+    fade: 90,
+};
 let townVertexMat = null;
 /**
  * flatVertex() に、頂点の aStone（1 が石）の所に石のドット絵（STONE_BLOTCH）、aWood（1 が木材）の所に木のドット絵（TIMBER_BLOTCH）、

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
+import { CAVE_BLOTCH, withBlotch } from '../core/materials.js';
 import { chartRandom } from '../items/islandChart.js';
 
 // 海図に載せた島の洞窟。島の斜面をならした平らな所から、入口のトンネルが坂になって地下へ下り、地下の部屋に出る。
@@ -634,7 +635,7 @@ function buildDrips(c: Cave, ground: (x: number, z: number) => number): THREE.Me
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+  return new THREE.Mesh(geo, withBlotch(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), CAVE_BLOTCH, 'cave'));
 }
 
 /**
@@ -691,7 +692,7 @@ function buildBoulders(c: Cave): THREE.Mesh {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: OUTSIDE, flatShading: true }));
+  const mesh = new THREE.Mesh(geo, withBlotch(new THREE.MeshLambertMaterial({ color: OUTSIDE, flatShading: true }), CAVE_BLOTCH, 'cave'));
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
@@ -715,10 +716,10 @@ export function buildCave(c: Cave, ground: (x: number, z: number) => number): { 
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   // 外側の面（裏）は影を落とすため（洞窟の中に日の光が差しこまないように）
-  const outer = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: OUTSIDE, flatShading: true, side: THREE.BackSide }));
+  const outer = new THREE.Mesh(geo, withBlotch(new THREE.MeshLambertMaterial({ color: OUTSIDE, flatShading: true, side: THREE.BackSide }), CAVE_BLOTCH, 'cave'));
   outer.castShadow = true;
   outer.receiveShadow = true;
-  const inner = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+  const inner = new THREE.Mesh(geo, withBlotch(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), CAVE_BLOTCH, 'cave'));
   inner.receiveShadow = true;
   const boulders = buildBoulders(c);
   const group = new THREE.Group();

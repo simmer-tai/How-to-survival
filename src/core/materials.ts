@@ -230,6 +230,18 @@ export const PLASTER_BLOTCH: BlotchSpec = {
   fade: 60,
 };
 
+/** 洞窟の岩肌のドット絵（壁をはっきりごつごつ見せるため、ほかより大きく濃いムラ） */
+export const CAVE_BLOTCH: BlotchSpec = {
+  dot: 0.18, // 1ドットの大きさ（m）
+  stretch: 1,
+  sizes: [6, 3, 2, 1],
+  bright: 1.14,
+  dark: 0.78,
+  brightRate: 0.16,
+  darkRate: 0.24,
+  fade: 90,
+};
+
 let townVertexMat: THREE.MeshLambertMaterial | null = null;
 
 /**
