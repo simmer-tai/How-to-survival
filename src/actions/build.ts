@@ -785,7 +785,7 @@ function injectStyle(): void {
   const style = document.createElement('style');
   style.textContent = `
     .build-hint {
-      position: fixed; left: 50%; bottom: calc(96 * var(--u)); transform: translateX(-50%); pointer-events: none;
+      position: fixed; left: 50%; bottom: calc(108 * var(--u)); transform: translateX(-50%); pointer-events: none;
       padding: calc(6 * var(--u)) calc(14 * var(--u)); border-radius: calc(8 * var(--u)); background: rgba(43, 38, 51, 0.55);
       color: #fff; font-size: calc(13 * var(--u)); text-align: center; line-height: 1.5; white-space: nowrap;
     }
