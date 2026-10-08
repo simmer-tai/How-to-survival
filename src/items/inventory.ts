@@ -4,6 +4,7 @@ import { landInfoName } from './landInfo.js';
 import { readChart, validChart } from './islandChart.js';
 
 const HOTBAR_SIZE = 4; // ホットバーのマスの数（数字キー 1〜4 で選ぶ）
+const HOTBAR_SLOT = 64; // ホットバーと左手のマスの一辺（カバンのマスは 52）
 const OFFHAND_GAP = 8; // 左手のマスの枠とホットバーのすき間
 const PURSE_GAP = 8; // お金のマスの枠とカバンのすき間
 const BAG_COLS = 9; // カバンの横のマスの数
@@ -761,7 +762,7 @@ function injectStyle(): void {
     }
     /* 背景の世界がぼけきっている間は、枠の後ろをさらにぼかしても見た目が変わらないので省く（毎フレームの合成が軽くなる） */
     .inv.frosted .inv-hotbar, .inv.frosted .inv-offbar { -webkit-backdrop-filter: none; backdrop-filter: none; }
-    .inv-hotbar { grid-template-columns: repeat(${HOTBAR_SIZE}, calc(52 * var(--u))); }
+    .inv-hotbar { grid-template-columns: repeat(${HOTBAR_SIZE}, calc(${HOTBAR_SLOT} * var(--u))); }
     .inv-bag { grid-template-columns: repeat(${BAG_COLS}, calc(52 * var(--u))); }
     .inv-hotrow { position: relative; }
     .inv-offbar { position: absolute; right: calc(100% + ${OFFHAND_GAP} * var(--u)); top: 0; bottom: 0; }
@@ -815,6 +816,13 @@ function injectStyle(): void {
       filter: drop-shadow(1px 0 0 #2b2633) drop-shadow(-1px 0 0 #2b2633) drop-shadow(0 1px 0 #2b2633)
         drop-shadow(0 -1px 0 #2b2633) drop-shadow(0 calc(2 * var(--u)) 1px rgba(43, 38, 51, 0.45));
     }
+    /* ホットバーと左手のマスは、いつも見えるのでカバンより大きくする（アイコンは同じ余白で広げる） */
+    .inv-hotrow .inv-slot { width: calc(${HOTBAR_SLOT} * var(--u)); height: calc(${HOTBAR_SLOT} * var(--u)); }
+    .inv-hotrow .inv-slot img {
+      inset: calc(${HOTBAR_SLOT * 6 / 52} * var(--u));
+      width: calc(${HOTBAR_SLOT * 40 / 52} * var(--u)); height: calc(${HOTBAR_SLOT * 40 / 52} * var(--u));
+    }
+    .inv-hotrow .inv-offhand:empty::before { font-size: calc(${HOTBAR_SLOT * 18 / 52} * var(--u)); }
     .inv-count {
       position: absolute; right: calc(4 * var(--u)); bottom: calc(2 * var(--u)); color: #fff; font-size: calc(13 * var(--u)); font-weight: 700;
       text-shadow: 0 1px 0 #2b2633, 0 0 calc(3 * var(--u)) #2b2633;
