@@ -18,8 +18,8 @@ const WAVES: Wave[] = [
 ];
 
 /** 遠くの粗いメッシュでは波を消す */
-export const WAVE_FADE_START = 170;
-export const WAVE_FADE_END = 215;
+export const WAVE_FADE_START = 300;
+export const WAVE_FADE_END = 380;
 
 const coeffs = WAVES.map((w) => {
   const k = (2 * Math.PI) / w.length;

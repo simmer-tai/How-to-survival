@@ -6,8 +6,8 @@ const WAVES = [
     { angle: 1.3, length: 5.5, amp: 0.03, speed: 1.1, phase: 2.6 },
 ];
 /** 遠くの粗いメッシュでは波を消す */
-export const WAVE_FADE_START = 170;
-export const WAVE_FADE_END = 215;
+export const WAVE_FADE_START = 300;
+export const WAVE_FADE_END = 380;
 const coeffs = WAVES.map((w) => {
     const k = (2 * Math.PI) / w.length;
     return { kx: Math.cos(w.angle) * k, kz: Math.sin(w.angle) * k, omega: k * w.speed, amp: w.amp, phase: w.phase };
