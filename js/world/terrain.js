@@ -15,8 +15,8 @@ const GROUND_BLOTCH = {
     dot: 0.5, // 1ドットの大きさ（m）
     stretch: 1,
     sizes: [3, 2, 1],
-    bright: 1.06,
-    dark: 0.93,
+    bright: 1.04,
+    dark: 0.95,
     brightRate: 0.12,
     darkRate: 0.16,
     fade: 120,
