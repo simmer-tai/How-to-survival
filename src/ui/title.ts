@@ -4,10 +4,13 @@ import { AvatarEditor } from './avatarEditor.js';
 import { createWorld, deleteWorld, listWorlds, loadWorld, type WorldData, type WorldMeta } from '../core/save.js';
 import { cleanCode } from '../net/link.js';
 import { cleanName } from '../net/multiplayer.js';
+import { BUILT_AT } from '../buildInfo.js';
 
 const css = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const DEFAULT_NAME = '新しいワールド';
 const VERSION = 'v0.1.0';
+/** 公開されている最新の版の日時を読む先（このファイルから見た js/buildInfo.js） */
+const LATEST_URL = new URL('../buildInfo.js', import.meta.url);
 const NAME_KEY = 'warfarming:name'; // マルチで出す自分の名前（このブラウザに覚えておく）
 /** URL に ?room=部屋コード を付けて開くと、「みんなで遊ぶ」の画面に部屋コードを入れた状態で始まる（ホストが送る招待リンク） */
 export const ROOM_PARAM = 'room';
@@ -61,6 +64,22 @@ function saveName(name: string): void {
 }
 
 /**
+ * 公開されている版の日時を、キャッシュを使わずに読んで、今動いている版より新しければ知らせる
+ * （ブラウザが古いファイルを覚えていると、更新しても前の版のまま動くことがある）
+ */
+async function checkLatest(el: HTMLElement): Promise<void> {
+  try {
+    const text = await (await fetch(LATEST_URL, { cache: 'no-store' })).text();
+    const latest = /BUILT_AT = '([^']+)'/.exec(text)?.[1];
+    if (!latest || latest <= BUILT_AT) return; // 「年/月/日 時:分」は文字のまま比べても順番どおり
+    el.textContent = `新しい版（${latest} 更新）が出ています。Ctrl+Shift+R で読み込み直してください`;
+    el.classList.add('show');
+  } catch {
+    // 読めないとき（オフラインなど）は何も出さない
+  }
+}
+
+/**
  * タイトル画面を出し、選ばれた（または新しく作った）ワールドを返す。
  * 表示中は body に on-title クラスが付き、ゲームの HUD が隠れる
  */
@@ -77,7 +96,8 @@ export function showTitle(): Promise<ChosenWorld> {
         <button class="title-btn big" data-go="avatar">アバター</button>
         <button class="title-btn big" data-go="help">遊び方</button>
       </div>
-      <div class="title-foot"><span>${VERSION}</span><span>ワールドはこのブラウザに保存されます</span></div>
+      <div class="title-update"></div>
+      <div class="title-foot"><span>${VERSION}（${BUILT_AT} 更新）</span><span>ワールドはこのブラウザに保存されます</span></div>
     </section>
     <section class="title-page" data-page="worlds">
       <div class="title-panel">
@@ -145,6 +165,7 @@ export function showTitle(): Promise<ChosenWorld> {
   const avatar = new AvatarEditor();
   root.querySelector('.title-avatar')!.append(avatar.el);
   document.body.append(root);
+  void checkLatest(root.querySelector<HTMLElement>('.title-update')!);
   document.body.classList.add('on-title');
 
   let page: Page = 'home';
@@ -294,6 +315,12 @@ function injectStyle(): void {
     }
     @keyframes title-float { 50% { transform: translateY(calc(-8 * var(--u))); } }
     .title-menu { display: flex; flex-direction: column; gap: calc(10 * var(--u)); width: calc(300 * var(--u)); max-width: 100%; }
+    .title-update {
+      display: none; position: absolute; left: 50%; top: calc(16 * var(--u)); transform: translateX(-50%); max-width: calc(100% - 32 * var(--u));
+      padding: calc(8 * var(--u)) calc(14 * var(--u)); border-radius: calc(8 * var(--u)); box-sizing: border-box;
+      background: ${css(PALETTE.sand)}; color: ${ink}; font-size: calc(14 * var(--u)); font-weight: 700; text-align: center;
+    }
+    .title-update.show { display: block; }
     .title-foot {
       position: absolute; left: calc(16 * var(--u)); right: calc(16 * var(--u)); bottom: calc(12 * var(--u)); display: flex; justify-content: space-between;
       gap: calc(12 * var(--u)); font-size: calc(12 * var(--u)); opacity: 0.75; text-shadow: 0 1px calc(2 * var(--u)) ${ink};

@@ -6,6 +6,7 @@
 ## ビルド・実行
 
 - `src/**/*.ts` を `tsc` でコンパイルし、`js/` に出力する（`npm run build`）。`index.html` が `js/main.js` を読み込む
+- `npm run build` は先に `stamp.mjs` でビルドした日時を `src/buildInfo.ts` に書き込む（手で直さない）。タイトル画面の左下に「いつの版か」を出し、公開ページの `js/buildInfo.js` のほうが新しければ、読み込み直すよう知らせる。`tsc` だけでビルドしたときは、先に `node stamp.mjs` を動かす
 - three と Rapier と PeerJS は `index.html` の importmap で CDN から読み込む（バンドラーは使わない）。import には `.js` 拡張子を付ける
 - このフォルダは Google ドライブ上にあり `node_modules` を置いていない。型チェックするときはフォルダを一時ディレクトリにコピーし、`npm install` してから `tsc --noEmit` を実行する
 - 手元では `node server.mjs`（または `npm run serve`・`start-server.bat`）でローカルサーバーを起動し、`http://localhost:8765/` を開いて遊ぶ（ファイルを配るだけ。Node.js の標準機能だけで動く）。ワールドのセーブはブラウザの localStorage に入るので、URL のオリジン（ポート番号）が変わると見えなくなる
