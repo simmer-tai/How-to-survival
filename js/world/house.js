@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ACCENT, BALL, BARK, BOX, Batch, CYL, LEAF, MORTAR, PRISM, ROCK, SAND, TRUNK, WATER, backSide, colliderBox, faceBox, faceNormal, facePoint3, stoneColor, } from './townKit.js';
+import { ACCENT, BALL, BARK, BOX, Batch, CYL, LEAF, MORTAR, PRISM, ROCK, SAND, TRUNK, WATER, backSide, colliderBox, faceBox, faceNormal, facePoint3, markStone, stoneColor, } from './townKit.js';
 // 街の家。1階は石積み、2階は外へ張り出した木組みの漆喰壁、その上に急な石板ぶきの切妻屋根がのる。
 // 屋根には小さな屋根窓と石の煙突が付く。
 // 家の中で組み立て（原点は1階の床の真ん中、妻側の正面が +Z、棟は Z に沿う）、置く位置と向きは buildHouse に渡す。
@@ -292,7 +292,7 @@ export function gable(b, f, base, half, rise) {
 function slope(b, rand, eave, u, n, width, length) {
     const ax = new THREE.Vector3().crossVectors(n, u);
     const at = (s, along, lift) => eave.clone().addScaledVector(u, s).addScaledVector(ax, along).addScaledVector(n, lift);
-    b.oriented(BOX, at(length / 2, 0, -0.09), ax, n, u, width, 0.18, length, SLATE.clone().multiplyScalar(0.6));
+    b.oriented(BOX, at(length / 2, 0, -0.09), ax, n, u, width, 0.18, length, markStone(SLATE.clone().multiplyScalar(0.6)));
     const tn = n.clone().addScaledVector(u, 0.12).normalize();
     const tu = new THREE.Vector3().crossVectors(ax, tn);
     for (let s = 0, row = 0; s < length - 0.04; s += TILE_ROW, row++) {
@@ -308,7 +308,7 @@ function slope(b, rand, eave, u, n, width, length) {
             const c = SLATE.clone().multiplyScalar(0.85 + rand() * 0.28);
             if (rand() < 0.12)
                 c.lerp(ROCK, 0.35); // ところどころ色の抜けた石板
-            b.oriented(BOX, at(s + len / 2, (a0 + a1) / 2, 0.04), ax, tn, tu, a1 - a0 - 0.03, 0.05, len, c);
+            b.oriented(BOX, at(s + len / 2, (a0 + a1) / 2, 0.04), ax, tn, tu, a1 - a0 - 0.03, 0.05, len, markStone(c));
         }
     }
 }
@@ -320,7 +320,7 @@ function ridgeCap(b, rand, mid, dir, len) {
     for (let s = -len / 2; s < len / 2 - 0.05; s += 0.5) {
         const l = Math.min(0.5, len / 2 - s);
         const c = mid.clone().addScaledVector(dir, s + l / 2).addScaledVector(UP, 0.03);
-        b.oriented(BOX, c, dir, ay, az, l - 0.03, 0.24, 0.24, SLATE.clone().multiplyScalar(0.75 + rand() * 0.15));
+        b.oriented(BOX, c, dir, ay, az, l - 0.03, 0.24, 0.24, markStone(SLATE.clone().multiplyScalar(0.75 + rand() * 0.15)));
     }
 }
 /** 切妻屋根の2つの斜面。halfW は棟から軒先までの水平の幅（軒の出を含む）、along は棟の向き。ridge は棟の真ん中 */
