@@ -3,7 +3,7 @@ import { HeightField, SEA_FLOOR, fbm } from './terrain.js';
 import { buildPier, type Platform } from './props.js';
 import {
   ACCENT, BALL, BARK, BOX, Batch, CYL, GRASS, LEAF, MORTAR, ROCK, SAND, TOP_ONLY, TRUNK,
-  backSide, colliderBox, colliderCyl, facePoint, stoneColor, type Face,
+  backSide, colliderBox, colliderCyl, facePoint, markStone, stoneColor, type Face,
 } from './townKit.js';
 import { buildHouse } from './house.js';
 import { buildMapShop } from './mapShop.js';
@@ -236,7 +236,7 @@ function barrel(b: Batch, rand: () => number, group: THREE.Group, solids: THREE.
 function lamp(b: Batch, glass: Batch, lamps: Lamps, group: THREE.Group, solids: THREE.Mesh[], x: number, z: number, arm: [number, number]): void {
   const pole = BARK.clone().multiplyScalar(0.8);
   const H = 3.2;
-  b.add(CYL, x, QUAY_TOP + 0.15, z, 0.2, 0.3, 0.2, ROCK.clone().multiplyScalar(0.8)); // 石の台
+  b.add(CYL, x, QUAY_TOP + 0.15, z, 0.2, 0.3, 0.2, markStone(ROCK.clone().multiplyScalar(0.8))); // 石の台
   b.add(CYL, x, QUAY_TOP + H / 2, z, 0.07, H, 0.07, pole);
   const [ax, az] = arm;
   b.add(BOX, x + ax * 0.3, QUAY_TOP + H - 0.12, z + az * 0.3, 0.06 + Math.abs(ax) * 0.55, 0.06, 0.06 + Math.abs(az) * 0.55, pole);

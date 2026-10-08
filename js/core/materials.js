@@ -101,21 +101,23 @@ ${s.sizes
 }
 /**
  * マテリアルに四角いムラのドット絵を足す（頂点の位置＝物の中の座標で、3次元のマスに散らす。物が動いても模様はついていく）。
- * もとの onBeforeCompile（風の揺れなど）は先に動かす。key はシェーダーを見分ける名前（ムラの決め方ごとに変える）
+ * もとの onBeforeCompile（風の揺れなど）は先に動かす。key はシェーダーを見分ける名前（ムラの決め方ごとに変える）。
+ * weight を渡すと、その名前の頂点の値（0〜1）の割合だけムラを付ける（1つのメッシュの中で、付ける所と付けない所を分ける）
  */
-export function withBlotch(mat, s, key) {
+export function withBlotch(mat, s, key, weight) {
     const beforeSrc = mat.onBeforeCompile.toString();
     const before = mat.onBeforeCompile.bind(mat);
     mat.onBeforeCompile = (shader, renderer) => {
         before(shader, renderer);
+        const w = weight ? `attribute float ${weight};\nvarying float vBlotchWeight;` : '';
         shader.vertexShader = shader.vertexShader
-            .replace('#include <common>', '#include <common>\nvarying vec3 vBlotchPos;')
-            .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBlotchPos = position;');
+            .replace('#include <common>', `#include <common>\nvarying vec3 vBlotchPos;\n${w}`)
+            .replace('#include <begin_vertex>', `#include <begin_vertex>\nvBlotchPos = position;${weight ? `\nvBlotchWeight = ${weight};` : ''}`);
         shader.fragmentShader = shader.fragmentShader
-            .replace('#include <common>', `#include <common>\nvarying vec3 vBlotchPos;\n${BLOTCH_HASH_GLSL}`)
-            .replace('#include <color_fragment>', `#include <color_fragment>\n${blotchGlsl('vBlotchPos', s, 'blotchMul', 3)}\ndiffuseColor.rgb *= blotchMul;`);
+            .replace('#include <common>', `#include <common>\nvarying vec3 vBlotchPos;\n${weight ? 'varying float vBlotchWeight;' : ''}\n${BLOTCH_HASH_GLSL}`)
+            .replace('#include <color_fragment>', `#include <color_fragment>\n${blotchGlsl('vBlotchPos', s, 'blotchMul', 3)}\ndiffuseColor.rgb *= ${weight ? 'mix(1.0, blotchMul, vBlotchWeight)' : 'blotchMul'};`);
     };
-    mat.customProgramCacheKey = () => `${beforeSrc}|blotch:${key}`;
+    mat.customProgramCacheKey = () => `${beforeSrc}|blotch:${key}:${weight ?? ''}`;
     return mat;
 }
 /** 木の幹・葉・茂みのドット絵（木目と同じくらい薄く。物の中の座標の3次元のマスで散らす） */
@@ -145,4 +147,21 @@ let treeVertexMat = null;
 export function treeVertex() {
     treeVertexMat ??= withBlotch(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), TREE_BLOTCH, 'tree');
     return treeVertexMat;
+}
+/** 街の石積み・石畳・石板の屋根のドット絵（石の粒のような細かいムラ。地面と同じくらいの薄さ） */
+export const STONE_BLOTCH = {
+    dot: 0.1, // 1ドットの大きさ（m）
+    stretch: 1,
+    sizes: [3, 2, 1],
+    bright: 1.04,
+    dark: 0.95,
+    brightRate: 0.14,
+    darkRate: 0.18,
+    fade: 60,
+};
+let stoneVertexMat = null;
+/** flatVertex() に、頂点の aStone（1 が石）の所だけ石のドット絵（STONE_BLOTCH）を足したもの（街のまとめたメッシュに使う） */
+export function stoneVertex() {
+    stoneVertexMat ??= withBlotch(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), STONE_BLOTCH, 'stone', 'aStone');
+    return stoneVertexMat;
 }

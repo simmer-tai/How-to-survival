@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { flatVertex } from '../core/materials.js';
+import { stoneVertex } from '../core/materials.js';
 
 // 街の石積み・建物・小物を組み立てる道具（town.ts と house.ts で使う）
 
@@ -42,10 +42,21 @@ export const PRISM = (() => {
   return geo.toNonIndexed();
 })();
 
+/** 石の色（stoneColor() で作った色と markStone() した色）。これで塗った所に石のドット絵を付ける */
+const STONE_COLORS = new WeakSet<THREE.Color>();
+
+/** この色を石の色として印を付ける（石板の屋根など、stoneColor() を通さずに作る石の色に使う） */
+export function markStone(c: THREE.Color): THREE.Color {
+  STONE_COLORS.add(c);
+  return c;
+}
+
 /** たくさんの石や木箱を、頂点の色を変えて1つのメッシュにまとめる（描く回数を減らすため） */
 export class Batch {
   private readonly positions: number[] = [];
   private readonly colors: number[] = [];
+  /** 頂点ごとに石か（1 が石） */
+  private readonly stones: number[] = [];
   private readonly m = new THREE.Matrix4();
   private readonly v = new THREE.Vector3();
   private readonly q = new THREE.Quaternion();
@@ -61,10 +72,12 @@ export class Batch {
   /** geo を行列 m で動かして足す */
   addMatrix(geo: THREE.BufferGeometry, m: THREE.Matrix4, color: THREE.Color): void {
     const pos = geo.getAttribute('position');
+    const stone = STONE_COLORS.has(color) ? 1 : 0;
     for (let i = 0; i < pos.count; i++) {
       this.v.fromBufferAttribute(pos, i).applyMatrix4(m);
       this.positions.push(this.v.x, this.v.y, this.v.z);
       this.colors.push(color.r, color.g, color.b);
+      this.stones.push(stone);
     }
   }
 
@@ -93,8 +106,10 @@ export class Batch {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
+    // 石の色で塗った所（石積み・石畳・石板）にだけ、石のドット絵を付ける（木や布・葉は付けない）
+    geo.setAttribute('aStone', new THREE.Float32BufferAttribute(this.stones, 1));
     geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, flatVertex());
+    const mesh = new THREE.Mesh(geo, stoneVertex());
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
@@ -109,7 +124,7 @@ export const BARK = new THREE.Color(PALETTE.bark);
 export const GRASS = new THREE.Color(PALETTE.grass);
 export const ACCENT = new THREE.Color(PALETTE.accent);
 export const WATER = new THREE.Color(PALETTE.water);
-export const MORTAR = ROCK.clone().multiplyScalar(0.5); // 目地の奥に見える暗い色
+export const MORTAR = markStone(ROCK.clone().multiplyScalar(0.5)); // 目地の奥に見える暗い色
 
 /** 石の色。k は明るさ、y は高さ（低いと濡れて藻が付く） */
 export function stoneColor(rand: () => number, k: number, y = 10): THREE.Color {
@@ -118,7 +133,7 @@ export function stoneColor(rand: () => number, k: number, y = 10): THREE.Color {
   if (tint < 0.25) c.lerp(SAND, 0.18 + rand() * 0.12); // 黄みがかった石
   else if (tint < 0.35) c.lerp(BARK, 0.12); // くすんだ石
   if (y < WET_LINE) c.lerp(LEAF, THREE.MathUtils.clamp((WET_LINE - y) * 0.5, 0.15, 0.4)).multiplyScalar(0.75);
-  return c.multiplyScalar(k * (0.92 + rand() * 0.16));
+  return markStone(c.multiplyScalar(k * (0.92 + rand() * 0.16)));
 }
 
 /** 当たり判定だけに使う、見えない箱を置く */
