@@ -644,6 +644,7 @@ const ORE_SEED = 11000; // 鉄の鉱脈の乱数の種のずらし（ほかの�
 const ORE_SIZE = { min: 0.6, max: 1.0 }; // 鉄の鉱脈の大きさ
 const ORE_BITS = { min: 6, max: 10 }; // 鉱脈の岩肌に顔を出す鉄の粒の数
 const ORE_BIT_SIZE = 0.22; // 鉄の粒の大きさ（鉱脈の大きさに対する割合）
+const SURFACE_ORE = { min: 4, max: 6 }; // 洞窟ができなかった鉄鉱脈の島で、地上の岩場に置く鉄の鉱脈の数
 const ISLE_SPREAD = 250; // 海図に載せた島の物を置く範囲（中心からの四角の一辺。陸は中心から 124m に収まる）
 /**
  * 海図に載せた島の木・茂み・岩。seed（島の地図の種）から置き方を決めるので、誰の画面でも同じになる。
@@ -761,7 +762,30 @@ export function buildIsleProps(seed, counts, caves = []) {
     const ore = counts.ore;
     if (ore) {
         const oreRand = mulberry32(seed + ORE_SEED);
-        for (const r of caves.flatMap((c) => c.rooms)) {
+        const addVein = (x, z, y) => {
+            const size = ORE_SIZE.min + oreRand() * (ORE_SIZE.max - ORE_SIZE.min);
+            const vein = oreVein(oreRand, size);
+            vein.position.set(x, y + size * 0.2, z);
+            group.add(vein);
+            solids.push(vein);
+            rocks.push(vein);
+            placed.push(new THREE.Vector2(x, z));
+        };
+        const rooms = caves.flatMap((c) => c.rooms);
+        // 洞窟ができなかった島（地形によっては置けないことがある）でも鉄鉱石が採れるように、地上の陸に鉱脈を出す
+        if (rooms.length === 0) {
+            const n = SURFACE_ORE.min + Math.floor(oreRand() * (SURFACE_ORE.max - SURFACE_ORE.min + 1));
+            for (let i = 0, tries = 0; i < n && tries < 12000; tries++) {
+                const x = (oreRand() - 0.5) * ISLE_SPREAD;
+                const z = (oreRand() - 0.5) * ISLE_SPREAD;
+                const y = terrainHeight(x, z);
+                if (y < 1 || !isFree(x, z, 3))
+                    continue;
+                addVein(x, z, y);
+                i++;
+            }
+        }
+        for (const r of rooms) {
             const n = ore.min + Math.floor(oreRand() * (ore.max - ore.min + 1));
             for (let i = 0, tries = 0; i < n && tries < 200; tries++) {
                 const l = (oreRand() * 2 - 1) * r.a;
@@ -770,13 +794,7 @@ export function buildIsleProps(seed, counts, caves = []) {
                 const z = r.z + l * Math.sin(r.yaw) + s * Math.cos(r.yaw);
                 if (domeQ(r, x, z) > 0.5 || !isFree(x, z, 2.5))
                     continue;
-                const size = ORE_SIZE.min + oreRand() * (ORE_SIZE.max - ORE_SIZE.min);
-                const vein = oreVein(oreRand, size);
-                vein.position.set(x, r.floor + size * 0.2, z);
-                group.add(vein);
-                solids.push(vein);
-                rocks.push(vein);
-                placed.push(new THREE.Vector2(x, z));
+                addVein(x, z, r.floor);
                 i++;
             }
         }
