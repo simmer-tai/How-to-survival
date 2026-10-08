@@ -2,55 +2,16 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { WORLD_SIZE, SEA_FLOOR, terrainHeight } from './terrain.js';
 import { WATER_LEVEL } from '../core/physics.js';
-import { WAVE_GLSL, WAVE_FADE_END, waveScale } from '../core/waves.js';
+import { WAVE_GLSL, waveScale } from '../core/waves.js';
 const SEA_SIZE = 1200;
 const SEGMENTS = 300; // 1辺の分割数
-const DENSE_SEGMENTS = 110; // 中心から片側で細かく分割する数（残りは遠くへ引き伸ばす）
-const DENSE_HALF = WAVE_FADE_END + 5;
+const NEAR_CELL = 2.5; // 中心のマスの一辺（m）。遠くほどマスを大きくして、遠くの波も大きな面で描く
+const DEEP_SHADE = 1; // 沖の水の色（PALETTE.sea）の明るさの倍率
+const REFLECT = 0.5; // 空を映す強さ。水面を浅い角度で見る面ほど空の色になる（フレネル）
+const REFLECT_POWER = 4; // 空を映す割合が、見る角度でどれだけ急に変わるか（大きいほど浅い角度だけ映る）
 const DEPTH_RES = 256;
 const DEPTH_MAX = 4;
 const DRY = 255; // 海底のテクスチャの、海の水を描かない所の値（ほかの所は DRY - 1 まで）
-// 水面のドット絵（木目と同じく、明るさだけの模様を色に掛ける）。大きさの違う四角いムラを敷きつめ、横（x）に少し長い。
-// 1 が地の明るさで、0 は地より明るいムラ（さざ波の光）、2・3 は暗いムラ
-const WATER_DOTS = [
-    '1111000111122211',
-    '1111000111122211',
-    '2211111133111100',
-    '2211111133111100',
-    '1111222111110001',
-    '0001222111110001',
-    '0001111110003311',
-    '1133311110003311',
-    '1133311222111111',
-    '1111111222111222',
-    '1000011111133222',
-    '1000011111133111',
-    '1111222100011111',
-    '3311222100011000',
-    '3311111111111000',
-    '1111110003311111',
-];
-const WATER_SHADES = [1.12, 1, 0.9, 0.83]; // 模様の数字ごとの明るさ（水面は半透明で、斜めから見るので木目より差を大きくする）
-const WATER_SPAN = 2.4; // 模様1枚が覆う長さ（m）。1ドットが約15cm になる
-const WATER_DRIFT = [0.18, 0.07]; // 模様が流れる速さ（m／秒。x・z）
-const WATER_DOT_FADE = 60; // カメラからこの距離（m）までに、模様をだんだん薄くして消す（遠くでちらつかないように）
-const SHADE_SCALE = 200; // 明るさをテクスチャの 0〜255 に入れるときの倍率
-/** 水面のドット絵のテクスチャ（明るさ × SHADE_SCALE を入れる。近くでもドットがくっきり見えるように補間しない） */
-function waterDots() {
-    const w = WATER_DOTS[0].length;
-    const h = WATER_DOTS.length;
-    const data = new Uint8Array(w * h);
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++)
-            data[y * w + x] = Math.round(WATER_SHADES[Number(WATER_DOTS[y][x])] * SHADE_SCALE);
-    }
-    const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestFilter;
-    tex.needsUpdate = true;
-    return tex;
-}
 /**
  * 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る。size は場所の広さ。
  * dry が true を返す所（洞窟の上）は DRY の値にして、海の水面を描かない（洞窟の上は陸なので、外からは変わらない）
@@ -73,15 +34,16 @@ export function bakeSeabed(height = terrainHeight, size = WORLD_SIZE, dry) {
     tex.userData.size = size;
     return tex;
 }
-/** 中心付近は細かく、遠くは粗いグリッド（XZ平面） */
+/** 中心付近は細かく、遠くほど粗いグリッド（XZ平面） */
 function seaGeometry() {
     const geo = new THREE.PlaneGeometry(2, 2, SEGMENTS, SEGMENTS);
     geo.rotateX(-Math.PI / 2);
-    const dense = DENSE_SEGMENTS / (SEGMENTS / 2);
+    // 中心からの距離 s（0〜1）を a·s + b·s³ に引き伸ばす：中心のマスは NEAR_CELL、外へいくほどなめらかに大きくなる
+    const a = (NEAR_CELL * SEGMENTS) / 2;
+    const b = SEA_SIZE / 2 - a;
     const stretch = (u) => {
         const s = Math.abs(u);
-        const d = s <= dense ? (s / dense) * DENSE_HALF : DENSE_HALF + ((s - dense) / (1 - dense)) * (SEA_SIZE / 2 - DENSE_HALF);
-        return Math.sign(u) * d;
+        return Math.sign(u) * (a * s + b * s * s * s);
     };
     const pos = geo.getAttribute('position');
     for (let i = 0; i < pos.count; i++) {
@@ -100,9 +62,11 @@ export class Sea {
     seabed = { value: bakeSeabed() };
     /** 海底のテクスチャがおおう広さ（m） */
     seabedSize = { value: WORLD_SIZE };
+    /** 水面に映す空の色（地平線の色。霧と同じ色にして、遠くの海が空に溶けるようにする） */
+    skyColor = { value: new THREE.Color(PALETTE.sky) };
     constructor() {
         const material = new THREE.MeshLambertMaterial({
-            color: PALETTE.water,
+            color: new THREE.Color(PALETTE.sea).multiplyScalar(DEEP_SHADE),
             flatShading: true,
             transparent: true,
             opacity: 0.82,
@@ -119,7 +83,7 @@ export class Sea {
             uSeabedSize: this.seabedSize,
             uShallow: { value: new THREE.Color(PALETTE.sky) },
             uFoam: { value: new THREE.Color(PALETTE.sky).lerp(new THREE.Color(PALETTE.sand), 0.15) },
-            uDots: { value: waterDots() },
+            uSkyColor: this.skyColor,
         };
         material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, uniforms);
@@ -137,7 +101,7 @@ export class Sea {
           uniform float uSeabedSize;
           uniform vec3 uShallow;
           uniform vec3 uFoam;
-          uniform sampler2D uDots;
+          uniform vec3 uSkyColor;
           varying vec3 vSeaPos;`)
                 .replace('#include <normal_fragment_begin>', 
             // 波の面ごとにパキッと陰影をつける（フラットシェーディング）
@@ -147,7 +111,11 @@ export class Sea {
           vec3 seaNormal = inverseTransformDirection(normal, viewMatrix);
           if (seaNormal.y < 0.0) seaNormal = -seaNormal; // 下から見たとき
           float tilt = dot(seaNormal.xz, vec2(0.6, 0.4)) * 6.0;
-          diffuseColor.rgb *= 1.0 + floor(clamp(tilt, -1.0, 1.0) * 2.0 + 0.5) * 0.06 * (1.0 - foam);`)
+          // 面ごとの空の映り込み（フレネル）。面の向きと見る向きで決まるので、波の面が一枚ずつ明暗に分かれる
+          vec3 seaView = normalize(vViewPosition);
+          float seaFacing = abs(dot(normal, seaView));
+          float seaReflect = pow(1.0 - seaFacing, ${REFLECT_POWER.toFixed(1)}) * ${REFLECT.toFixed(2)};
+`)
                 .replace('#include <color_fragment>', `#include <color_fragment>
           vec2 seabedUv = vSeaPos.xz / uSeabedSize + 0.5;
           float seabedK = texture2D(uSeabed, seabedUv).r;
@@ -159,18 +127,11 @@ export class Sea {
           shallow = floor(shallow * 3.0 + 0.5) / 3.0;
           diffuseColor.rgb = mix(diffuseColor.rgb, uShallow, shallow * 0.45);
           diffuseColor.a = mix(diffuseColor.a, diffuseColor.a * 0.7, shallow);
-          // 水面のドット絵：ゆっくり流れる四角いムラ。遠くでは薄くして消す
-          vec2 dotUv = (vSeaPos.xz - vec2(${WATER_DRIFT[0].toFixed(3)}, ${WATER_DRIFT[1].toFixed(3)}) * uTime) / ${WATER_SPAN.toFixed(2)};
-          float dotShade = texture2D(uDots, dotUv).r * ${(255 / SHADE_SCALE).toFixed(4)};
-          float dotNear = 1.0 - smoothstep(${(WATER_DOT_FADE * 0.5).toFixed(1)}, ${WATER_DOT_FADE.toFixed(1)}, length(vViewPosition));
-          diffuseColor.rgb *= mix(1.0, dotShade, dotNear);
           // 波打ち際の泡：岸に貼りつく泡と、沖から寄せてくる泡の線
           float edge = 1.0 - step(0.22, depth);
           float near = 1.0 - smoothstep(0.3, 1.8, depth);
           float wash = step(0.8, fract(depth * 0.8 + uTime * 0.45)) * near;
-          // 波の山に少しだけ白波
-          float crest = step(0.34, vSeaPos.y - ${WATER_LEVEL.toFixed(2)});
-          float foam = max(max(edge, wash), crest * 0.6);
+          float foam = max(edge, wash);
           diffuseColor.rgb = mix(diffuseColor.rgb, uFoam, foam);
           diffuseColor.a = mix(diffuseColor.a, 0.95, foam);`)
                 .replace('#include <opaque_fragment>', 
@@ -179,6 +140,11 @@ export class Sea {
             float lift = floor(clamp(tilt, -1.0, 1.0) * 2.0 + 0.5) * 0.07;
             outgoingLight = uShallow * (1.05 + lift) * uDaylight;
             diffuseColor.a = 0.92;
+          } else {
+            // 上から見た水面：空を映す（泡には映さない。空の色は時刻で暗くなっている）
+            float clear = 1.0 - foam;
+            outgoingLight = mix(outgoingLight, uSkyColor, seaReflect * clear);
+            diffuseColor.a = mix(diffuseColor.a, 1.0, seaReflect * clear);
           }
           #include <opaque_fragment>`);
         };
@@ -191,6 +157,10 @@ export class Sea {
     }
     setDaylight(k) {
         this.daylight.value = k;
+    }
+    /** 水面に映す空の色（霧の色） */
+    setSkyColor(color) {
+        this.skyColor.value.copy(color);
     }
     /** 今の海底のテクスチャ */
     get seabedTexture() {

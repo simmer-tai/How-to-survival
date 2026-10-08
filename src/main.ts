@@ -1387,6 +1387,7 @@ function applySky(underwater: boolean, dt: number): void {
       sun.intensity *= lit;
       fog.color.lerp(CAVE_FOG_COLOR, caveDark);
     }
+    sea.setSkyColor(fog.color); // 海の水面に、霧と同じ空の色を映す（遠くの海が空に溶ける）
   } else {
     const depth = THREE.MathUtils.clamp(WATER_LEVEL - camera.position.y, 0, 8);
     deepColor.copy(seaColor).multiplyScalar((0.85 - depth * 0.05) * THREE.MathUtils.lerp(0.25, 1, sky.daylight));
