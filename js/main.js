@@ -105,7 +105,6 @@ scene.add(sun);
 const FROST_SHRINK = 3; // インベントリを開いている間、背景の世界を何分の1の大きさで描いてぼかすか（大きいほどぼける）
 const FROST_FADE = 0.35; // 開いてからぼけきるまで（閉じて戻るまで）の時間（秒）
 const FROST_TINT = 0.06; // すりガラスの霞み（背景を空の色に寄せる割合）
-const FROST_REFRESH = 0.25; // ぼけきった後、背景の世界を描き直す間隔（秒）。間は前に描いた小さな画像を使い回す
 renderer.shadowMap.autoUpdate = false;
 let shadowFrame = 0;
 // ---- 時間（1日目の朝から始まり、昼12分・夜6分で1日が過ぎる） ----
@@ -1776,9 +1775,8 @@ const frostMaterial = new THREE.ShaderMaterial({
 frostScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), frostMaterial));
 let frostAmount = 0; // ぼかす度合い（0：そのまま 〜 1：いちばんぼけた所）
 let frostLast = performance.now();
-let frostDrawn = -Infinity; // 小さな画像に世界を最後に描いた時刻（ぼけきっている間だけ使い回す）
 const drawSize = new THREE.Vector2();
-/** 世界（レイヤー 0 など、カメラに今入っているレイヤー）を描く。インベントリを開いている間は徐々にぼかし、雨は描かない */
+/** 世界（レイヤー 0 など、カメラに今入っているレイヤー）を描く。インベントリを開いている間は徐々にぼかす（雨も含めて毎フレーム描き直す） */
 function renderWorld() {
     const now = performance.now();
     const dt = Math.min(0.1, (now - frostLast) / 1000);
@@ -1803,16 +1801,9 @@ function renderWorld() {
         frostTarget.setSize(w, h);
     frostMaterial.uniforms.texel.value.set(1 / w, 1 / h).multiplyScalar(ease);
     frostMaterial.uniforms.amount.value = ease;
-    // ぼけきった背景は細かい動きが見えないので、毎フレームは描き直さない（世界の描画がいちばん重い）
-    if (resized || frostAmount < 1 || now - frostDrawn >= FROST_REFRESH * 1000) {
-        frostDrawn = now;
-        const rainShown = rain.object.visible;
-        rain.object.visible = false;
-        renderer.setRenderTarget(frostTarget);
-        renderer.render(scene, camera);
-        renderer.setRenderTarget(null);
-        rain.object.visible = rainShown;
-    }
+    renderer.setRenderTarget(frostTarget);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
     renderer.render(frostScene, frostCamera);
 }
 /** 世界を描いてから、深度を消して手や持ち物を上に重ねる（近くの木や岩に手がめり込まないように） */

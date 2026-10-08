@@ -30,6 +30,7 @@ const COURSE_H = 0.42; // 岸壁の石積みの1段の高さ
 const BLOCK_MIN = 0.7; // 岸壁の石の長さ（最小・最大）
 const BLOCK_MAX = 1.5;
 const JOINT = 0.05; // 石と石のすきま（目地）
+const CORE_INSET = 0.06; // 岸壁の芯（目地の奥に見える暗い箱）を石の面からどれだけ奥に置くか
 const SETT_X = 0.62; // 広場の敷石の大きさ（X・Z）
 const SETT_Z = 0.46;
 const SLAB = 1.1; // 突堤の板石の長さ
@@ -135,6 +136,11 @@ function masonry(b, rand, f, ground) {
         b.box(Math.min(x0, x1), QUAY_TOP - COPING_H, Math.min(z0, z1), Math.max(x0, x1), QUAY_TOP + 0.02, Math.max(z0, z1), stoneColor(rand, 0.98), ['ny', backSide(f)]);
         s += len;
     }
+}
+/** 岸壁の芯。石積みの奥に暗い箱を置き、石と石のすきまから向こうの空や海が透けて見えないようにする */
+function wallCore(b, x0, z0, x1, z1) {
+    const k = CORE_INSET;
+    b.box(x0 + k, WALL_BOTTOM, z0 + k, x1 - k, QUAY_TOP - COPING_H, z1 - k, MORTAR, ['py', 'ny']);
 }
 /** 石畳。x・z の範囲に、横に半分ずつずらした敷石を並べる（size は1枚の X・Z の大きさ） */
 function paving(b, rand, x0, z0, x1, z1, sx, sz) {
@@ -343,6 +349,7 @@ export function buildTown() {
         { axis: 'x', fixed: PLAZA_EAST, from: plaza.minZ, to: plaza.maxZ, out: 1 }, // 陸側の縁（ほとんど地面に埋まる）
     ])
         masonry(b, rand, f, ground);
+    wallCore(b, plaza.minX, plaza.minZ, plaza.maxX, plaza.maxZ);
     colliderBox(group, solids, plaza.minX, WALL_BOTTOM, plaza.minZ, plaza.maxX, QUAY_TOP, plaza.maxZ);
     platforms.push({ ...plaza, top: QUAY_TOP });
     // 石の突堤。上は大きめの板石。付け根は広場の縁石の幅まで入れて、広場の石畳とつなぐ
@@ -353,6 +360,7 @@ export function buildTown() {
         { axis: 'x', fixed: jetty.minX, from: jetty.minZ, to: jetty.maxZ, out: -1 },
     ])
         masonry(b, rand, f, ground);
+    wallCore(b, jetty.minX, jetty.minZ, jetty.maxX, jetty.maxZ);
     colliderBox(group, solids, jetty.minX, WALL_BOTTOM, jetty.minZ, jetty.maxX, QUAY_TOP, jetty.maxZ);
     platforms.push({ ...jetty, top: QUAY_TOP });
     // 水面へ下りる石段：突堤の北側（付け根から先へ下りる）と、岸壁の南寄り（北から南へ下りる）
