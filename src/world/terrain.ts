@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
+import { BLOTCH_HASH_GLSL, blotchGlsl, type BlotchSpec } from '../core/materials.js';
 
 export const WORLD_SIZE = 200; // 自分の島と街の広さ（m）。海図に載せた島は world/isle.ts の ISLE_SIZE
 const CELL = WORLD_SIZE / 90; // 地形のグリッドの1マスの大きさ（m）。広い場所はマスの数を増やす
@@ -11,6 +12,17 @@ const SLOPE_OUTER = 1.3;
 export const SEA_FLOOR = -6;
 const NORMAL_EPS = CELL * 0.5; // 法線を求めるときに傾きを測る幅（広いほど陰影がなめらか。狭いほど小さな凹凸まで陰影に出る）
 const SLOPE_SHADE = 0.18; // 草地が岩肌に変わる手前の急な斜面で、地面と草の色を暗くする割合（凹凸を見やすくする）
+// 地面のドット絵（海の水面と同じく、四角いムラを場所から決めた乱数で散らし、色の明るさだけを変える）
+const GROUND_BLOTCH: BlotchSpec = {
+  dot: 0.5, // 1ドットの大きさ（m）
+  stretch: 1,
+  sizes: [3, 2, 1],
+  bright: 1.06,
+  dark: 0.93,
+  brightRate: 0.12,
+  darkRate: 0.16,
+  fade: 120,
+};
 const ROCK_NORMAL_Y = 0.78; // 面の向きの上向き成分がこれより小さい（急な）所は岩肌
 
 // ---- ノイズ ----
@@ -207,6 +219,28 @@ export function createTerrain(): THREE.Mesh {
   return islandField.createMesh();
 }
 
+let groundMat: THREE.MeshLambertMaterial | null = null;
+
+/** 地面のマテリアル（どの場所の地面も同じ1つ）。頂点の色に、四角いムラのドット絵（GROUND_BLOTCH）を掛ける */
+function groundMaterial(): THREE.MeshLambertMaterial {
+  if (groundMat) return groundMat;
+  groundMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  groundMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vGroundPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGroundPos = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec2 vGroundPos;\n${BLOTCH_HASH_GLSL}`)
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        ${blotchGlsl('vGroundPos', GROUND_BLOTCH, 'groundMul')}
+        diffuseColor.rgb *= groundMul;`,
+      );
+  };
+  return groundMat;
+}
+
 /** h(i, j) はグリッド頂点の高さ、raw は法線を求める高さの関数。segs × segs マスで、1マスは step、中心から端まで half */
 function buildTerrainMesh(
   h: (i: number, j: number) => number,
@@ -305,7 +339,7 @@ function buildTerrainMesh(
   }
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
 
-  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  const mesh = new THREE.Mesh(geo, groundMaterial());
   mesh.receiveShadow = true;
   mesh.castShadow = true;
   return mesh;
