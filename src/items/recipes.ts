@@ -26,12 +26,12 @@ export const RECIPES: Recipe[] = [
   { result: 'plank', count: 2, cost: { wood: 1 }, station: 'workbench' },
   { result: 'torch', count: 1, cost: { stick: 1, leaf: 2, vine: 1 }, station: null }, // 枝の先に葉っぱを巻きつけ、ツルで縛る
   { result: 'stoneKnife', count: 1, cost: { stone: 2 }, station: null }, // 石を石で打ち欠いて刃にする
-  { result: 'spear', count: 1, cost: { stick: 1, vine: 2, stoneKnife: 1 }, station: null, locked: true }, // 石のナイフを枝の先にツルで縛りつける
+  { result: 'spear', count: 1, cost: { stick: 1, vine: 2, stoneKnife: 1 }, station: null }, // 石のナイフを枝の先にツルで縛りつける
   { result: 'axe', count: 1, cost: { stone: 2, vine: 2, stick: 1 }, station: null }, // 石の刃を枝にツルで縛りつける
-  { result: 'pickaxe', count: 1, cost: { stone: 3, stick: 1, vine: 2 }, station: 'workbench', locked: true }, // とがらせた石を枝にツルで縛りつける
+  { result: 'pickaxe', count: 1, cost: { stone: 3, stick: 1, vine: 2 }, station: 'workbench' }, // とがらせた石を枝にツルで縛りつける
   { result: 'shovel', count: 1, cost: { plank: 1, stick: 1, vine: 2 }, station: 'workbench' }, // 板の刃を枝にツルで縛りつける
-  { result: 'fishingRod', count: 1, cost: { stick: 2, vine: 3 }, station: null, locked: true }, // 枝2本をツルでつなぎ、ツルを糸にして垂らす
-  { result: 'hammer', count: 1, cost: { wood: 1, stick: 2 }, station: 'workbench', locked: true },
+  { result: 'fishingRod', count: 1, cost: { stick: 2, vine: 3 }, station: null }, // 枝2本をツルでつなぎ、ツルを糸にして垂らす
+  { result: 'hammer', count: 1, cost: { wood: 1, stick: 2 }, station: 'workbench' },
   { result: 'boat', count: 1, cost: { plank: 12, stick: 4, vine: 4 }, station: 'workbench', locked: true }, // 板を枝の骨組みに張り、ツルで縛る
   { result: 'hoe', count: 1, cost: { wood: 1, stick: 1, vine: 2 }, station: 'workbench', locked: true }, // 木材を平たく削った刃を枝にツルで縛りつける（設計図は街の農家で買う）
   { result: 'draftingTable', count: 1, cost: { plank: 6, stick: 4 }, station: 'workbench', locked: true }, // 板の天板と脚を組む（設計図は街の地図屋で買う）
