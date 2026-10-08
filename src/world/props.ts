@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { flatVertex, solid } from '../core/materials.js';
+import { flatVertex, solid, treeFlat, treeVertex } from '../core/materials.js';
 import { terrainHeight } from './terrain.js';
 import { domeQ, nearCave, type Cave } from './cave.js';
 import { swayDepthMaterial, swayMaterial } from './wind.js';
@@ -156,8 +156,15 @@ function mergeLooks(root: THREE.Object3D, objects: THREE.Object3D[], sway?: (p: 
  * 遠くから見るときの、幹と葉を面の少ない形でまとめた far も足して隠しておく（風では揺らさない）
  */
 function finishTree({ group, trunk, leaves, sway }: TreeModel, wood: number): Tree {
+  // 幹と葉の部品にも、ドット絵のある材質を使う（倒れたあとは元の部品で描く）
+  for (const part of [trunk, ...leaves]) {
+    part.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.material = treeFlat((child.material as THREE.MeshLambertMaterial).color);
+    });
+  }
   const crown = mergeLooks(group, leaves, sway);
   const far = mergeLooks(group, [trunk, ...leaves], undefined, true);
+  far.material = treeVertex();
   far.visible = false;
   far.raycast = () => {}; // 隠していても視線は当たるので、当たらないようにする（近くでは元の幹と葉に当てる）
   group.add(crown, far);
@@ -465,7 +472,7 @@ function bushLowGeometry(shape: () => number): THREE.BufferGeometry {
  * 茂みのメッシュ。形は seed から決める。遠くから見るときの面の少ないジオメトリを userData.low に入れる（world/lod.ts が入れかえる）
  */
 function makeBush(seed: number): THREE.Mesh {
-  const bush = new THREE.Mesh(bushGeometry(mulberry32(seed)), flatVertex());
+  const bush = new THREE.Mesh(bushGeometry(mulberry32(seed)), treeVertex()); // 葉と同じドット絵
   bush.userData.low = bushLowGeometry(mulberry32(seed));
   bush.castShadow = true;
   bush.receiveShadow = true;
