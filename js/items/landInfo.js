@@ -1,7 +1,7 @@
 // 地形のメモ。海の向こうの島にある地形の話で、街の地図屋からコインで買う。
 // 今はアイテムとして持てるだけ。あとで、いくつかを組み合わせて島の地図を作れるようにする
 // （組み合わせたメモがそのまま島に出るとは限らない）
-/** メモに出てくる地形（並びは地図屋の売り物の並び） */
+/** メモに出てくる地形 */
 export const LAND_KINDS = ['forest', 'meadow', 'beach', 'crag', 'lake', 'cliff', 'torrent', 'bamboo', 'reef', 'stream', 'hollow'];
 /** 地形の名前（メモでの呼び名） */
 export const LAND_NAMES = {
