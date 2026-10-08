@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { WORLD_SIZE, SEA_FLOOR, terrainHeight } from './terrain.js';
 import { WATER_LEVEL } from '../core/physics.js';
+import { BLOTCH_HASH_GLSL, blotchGlsl } from '../core/materials.js';
 import { WAVE_GLSL, waveScale } from '../core/waves.js';
 const SEA_SIZE = 1200;
 const SEGMENTS = 300; // 1辺の分割数
@@ -14,15 +15,17 @@ const DEPTH_MAX = 4;
 const DRY = 255; // 海底のテクスチャの、海の水を描かない所の値（ほかの所は DRY - 1 まで）
 // 水面のドット絵（木目と同じく、明るさだけの模様を掛ける）。四角いムラを、ドットの番号から決めた乱数で散らす
 // （くり返しの模様が見えないように。番号から決めるので誰の画面でも同じ）。大・中・小のムラを重ね、横（x）に少し長い
-const WATER_DOT = 0.6; // 1ドットの大きさ（m）
-const WATER_DOT_STRETCH = 1.3; // ドットを横（x）に伸ばす割合
-const WATER_BLOTCHES = [3, 2, 1]; // 重ねるムラの大きさ（ドット数）。大きい順に塗り、小さいムラが上に乗る
-const WATER_BRIGHT = 1.08; // 明るいムラの明るさ（さざ波の光）
-const WATER_DARK = 0.93; // 暗いムラの明るさ
-const WATER_BRIGHT_RATE = 0.12; // ムラのうち明るくなる割合（大きさごと）
-const WATER_DARK_RATE = 0.16; // ムラのうち暗くなる割合（大きさごと）
+const WATER_BLOTCH = {
+    dot: 0.6, // 1ドットの大きさ（m）
+    stretch: 1.3,
+    sizes: [3, 2, 1],
+    bright: 1.08, // 明るいムラ（さざ波の光）
+    dark: 0.93,
+    brightRate: 0.12,
+    darkRate: 0.16,
+    fade: 150,
+};
 const WATER_DRIFT = [0.18, 0.07]; // 模様が流れる速さ（m／秒。x・z）
-const WATER_DOT_FADE = 150; // カメラからこの距離（m）までに、模様をだんだん薄くして消す（遠くでちらつかないように）
 /**
  * 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る。size は場所の広さ。
  * dry が true を返す所（洞窟の上）は DRY の値にして、海の水面を描かない（洞窟の上は陸なので、外からは変わらない）
@@ -113,8 +116,7 @@ export class Sea {
           uniform vec3 uShallow;
           uniform vec3 uFoam;
           uniform vec3 uSkyColor;
-          // ドットの番号から 0〜1 の乱数（誰の画面でも同じ）
-          float seaHash(vec2 c) { return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453); }
+          ${BLOTCH_HASH_GLSL}
           varying vec3 vSeaPos;`)
                 .replace('#include <normal_fragment_begin>', 
             // 波の面ごとにパキッと陰影をつける（フラットシェーディング）
@@ -141,13 +143,7 @@ export class Sea {
           diffuseColor.rgb = mix(diffuseColor.rgb, uShallow, shallow * 0.45);
           diffuseColor.a = mix(diffuseColor.a, diffuseColor.a * 0.7, shallow);
           // 水面のドット絵：ゆっくり流れる、乱数で散らした四角いムラ。遠くでは薄くして消す
-          vec2 dotP = (vSeaPos.xz - vec2(${WATER_DRIFT[0].toFixed(3)}, ${WATER_DRIFT[1].toFixed(3)}) * uTime) / (${WATER_DOT.toFixed(2)} * vec2(${WATER_DOT_STRETCH.toFixed(2)}, 1.0));
-          float dotShade = 1.0;
-${WATER_BLOTCHES.map((n, k) => `          { float h = seaHash(floor((dotP + vec2(${(k * 1.7).toFixed(1)}, ${(k * 2.3).toFixed(1)})) / ${n.toFixed(1)}) + ${(k * 31).toFixed(1)});
-            if (h < ${WATER_DARK_RATE.toFixed(3)}) dotShade = ${WATER_DARK.toFixed(3)};
-            else if (h > ${(1 - WATER_BRIGHT_RATE).toFixed(3)}) dotShade = ${WATER_BRIGHT.toFixed(3)}; }`).join('\n')}
-          float dotNear = 1.0 - smoothstep(${(WATER_DOT_FADE * 0.5).toFixed(1)}, ${WATER_DOT_FADE.toFixed(1)}, length(vViewPosition));
-          float dotMul = mix(1.0, dotShade, dotNear);
+          ${blotchGlsl(`vSeaPos.xz - vec2(${WATER_DRIFT[0].toFixed(3)}, ${WATER_DRIFT[1].toFixed(3)}) * uTime`, WATER_BLOTCH, 'dotMul')}
           // 波打ち際の泡：岸に貼りつく泡と、沖から寄せてくる泡の線
           float edge = 1.0 - step(0.22, depth);
           float near = 1.0 - smoothstep(0.3, 1.8, depth);

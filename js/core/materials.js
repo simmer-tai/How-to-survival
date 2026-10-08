@@ -76,3 +76,22 @@ export function solid(geometry, color) {
     mesh.receiveShadow = true;
     return mesh;
 }
+/** ドットの番号から 0〜1 の乱数を返す GLSL の関数（誰の画面でも同じ）。使うシェーダーの先頭に入れる */
+export const BLOTCH_HASH_GLSL = 'float blotchHash(vec2 c) { return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453); }';
+/**
+ * 四角いムラの明るさの倍率を float out に入れる GLSL。p は位置（m）の vec2 の式。
+ * ムラはドットの番号から決めた乱数で散らすので、くり返しの柄にならない。遠くでは 1 に近づける（vViewPosition を使う）
+ */
+export function blotchGlsl(p, s, out) {
+    const f = (n, d = 3) => n.toFixed(d);
+    return `float ${out} = 1.0;
+  {
+    vec2 bp = (${p}) / (${f(s.dot)} * vec2(${f(s.stretch)}, 1.0));
+${s.sizes
+        .map((n, k) => `    { float h = blotchHash(floor((bp + vec2(${f(k * 1.7, 1)}, ${f(k * 2.3, 1)})) / ${f(n, 1)}) + ${f(k * 31, 1)});
+      if (h < ${f(s.darkRate)}) ${out} = ${f(s.dark)};
+      else if (h > ${f(1 - s.brightRate)}) ${out} = ${f(s.bright)}; }`)
+        .join('\n')}
+    ${out} = mix(1.0, ${out}, 1.0 - smoothstep(${f(s.fade * 0.5, 1)}, ${f(s.fade, 1)}, length(vViewPosition)));
+  }`;
+}
