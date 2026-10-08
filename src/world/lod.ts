@@ -58,12 +58,15 @@ export class Lod {
     this.bucket(loc).rocks.push({ mesh, x: p.x, z: p.z, level: 0 });
   }
 
-  /** camera はカメラの位置、loc は今いる場所、fogFar は霧に溶けきる距離 */
-  update(camera: THREE.Vector3, loc: LocationId, fogFar: number): void {
+  /** camera はカメラの位置、loc は今いる場所、fogFar は霧に溶けきる距離、scale は画質で決まる境目の距離の倍率 */
+  update(camera: THREE.Vector3, loc: LocationId, fogFar: number, scale = 1): void {
     const b = this.buckets.get(loc);
     if (!b) return;
-    const hide = Math.max(fogFar + TREE_HIDE_MARGIN, TREE_LOW + HYSTERESIS * 3);
-    const treeEdges = [TREE_LOW, hide];
+    const treeLow = TREE_LOW * scale;
+    const hide = Math.max(fogFar + TREE_HIDE_MARGIN, treeLow + HYSTERESIS * 3);
+    const treeEdges = [treeLow, hide];
+    const bushEdges = [BUSH_LOW * scale, BUSH_SHADOW * scale];
+    const rockEdges = [ROCK_SHADOW * scale];
 
     b.trees = b.trees.filter((e) => {
       const { tree } = e;
@@ -81,7 +84,7 @@ export class Lod {
 
     b.bushes = b.bushes.filter((e) => {
       if (!e.mesh.parent) return false;
-      const level = levelAt(Math.hypot(e.x - camera.x, e.z - camera.z), [BUSH_LOW, BUSH_SHADOW], e.level);
+      const level = levelAt(Math.hypot(e.x - camera.x, e.z - camera.z), bushEdges, e.level);
       if (level !== e.level) {
         e.level = level;
         e.mesh.geometry = level === 0 ? e.high : e.low;
@@ -92,7 +95,7 @@ export class Lod {
 
     b.rocks = b.rocks.filter((e) => {
       if (!e.mesh.parent) return false;
-      const level = levelAt(Math.hypot(e.x - camera.x, e.z - camera.z), [ROCK_SHADOW], e.level);
+      const level = levelAt(Math.hypot(e.x - camera.x, e.z - camera.z), rockEdges, e.level);
       if (level !== e.level) {
         e.level = level;
         e.mesh.castShadow = level === 0;

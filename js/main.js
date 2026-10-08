@@ -63,9 +63,14 @@ import { OtherPlayers } from './player/others.js';
 import { TorchLights } from './player/torchLight.js';
 import { Multiplayer } from './net/multiplayer.js';
 import { RoomInfo } from './ui/roomInfo.js';
+import { SettingsMenu } from './ui/settingsMenu.js';
+import { GRAPHICS, loadQuality, recommendQuality, saveQuality } from './core/graphics.js';
 installUiScale(); // UI の大きさを画面サイズに合わせる
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// 画質（高・中・低）は自分で選ぶ、このブラウザだけの設定。縁のなめらかさは描画を作るときにしか決められない
+let quality = loadQuality();
+let gfx = GRAPHICS[quality];
+const renderer = new THREE.WebGLRenderer({ antialias: gfx.antialias });
+renderer.setPixelRatio(Math.min(devicePixelRatio, gfx.pixelRatio));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap; // くっきりめの影
@@ -85,7 +90,7 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 2.4);
 sun.layers.enable(VIEW_LAYER);
 sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.mapSize.set(gfx.shadowSize, gfx.shadowSize);
 sun.shadow.camera.left = -90;
 sun.shadow.camera.right = 90;
 sun.shadow.camera.top = 90;
@@ -96,8 +101,7 @@ sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.04;
 sun.shadow.camera.layers.enable(AVATAR_LAYER); // 自分の体は一人称でも影を落とす
 scene.add(sun);
-// 影は島全体を毎回描き直すと重いので、何フレームかに1回だけ描き直す（太陽はゆっくりしか動かない）
-const SHADOW_INTERVAL = 2;
+// 影は島全体を毎回描き直すと重いので、何フレームかに1回だけ描き直す（太陽はゆっくりしか動かない。間隔は画質の gfx.shadowInterval）
 const FROST_SHRINK = 3; // インベントリを開いている間、背景の世界を何分の1の大きさで描いてぼかすか（大きいほどぼける）
 const FROST_FADE = 0.35; // 開いてからぼけきるまで（閉じて戻るまで）の時間（秒）
 const FROST_TINT = 0.06; // すりガラスの霞み（背景を空の色に寄せる割合）
@@ -1096,6 +1100,29 @@ document.getElementById('to-avatar').addEventListener('click', (e) => {
     e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
     avatarMenu.setOpen(true);
 });
+// 一時停止の画面から、設定（画質）の画面を開ける。おすすめの段階は出すだけで、選ぶのは自分
+const settingsMenu = new SettingsMenu(quality, recommendQuality(renderer.getContext()), gfx.antialias);
+settingsMenu.onQuality = (q) => {
+    quality = q;
+    saveQuality(q);
+    applyGraphics();
+};
+document.getElementById('to-settings').addEventListener('click', (e) => {
+    e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
+    settingsMenu.setOpen(true);
+});
+/** 選んだ画質を、今の描画にかける（縁のなめらかさだけは読み込み直すまで変わらない） */
+function applyGraphics() {
+    gfx = GRAPHICS[quality];
+    renderer.setPixelRatio(Math.min(devicePixelRatio, gfx.pixelRatio));
+    renderer.setSize(innerWidth, innerHeight);
+    if (sun.shadow.mapSize.x !== gfx.shadowSize) {
+        sun.shadow.mapSize.set(gfx.shadowSize, gfx.shadowSize);
+        sun.shadow.map?.dispose(); // 次に影を描くときに、新しい大きさで作り直される
+        sun.shadow.map = null;
+    }
+    renderer.shadowMap.needsUpdate = true;
+}
 // ---- コマンドメニュー（0 キーで開く。天気を変えるなど） ----
 const commandMenu = new CommandMenu();
 /** コマンドで打てる天気の名前 */
@@ -1261,7 +1288,7 @@ addEventListener('keydown', (e) => {
     e.preventDefault();
     chat.setOpen(true);
 });
-const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || voyage.isOpen || areaMap.isOpen || chartView.isOpen || avatarMenu.isOpen || commandMenu.isOpen || chat.isOpen;
+const menuOpen = () => inventory.isOpen || death.isOpen || builder.menu.isOpen || shop.isOpen || seaMap.isOpen || voyage.isOpen || areaMap.isOpen || chartView.isOpen || avatarMenu.isOpen || settingsMenu.isOpen || commandMenu.isOpen || chat.isOpen;
 document.getElementById('to-title').addEventListener('click', (e) => {
     e.stopPropagation(); // オーバーレイのクリック（ゲーム再開）にしない
     save();
@@ -1345,6 +1372,7 @@ inventory.onToggle = (open, resume) => {
         areaMap.setOpen(false, false);
         chartView.setOpen(false, false);
         avatarMenu.setOpen(false, false);
+        settingsMenu.setOpen(false, false);
         commandMenu.setOpen(false, false);
         chat.setOpen(false, false);
     }
@@ -1377,6 +1405,7 @@ chartView.onCopy = (chart) => {
     }
 };
 avatarMenu.onToggle = onMenuToggle;
+settingsMenu.onToggle = onMenuToggle;
 commandMenu.onToggle = onMenuToggle;
 chat.onToggle = onMenuToggle;
 addEventListener('resize', () => {
@@ -1394,8 +1423,9 @@ function applySky(underwater, dt) {
     caveDark += ((underwater ? 0 : caveDarkness()) - caveDark) * (1 - Math.exp(-CAVE_ADAPT * dt));
     if (!underwater) {
         fog.color.copy(sky.color);
-        fog.near = THREE.MathUtils.lerp(50, RAIN_FOG_NEAR, weather.rain);
-        fog.far = THREE.MathUtils.lerp(230, RAIN_FOG_FAR, weather.rain);
+        // 画質が低いほど霧を近くにして、遠くの物を描かずにすませる
+        fog.near = THREE.MathUtils.lerp(50, RAIN_FOG_NEAR, weather.rain) * gfx.viewScale;
+        fog.far = THREE.MathUtils.lerp(230, RAIN_FOG_FAR, weather.rain) * gfx.viewScale;
         if (caveDark > 0.001) {
             const lit = THREE.MathUtils.lerp(1, CAVE_LIGHT_MIN, caveDark);
             hemi.intensity *= lit;
@@ -1445,9 +1475,10 @@ renderer.setAnimationLoop(() => {
     setWaveScale(weather.waves); // 嵐では波が高くなる（船の揺れや泳ぎも同じ波の式を使う）
     sea.update(t);
     wind.update(dt, weather.wind);
-    grass.update(camera.position, fog.far);
-    isles.get(here)?.grass?.update(camera.position, fog.far);
-    lod.update(camera.position, here, fog.far);
+    const grassFar = Math.min(fog.far, gfx.grassDistance);
+    grass.update(camera.position, grassFar);
+    isles.get(here)?.grass?.update(camera.position, grassFar);
+    lod.update(camera.position, here, fog.far, gfx.lodScale);
     if (world)
         player.update(dt);
     else
@@ -1801,7 +1832,7 @@ function render() {
     // 三人称は、ワールドで遊んでいる間だけ（クラフト中は手元の台を見せるので一人称のまま）
     const third = thirdPerson && !!world && !crafting.isOpen && !death.isOpen;
     camera.layers.set(0);
-    renderer.shadowMap.needsUpdate = shadowFrame++ % SHADOW_INTERVAL === 0;
+    renderer.shadowMap.needsUpdate = shadowFrame++ % gfx.shadowInterval === 0;
     if (third) {
         placeThirdPerson();
         camera.layers.enable(AVATAR_LAYER);
