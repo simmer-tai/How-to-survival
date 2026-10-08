@@ -14,7 +14,7 @@ const CARD_H = 100; // カード1段分の高さの目安（スクロールす�
 /** 取引の画面に出す、住人の名前とひとこと */
 const MERCHANTS: Record<MerchantId, { name: string; say: string }> = {
   pier: { name: NPC_NAME, say: '何か持ってきたかい？' },
-  farmer: { name: FARMER_NAME, say: '島でとれたベリーなら買うよ。木の種も分けてあげよう' },
+  farmer: { name: FARMER_NAME, say: '島でとれたベリーなら買うよ。木の種やくわの設計図も分けてあげよう' },
   mapmaker: { name: MAPMAKER_NAME, say: 'いらっしゃい。白紙の地図に島のメモを書き合わせれば、島の地図ができる。製図台がいるから、設計図も売ってるよ。どこまで本当かは、行ってみないとわからないけどね' },
 };
 

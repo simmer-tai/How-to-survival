@@ -33,10 +33,11 @@ export const TRADES: Record<MerchantId, Trade[]> = {
     { give: { coin: 10 }, get: { item: 'pickaxeBlueprint', count: 1 } },
     { give: { coin: 20 }, get: { item: 'boatBlueprint', count: 1 } }, // コイン20枚で木製の船の設計図
   ],
-  // 農家はベリーを桟橋の人と同じ値段で買い取り、木の種を売る
+  // 農家はベリーを桟橋の人と同じ値段で買い取り、木の種とくわの設計図を売る
   farmer: [
     { give: { berry: 5 }, get: { item: 'coin', count: 1 } }, // ベリー5つでコイン1枚
     { give: { coin: 2 }, get: { item: 'seed', count: 3 } }, // コイン2枚で木の種3つ
+    { give: { coin: 6 }, get: { item: 'hoeBlueprint', count: 1 } }, // くわの設計図
   ],
   // 地図売りは白紙の地図・製図台の設計図・地形のメモを売る（買い取りはしない）
   mapmaker: [

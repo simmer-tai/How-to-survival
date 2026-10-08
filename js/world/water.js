@@ -9,21 +9,27 @@ const DENSE_SEGMENTS = 110; // 中心から片側で細かく分割する数（�
 const DENSE_HALF = WAVE_FADE_END + 5;
 const DEPTH_RES = 256;
 const DEPTH_MAX = 4;
-/** 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る */
-export function bakeSeabed(height = terrainHeight) {
+const DRY = 255; // 海底のテクスチャの、海の水を描かない所の値（ほかの所は DRY - 1 まで）
+/**
+ * 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る。size は場所の広さ。
+ * dry が true を返す所（洞窟の上）は DRY の値にして、海の水面を描かない（洞窟の上は陸なので、外からは変わらない）
+ */
+export function bakeSeabed(height = terrainHeight, size = WORLD_SIZE, dry) {
     const data = new Uint8Array(DEPTH_RES * DEPTH_RES);
     for (let j = 0; j < DEPTH_RES; j++) {
         for (let i = 0; i < DEPTH_RES; i++) {
-            const x = ((i + 0.5) / DEPTH_RES - 0.5) * WORLD_SIZE;
-            const z = ((j + 0.5) / DEPTH_RES - 0.5) * WORLD_SIZE;
-            const k = (height(x, z) - SEA_FLOOR) / (DEPTH_MAX - SEA_FLOOR);
-            data[j * DEPTH_RES + i] = Math.round(THREE.MathUtils.clamp(k, 0, 1) * 255);
+            const x = ((i + 0.5) / DEPTH_RES - 0.5) * size;
+            const z = ((j + 0.5) / DEPTH_RES - 0.5) * size;
+            const h = height(x, z);
+            const k = (h - SEA_FLOOR) / (DEPTH_MAX - SEA_FLOOR);
+            data[j * DEPTH_RES + i] = dry?.(x, z) && h > WATER_LEVEL ? DRY : Math.round(THREE.MathUtils.clamp(k, 0, 1) * (DRY - 1));
         }
     }
     const tex = new THREE.DataTexture(data, DEPTH_RES, DEPTH_RES, THREE.RedFormat);
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
     tex.needsUpdate = true;
+    tex.userData.size = size;
     return tex;
 }
 /** 中心付近は細かく、遠くは粗いグリッド（XZ平面） */
@@ -51,6 +57,8 @@ export class Sea {
     daylight = { value: 1 };
     /** 今いる場所の海底の高さ */
     seabed = { value: bakeSeabed() };
+    /** 海底のテクスチャがおおう広さ（m） */
+    seabedSize = { value: WORLD_SIZE };
     constructor() {
         const material = new THREE.MeshLambertMaterial({
             color: PALETTE.water,
@@ -67,6 +75,7 @@ export class Sea {
             uWaveScale: waveScale,
             uDaylight: this.daylight,
             uSeabed: this.seabed,
+            uSeabedSize: this.seabedSize,
             uShallow: { value: new THREE.Color(PALETTE.sky) },
             uFoam: { value: new THREE.Color(PALETTE.sky).lerp(new THREE.Color(PALETTE.sand), 0.15) },
         };
@@ -83,6 +92,7 @@ export class Sea {
           uniform float uTime;
           uniform float uDaylight;
           uniform sampler2D uSeabed;
+          uniform float uSeabedSize;
           uniform vec3 uShallow;
           uniform vec3 uFoam;
           varying vec3 vSeaPos;`)
@@ -96,8 +106,10 @@ export class Sea {
           float tilt = dot(seaNormal.xz, vec2(0.6, 0.4)) * 6.0;
           diffuseColor.rgb *= 1.0 + floor(clamp(tilt, -1.0, 1.0) * 2.0 + 0.5) * 0.06 * (1.0 - foam);`)
                 .replace('#include <color_fragment>', `#include <color_fragment>
-          vec2 seabedUv = vSeaPos.xz / ${WORLD_SIZE.toFixed(1)} + 0.5;
-          float seabed = ${SEA_FLOOR.toFixed(1)} + texture2D(uSeabed, seabedUv).r * ${(DEPTH_MAX - SEA_FLOOR).toFixed(1)};
+          vec2 seabedUv = vSeaPos.xz / uSeabedSize + 0.5;
+          float seabedK = texture2D(uSeabed, seabedUv).r;
+          if (seabedK > ${((DRY - 0.5) / 255).toFixed(5)}) discard; // 洞窟の中には海の水を描かない
+          float seabed = ${SEA_FLOOR.toFixed(1)} + min(seabedK * ${(255 / (DRY - 1)).toFixed(5)}, 1.0) * ${(DEPTH_MAX - SEA_FLOOR).toFixed(1)};
           float depth = vSeaPos.y - seabed;
           // 浅いところは明るく透ける（段階的に変えてトゥーンらしく）
           float shallow = 1.0 - smoothstep(0.0, 3.5, depth);
@@ -132,8 +144,13 @@ export class Sea {
     setDaylight(k) {
         this.daylight.value = k;
     }
+    /** 今の海底のテクスチャ */
+    get seabedTexture() {
+        return this.seabed.value;
+    }
     /** 別の場所へ移ったときに、その場所の海底（bakeSeabed で作ったもの）にする */
     setSeabed(tex) {
         this.seabed.value = tex;
+        this.seabedSize.value = tex.userData.size ?? WORLD_SIZE;
     }
 }

@@ -25,6 +25,7 @@ const FINGERS = [
 const THUMB_BASE = new THREE.Vector3(-0.036, 0.016, -0.006); // 親指の付け根（手首寄りの親指側）
 const THUMB_SEGS = [0.036, 0.026, 0.022];
 const THUMB_R = 0.021;
+const THUMB_ROOT_SHARE = 0.3; // 親指の付け根の関節の皮膚を、手のひらの骨に付ける割合（残りは親指の骨）
 const GRIP_POINT = new THREE.Vector3(0, 0.074, -0.062); // grip ポーズで握った柄の中心（手のローカル座標）
 export const HAND_POSES = {
     // 何も持っていないときの、力を抜いた手。小指側ほど深く丸め、親指は人差し指の横に添える
@@ -35,13 +36,15 @@ export const HAND_POSES = {
         thumbBend: [0.6, 0, -1],
         thumb: [-0.15, -0.45],
     },
-    // 何も持たずに固く握ったこぶし。指を手のひらに折りこみ、親指を人差し指と中指の上にかぶせる
+    // 何も持たずに固く握ったこぶし。指を手のひらに折りこみ、親指を折った人差し指と中指の前へ横に渡す
+    // （付け根を前へ出さないと、親指が折った指の中に埋まる）
     fist: {
-        fingers: [[-1.5, -2.15], [-1.5, -2.15], [-1.55, -2.15], [-1.6, -2.15]],
+        fingers: [[-1.46, -2.28], [-1.69, -2.2], [-1.55, -2.15], [-1.6, -2.15]],
         spread: [0.02, 0, -0.02, -0.04],
-        thumbDir: [0.3, 0.55, -0.8],
-        thumbBend: [1, 0, 0],
-        thumb: [-0.3, -0.5],
+        thumbDir: [-0.1, 0.39, -0.59],
+        thumbBend: [0.59, -0.13, 0.32],
+        thumb: [-0.06, -1.68],
+        thumbBase: [-0.009, -0.005, -0.032],
     },
     // 柄を握りこむ（斧・枝）。柄は手のひらの前を X 軸方向に通る
     grip: {
@@ -72,6 +75,7 @@ const PIP_SHARE = 0.58; // 先の丸めのうち第二関節が受け持つ割�
 const _y = new THREE.Vector3();
 const _z = new THREE.Vector3();
 const _x = new THREE.Vector3();
+const _base = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const DOWN = new THREE.Vector3(0, -1, 0);
@@ -132,7 +136,7 @@ class SkinBuilder {
  * root は付け根より手前（手のひらの中）の骨、bones は付け根から先への3本の骨。
  * inner は手のひらの中に埋める根元の輪の位置（付け根からのずれ [x, y]）
  */
-function addDigit(sb, x, y, z, segs, r, root, bones, inner = [0, -r * 1.4]) {
+function addDigit(sb, x, y, z, segs, r, root, bones, inner = [0, -r * 1.4], rootShare = 0.5) {
     const [a, b, c] = bones;
     const s = FINGER_SIDES;
     const rz = r * 0.85; // 少しつぶして指の背を平らに見せる
@@ -142,7 +146,7 @@ function addDigit(sb, x, y, z, segs, r, root, bones, inner = [0, -r * 1.4]) {
     const half = (p, q) => [[p, 0.5], [q, 0.5]];
     const rings = [
         sb.ring(x + inner[0], y + inner[1], z, r * 1.05, rz * 1.05, s, [[root, 1]]), // 手のひらの中に埋まる根元
-        sb.ring(x, y, z, r * 1.05, rz * 1.05, s, half(root, a)), // 付け根の関節
+        sb.ring(x, y, z, r * 1.05, rz * 1.05, s, [[root, rootShare], [a, 1 - rootShare]]), // 付け根の関節
         sb.ring(x, y + segs[0] * 0.5, z, r, rz, s, [[a, 1]]),
         sb.ring(x, j1, z, r * 0.95, rz * 0.95, s, half(a, b)), // 第二関節
         sb.ring(x, j2, z, r * 0.88, rz * 0.88, s, half(b, c)), // 第一関節
@@ -209,7 +213,8 @@ export class HandModel {
             addDigit(sb, f.x, PALM_LENGTH + f.y - 0.006, 0, f.segs, f.r, B_HAND, [0, 1, 2].map((k) => fingerBone(i, k)));
         });
         // 親指の根元は手のひらの中ほどに埋める（手首の縁に置くと、親指を回したときに皮膚が引っぱられてとがる）
-        addDigit(sb, THUMB_BASE.x, THUMB_BASE.y, THUMB_BASE.z, THUMB_SEGS, THUMB_R, B_HAND, [0, 1, 2].map(thumbBone), [0.02, 0.012]);
+        // 付け根の関節は親指の骨寄りに付ける（半分ずつだと、親指を大きく回したときに輪がねじれてつぶれ、こぶになる）
+        addDigit(sb, THUMB_BASE.x, THUMB_BASE.y, THUMB_BASE.z, THUMB_SEGS, THUMB_R, B_HAND, [0, 1, 2].map(thumbBone), [0.02, 0.012], THUMB_ROOT_SHARE);
         const skin = new THREE.SkinnedMesh(sb.build(), flat(SKIN));
         skin.frustumCulled = false; // 骨で動くので、作ったときの大きさで画面外判定させない
         skin.add(hand);
@@ -287,6 +292,9 @@ export class HandModel {
         z.addScaledVector(y, -z.dot(y)).normalize().negate();
         const x = _x.crossVectors(y, z);
         const t0 = this.bones[thumbBone(0)];
+        t0.position.copy(THUMB_BASE);
+        if (pose.thumbBase)
+            t0.position.add(_base.set(...pose.thumbBase));
         t0.quaternion.setFromRotationMatrix(_m.makeBasis(x, y, z));
         t0.rotateX(pose.thumb[0]);
         this.bones[thumbBone(1)].rotation.x = pose.thumb[1] * PIP_SHARE;

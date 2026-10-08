@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { WORLD_SIZE, type HeightField } from '../world/terrain.js';
+import { type HeightField } from '../world/terrain.js';
 import type { Platform } from '../world/props.js';
 import { locationDef, type LocationId } from '../world/location.js';
 import { keyGuide } from './keyGuide.js';
@@ -167,7 +167,7 @@ export class AreaMap {
     const source = this.sources.get(loc);
     if (!source) return null;
     const { field } = source;
-    const half = WORLD_SIZE / 2;
+    const half = field.half;
 
     // 陸地の範囲を調べて、まわりに少し海を入れた正方形に切り取る
     let minX = Infinity;
@@ -184,7 +184,7 @@ export class AreaMap {
       }
     }
     if (minX > maxX) [minX, maxX, minZ, maxZ] = [-half, half, -half, half];
-    const span = Math.min(WORLD_SIZE, Math.max(MIN_SPAN, maxX - minX + LAND_PAD * 2, maxZ - minZ + LAND_PAD * 2));
+    const span = Math.min(field.size, Math.max(MIN_SPAN, maxX - minX + LAND_PAD * 2, maxZ - minZ + LAND_PAD * 2));
     const x0 = THREE.MathUtils.clamp((minX + maxX) / 2 - span / 2, -half, half - span);
     const z0 = THREE.MathUtils.clamp((minZ + maxZ) / 2 - span / 2, -half, half - span);
 

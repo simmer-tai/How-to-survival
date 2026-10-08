@@ -120,6 +120,7 @@ export class OtherPlayers {
       o.pose.yaw = pose.yaw;
     }
     o.avatar.setHeld(pose.held);
+    o.avatar.setHeld(typeof pose.left === 'string' ? pose.left : null, 1);
     o.avatar.setCharge(pose.charge);
   }
 
@@ -130,6 +131,11 @@ export class OtherPlayers {
   /** here の場所にいる人の名前と位置（地図に描く） */
   spots(here: LocationId): { name: string; x: number; z: number }[] {
     return [...this.list.values()].filter((o) => o.target?.loc === here).map((o) => ({ name: o.name, x: o.pose.p.x, z: o.pose.p.z }));
+  }
+
+  /** 見えている人が持っている松明の炎の位置を out に足す */
+  torchFlames(out: THREE.Vector3[]): void {
+    for (const o of this.list.values()) o.avatar.torchFlames(out);
   }
 
   /** here は自分がいる場所（同じ場所にいる人だけを描く） */

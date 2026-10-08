@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { terrainHeight, isGrassAt, valueNoise } from './terrain.js';
+import { terrainHeight, terrainNormal, isGrassAt, slopeShade, valueNoise } from './terrain.js';
 import type { Platform } from './props.js';
 import { WIND_GLSL, windUniforms } from './wind.js';
 
-const AREA = 70; // 島の中心からこの範囲に生やす
+const AREA = 70; // 島の中心からこの範囲に生やす（自分の島。海図に載せた島は場所の広さに合わせる）
 const SPACING = 0.42; // 房どうしの間隔（ずらして置く）
 const BLADE_HEIGHT = 0.5;
 const BLADE_WIDTH = 0.11;
@@ -55,7 +55,7 @@ function tuftGeometry(): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  // 地面と同じ陰影になるよう法線はすべて真上にする
+  // 法線はシェーダーで房ごとの地面の法線（aGroundNormal）に置きかえる。ここでは真上にしておく
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(positions.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
   return geo;
 }
@@ -77,21 +77,23 @@ export class Grass {
   private readonly fade = { value: new THREE.Vector2(FADE_START, DRAW_DISTANCE) };
   private readonly chunks: Chunk[] = [];
 
-  constructor(rocks: THREE.Mesh[], platforms: Platform[]) {
+  constructor(rocks: THREE.Mesh[], platforms: Platform[], area = AREA, avoid: (x: number, z: number) => boolean = () => false) {
     const rand = mulberry32(5150);
     const blocked = (x: number, z: number) =>
+      avoid(x, z) ||
       rocks.some((r) => Math.hypot(r.position.x - x, r.position.z - z) < Math.max(r.scale.x, r.scale.z) * 0.9) ||
       platforms.some((p) => x >= p.minX - 0.3 && x <= p.maxX + 0.3 && z >= p.minZ - 0.3 && z <= p.maxZ + 0.3);
 
     // 区画の番号ごとに房を集める
-    const cells = new Map<string, { matrices: THREE.Matrix4[]; tints: THREE.Color[] }>();
+    const cells = new Map<string, { matrices: THREE.Matrix4[]; tints: THREE.Color[]; normals: number[] }>();
+    const ground = new THREE.Vector3();
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const pos = new THREE.Vector3();
     const scale = new THREE.Vector3();
     const leaf = new THREE.Color(PALETTE.leaf);
-    for (let gz = -AREA; gz < AREA; gz += SPACING) {
-      for (let gx = -AREA; gx < AREA; gx += SPACING) {
+    for (let gz = -area; gz < area; gz += SPACING) {
+      for (let gx = -area; gx < area; gx += SPACING) {
         const x = gx + (rand() - 0.5) * SPACING;
         const z = gz + (rand() - 0.5) * SPACING;
         // ノイズで濃いところと薄いところを作る
@@ -104,10 +106,13 @@ export class Grass {
         scale.set(s, s * (0.8 + rand() * 0.5), s);
         const key = `${Math.floor(x / CHUNK_SIZE)},${Math.floor(z / CHUNK_SIZE)}`;
         let cell = cells.get(key);
-        if (!cell) cells.set(key, (cell = { matrices: [], tints: [] }));
+        if (!cell) cells.set(key, (cell = { matrices: [], tints: [], normals: [] }));
         cell.matrices.push(m.compose(pos, q, scale).clone());
+        // 地面と同じ陰影・同じ斜面の暗さにするため、根元の地面の法線を持たせる
+        terrainNormal(x, z, ground);
+        cell.normals.push(ground.x, ground.y, ground.z);
         // 房ごとに少しだけ色をばらつかせる
-        cell.tints.push(new THREE.Color(1, 1, 1).lerp(leaf, rand() * 0.25).multiplyScalar(0.94 + rand() * 0.1));
+        cell.tints.push(new THREE.Color(1, 1, 1).lerp(leaf, rand() * 0.25).multiplyScalar((0.94 + rand() * 0.1) * slopeShade(ground.y)));
       }
     }
 
@@ -116,7 +121,9 @@ export class Grass {
       Object.assign(shader.uniforms, windUniforms);
       shader.uniforms.uFade = this.fade;
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', `#include <common>\nuniform vec2 uFade;\n${WIND_GLSL}`)
+        .replace('#include <common>', `#include <common>\nuniform vec2 uFade;\nattribute vec3 aGroundNormal;\n${WIND_GLSL}`)
+        // 葉の向きによらず、根元の地面と同じ向きの面として照らす（斜面の草も地面と同じく陰る）
+        .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\ntransformedNormal = normalMatrix * aGroundNormal;')
         .replace(
           '#include <begin_vertex>',
           `#include <begin_vertex>
@@ -140,8 +147,12 @@ export class Grass {
       );
     };
 
-    const geometry = tuftGeometry();
-    for (const { matrices, tints } of cells.values()) {
+    const tuft = tuftGeometry();
+    for (const { matrices, tints, normals } of cells.values()) {
+      // 房の形の頂点は全区画で共有し、地面の法線だけ区画ごとに持つ
+      const geometry = new THREE.BufferGeometry();
+      for (const [name, attr] of Object.entries(tuft.attributes)) geometry.setAttribute(name, attr);
+      geometry.setAttribute('aGroundNormal', new THREE.InstancedBufferAttribute(new Float32Array(normals), 3));
       const mesh = new THREE.InstancedMesh(geometry, material, matrices.length);
       matrices.forEach((mat, i) => mesh.setMatrixAt(i, mat));
       tints.forEach((c, i) => mesh.setColorAt(i, c));

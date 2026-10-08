@@ -5,6 +5,7 @@ import { ITEMS, type ItemId, type Stack } from '../items/inventory.js';
 import type { PieceInfo } from './build.js';
 import { FIRE_RING } from './pieces.js';
 import { WIND_DIR } from '../world/wind.js';
+import { FIRE_EMBER_MATS, FIRE_MATS, FIRE_TONGUE_GEO, fireGlowMaterial, fireWobble } from '../items/itemModels.js';
 
 // 焚火。石と枝でクラフトしたアイテムを手に持って置き（置くのは actions/build.ts）、F で燃料の欄を開いて燃料を入れる。
 // 燃料の欄と、今燃えている燃料ののこり時間は共有ワールドの状態（誰が見ても同じ焚火が燃えている）。
@@ -20,8 +21,9 @@ export const FUELS: Partial<Record<ItemId, { time: number; size: number }>> = {
 };
 
 const FLAME_HEIGHT = 0.75; // いちばん大きい炎の高さ（size 1 のとき）
-const FLAME_RADIUS = 0.2; // いちばん大きい炎の根元の太さ
-const FLICKER = 0.12; // 炎の高さの揺らぎ（割合）
+const FLAME_RADIUS = 0.2; // 炎の舌の太さ・並べる広さの基準
+const FLICKER = 0.24; // 炎の高さの揺らぎ（割合）
+const GLOW_SIZE = 1.6; // 炎のまわりのぼんやりした光の大きさ（size 1 のとき）
 const FADE_TIME = 20; // のこりがこの秒数を切ると、炎が小さくなっていく
 const FADE_MIN = 0.45; // 燃え尽きる直前の炎の大きさ（割合）
 const GROW_SPEED = 3; // 炎の大きさが目標へ近づく速さ（1/秒）。燃え上がる・消えるときになめらかに変わる
@@ -54,13 +56,10 @@ const AIM_HEIGHT = 1; // 焚火を狙える高さ（低い石の輪だけでな�
 
 const AIM_EPS = 0.05;
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
-const flameGeo = new THREE.ConeGeometry(1, 1, 5).translate(0, 0.5, 0); // 底面の中心が原点、高さ 1・半径 1
 const sparkGeo = new THREE.BoxGeometry(SPARK_SIZE, SPARK_SIZE, SPARK_SIZE);
 const coalGeo = new THREE.BoxGeometry(0.09, 0.05, 0.07);
-// 炎・熾火・火の粉は自分で光っているので、光の当たり方に関係なく同じ色で描く
-const flameOuterMat = new THREE.MeshBasicMaterial({ color: PALETTE.accent });
-const flameInnerMat = new THREE.MeshBasicMaterial({ color: PALETTE.sand });
-const sparkMat = new THREE.MeshBasicMaterial({ color: PALETTE.sand });
+// 炎・火の粉は松明と同じ形と色（items/itemModels.ts）。熾火も自分で光っているので、光の当たり方に関係なく同じ色で描く
+const coalMat = new THREE.MeshBasicMaterial({ color: PALETTE.accent });
 const lightColor = new THREE.Color(PALETTE.accent).lerp(new THREE.Color(PALETTE.sand), 0.5);
 const smokeGeo = new THREE.IcosahedronGeometry(1, 1);
 // 煙の色：出たては濃い灰色、上がるにつれて空に溶ける明るい灰色になる
@@ -85,17 +84,19 @@ const _color = new THREE.Color();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /**
- * 炎1枚の形：[太さ, 高さ, 根元の x, 根元の z, 揺れの速さ]。太さ・位置は FLAME_RADIUS、高さは FLAME_HEIGHT に対する割合。
- * 赤い炎を黄色い芯のまわりに少しずつずらして立て、すき間から芯が見えるようにする
+ * 炎の舌1本：[色, 根元の x, 根元の z, 太さ, 高さ, 揺らぎをずらす量]。位置・太さは FLAME_RADIUS、高さは FLAME_HEIGHT に対する割合。
+ * 松明と同じく、赤い外側の舌の中にだいだいの舌と黄色い芯を重ねる（足し合わせて描くので、重なる芯ほど明るくなる）
  */
-const FLAME_SHAPES: [number, number, number, number, number][] = [
-  [0.4, 1, 0, 0, 7.3],
-  [0.6, 0.8, 0.55, 0.1, 9.1],
-  [0.55, 0.7, -0.35, 0.45, 8.2],
-  [0.55, 0.75, -0.3, -0.5, 10.3],
+const FLAME_TONGUES: [keyof typeof FIRE_MATS, number, number, number, number, number][] = [
+  ['outer', 0, 0, 0.8, 1, 0],
+  ['outer', 0.5, 0.15, 0.5, 0.75, 1.7],
+  ['outer', -0.35, 0.4, 0.5, 0.7, 3.9],
+  ['outer', -0.25, -0.45, 0.5, 0.72, 5.8],
+  ['middle', 0.1, -0.05, 0.6, 0.75, 2.6],
+  ['middle', -0.15, 0.15, 0.4, 0.6, 5.2],
+  ['core', 0, 0, 0.45, 0.45, 4.4],
 ];
-const INNER_SHAPE: [number, number, number, number, number] = [0.75, 0.6, 0, 0, 11.7];
-const FLAME_SWAY = 0.1; // 炎が左右に傾いて揺れる角度（rad）
+const FLAME_SWAY = 0.08; // 炎が左右に傾いて揺れる角度（rad）
 
 /** 火の粉1つ（自分の画面だけの演出） */
 interface Spark { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }
@@ -114,6 +115,8 @@ interface Fire {
   // ---- 見た目（自分の画面だけ） ----
   root: THREE.Group;
   flames: THREE.Mesh[];
+  /** 炎のまわりのぼんやりした光 */
+  glow: THREE.Sprite;
   coals: THREE.Group;
   light: THREE.PointLight;
   sparks: Spark[];
@@ -351,16 +354,19 @@ export class Campfires {
   private addFire(p: PieceInfo): void {
     const root = new THREE.Group();
     root.position.set(...p.p);
-    const flames = [...FLAME_SHAPES, INNER_SHAPE].map(([, , x, z], i) => {
-      const m = new THREE.Mesh(flameGeo, i === FLAME_SHAPES.length ? flameInnerMat : flameOuterMat);
+    const flames = FLAME_TONGUES.map(([mat, x, z]) => {
+      const m = new THREE.Mesh(FIRE_TONGUE_GEO, FIRE_MATS[mat]);
       m.position.set(x * FLAME_RADIUS, 0.04, z * FLAME_RADIUS);
+      m.renderOrder = 1; // 透ける炎は煙より先に描く（煙を後に描いて、炎が煙に透けて見えるようにする）
       return m;
     });
+    const glow = new THREE.Sprite(fireGlowMaterial());
+    glow.renderOrder = 1;
     // 熾火：焚火の番号から並びを決める（誰の画面でも同じ）
     const coals = new THREE.Group();
     for (let i = 0; i < COALS; i++) {
       const a = (i / COALS) * Math.PI * 2 + p.pid;
-      const coal = new THREE.Mesh(coalGeo, flameOuterMat);
+      const coal = new THREE.Mesh(coalGeo, coalMat);
       coal.position.set(Math.sin(a) * FIRE_RING * 0.35, 0.03, Math.cos(a) * FIRE_RING * 0.35);
       coal.rotation.y = a * 1.7;
       coals.add(coal);
@@ -377,7 +383,7 @@ export class Campfires {
     smoke.count = 0;
     smoke.frustumCulled = false; // 玉が動き回るので、囲む球を作り直さずに常に描く
     smoke.renderOrder = 2; // 炎より後に描いて、炎が煙に透けて見えるようにする
-    root.add(...flames, coals, light, smoke);
+    root.add(...flames, glow, coals, light, smoke);
     this.world.add(root);
     this.fires.set(p.pid, {
       pid: p.pid,
@@ -386,6 +392,7 @@ export class Campfires {
       left: 0,
       root,
       flames,
+      glow,
       coals,
       light,
       sparks: [],
@@ -435,15 +442,22 @@ export class Campfires {
       const level = f.level * (1 + FLARE * f.flare * f.flare);
       const lit = level > 0;
 
-      const shapes = [...FLAME_SHAPES, INNER_SHAPE];
+      // 松明の炎と同じ揺らぎ：舌ごとに伸び縮みし（伸びると細くなる）、根元を中心に先が左右に揺れる
       f.flames.forEach((m, i) => {
         m.visible = lit;
         if (!lit) return;
-        const [r, h, , , speed] = shapes[i];
-        const flicker = 1 + FLICKER * (Math.sin(t * speed + f.phase + i) + 0.5 * Math.sin(t * speed * 1.9 + i * 2.1));
-        m.scale.set(FLAME_RADIUS * r * level, FLAME_HEIGHT * h * level * flicker, FLAME_RADIUS * r * level);
-        m.rotation.set(FLAME_SWAY * Math.sin(t * speed * 0.37 + i), t * 0.6 * (i % 2 === 0 ? 1 : -1) + i, FLAME_SWAY * Math.sin(t * speed * 0.29 + i * 1.3));
+        const [, , , r, h, phase] = FLAME_TONGUES[i];
+        const ph = phase + f.phase;
+        const k = 1 + FLICKER * fireWobble(t, ph);
+        const w = FLAME_RADIUS * r * level * (1.15 - 0.15 * k);
+        m.scale.set(w, FLAME_HEIGHT * h * level * k, w);
+        m.rotation.set(FLAME_SWAY * Math.sin(t * 7.3 + ph * 2), t * 1.5 + ph, FLAME_SWAY * Math.sin(t * 8.9 + ph));
       });
+      f.glow.visible = lit;
+      if (lit) {
+        f.glow.position.y = FLAME_HEIGHT * level * 0.35;
+        f.glow.scale.setScalar(GLOW_SIZE * level * (1 + 0.08 * fireWobble(t, f.phase + 0.7)));
+      }
       f.coals.visible = f.item !== null;
       f.light.intensity = lit ? LIGHT_INTENSITY * level * (1 + 0.08 * Math.sin(t * 13 + f.phase) + 0.05 * Math.sin(t * 7.1)) : 0;
 
@@ -452,7 +466,7 @@ export class Campfires {
         f.sparkWait -= dt;
         while (f.sparkWait <= 0) {
           f.sparkWait += 1 / (SPARK_RATE * level) * (0.5 + Math.random());
-          const mesh = new THREE.Mesh(sparkGeo, sparkMat);
+          const mesh = new THREE.Mesh(sparkGeo, FIRE_EMBER_MATS[Math.random() < 0.5 ? 0 : 1]);
           mesh.position.set((Math.random() - 0.5) * 0.2, 0.25 * level, (Math.random() - 0.5) * 0.2);
           f.root.add(mesh);
           const vel = new THREE.Vector3((Math.random() - 0.5) * 0.5, SPARK_RISE * (0.6 + Math.random() * 0.8), (Math.random() - 0.5) * 0.5);

@@ -159,6 +159,165 @@ export function buildStickModel(): THREE.Group {
   return g;
 }
 
+// 松明：枝の先に葉っぱを巻きつけてツルで縛り、火をつけた物。原点が握りの位置で、火は +Y
+const TORCH_BOTTOM = -0.22; // 柄尻の高さ（握りから）
+const TORCH_TOP = 0.36; // 柄の先の高さ。ここに葉っぱを巻く
+const TORCH_HEAD_H = 0.13; // 巻いた葉っぱの束の高さ
+const TORCH_HEAD_R = 0.045; // 巻いた葉っぱの束の太さ
+const TORCH_FLAME_H = 0.26; // いちばん大きい炎の舌の高さ
+const TORCH_FLAME_R = 0.055; // いちばん大きい炎の舌の太さ
+const TORCH_FLICKER = 0.28; // 炎の高さの揺らぎ（割合）
+const TORCH_SWAY = 0.014; // 炎の先が左右に揺れる幅
+const TORCH_FLAME_OPACITY = 0.85; // 炎の濃さ（足し合わせて描くので、重なったところほど明るくなる）
+const TORCH_GLOW_SIZE = 0.5; // 炎のまわりのぼんやりした光の大きさ
+const TORCH_GLOW_OPACITY = 0.45;
+const TORCH_EMBERS = 6; // 舞い上がる火の粉の数
+const TORCH_EMBER_LIFE = 0.9; // 火の粉が上がって消えるまでの時間（秒）
+const TORCH_EMBER_RISE = 0.4; // 火の粉が上がる高さ
+const TORCH_EMBER_SIZE = 0.012;
+/** 松明を握ったところから炎の真ん中までの高さ（明かりを置く位置に使う） */
+export const TORCH_FLAME_Y = TORCH_TOP + TORCH_HEAD_H * 0.6 + TORCH_FLAME_H * 0.35;
+
+/** 炎の舌の形（根元がふくらみ、先がとがったしずく形）。根元の中心が原点、高さ 1・いちばん太いところの半径 1 */
+function flameTongue(): THREE.BufferGeometry {
+  const profile: [number, number][] = [[0, 0], [0.75, 0.1], [1, 0.28], [0.85, 0.48], [0.5, 0.72], [0.18, 0.9], [0, 1]];
+  return new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), 7);
+}
+
+const TORCH_GEO = {
+  handle: new THREE.CylinderGeometry(0.02, 0.024, TORCH_TOP - TORCH_BOTTOM, 6).translate(0, (TORCH_TOP + TORCH_BOTTOM) / 2, 0),
+  head: new THREE.CylinderGeometry(TORCH_HEAD_R * 1.1, TORCH_HEAD_R * 0.75, TORCH_HEAD_H, 7),
+  coals: new THREE.CylinderGeometry(TORCH_HEAD_R * 1.02, TORCH_HEAD_R * 1.1, TORCH_HEAD_H * 0.3, 7), // 束の上の、燃えて赤く光るところ
+  band: new THREE.TorusGeometry(TORCH_HEAD_R * 0.85, 0.008, 4, 8).rotateX(Math.PI / 2),
+  flame: flameTongue(),
+  ember: new THREE.BoxGeometry(TORCH_EMBER_SIZE, TORCH_EMBER_SIZE, TORCH_EMBER_SIZE),
+};
+for (const geo of Object.values(TORCH_GEO)) geo.userData.shared = true;
+
+// 炎は自分で光っているので、光の当たり方に関係なく描く。足し合わせて描くので、舌が重なる芯ほど明るく黄色くなる
+const FIRE_RED = new THREE.Color(PALETTE.accent);
+const FIRE_ORANGE = FIRE_RED.clone().lerp(new THREE.Color(PALETTE.sand), 0.5);
+const FIRE_YELLOW = new THREE.Color(PALETTE.sand);
+const fireMat = (color: THREE.Color, opacity: number) =>
+  new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false });
+const torchFlameOuter = fireMat(FIRE_RED, TORCH_FLAME_OPACITY * 0.8);
+const torchFlameMiddle = fireMat(FIRE_ORANGE, TORCH_FLAME_OPACITY);
+const torchFlameCore = fireMat(FIRE_YELLOW, TORCH_FLAME_OPACITY);
+const torchCoalMat = new THREE.MeshBasicMaterial({ color: FIRE_RED });
+const torchEmberMats = [new THREE.MeshBasicMaterial({ color: FIRE_ORANGE }), new THREE.MeshBasicMaterial({ color: FIRE_YELLOW })];
+
+/** 炎のまわりのぼんやりした光（中心が明るく、外へ向かって消える丸）。初めて使うときに作る */
+let torchGlowMat: THREE.SpriteMaterial | null = null;
+function glowMaterial(): THREE.SpriteMaterial {
+  if (torchGlowMat) return torchGlowMat;
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, '#' + FIRE_YELLOW.getHexString());
+  grad.addColorStop(0.35, '#' + FIRE_ORANGE.getHexString());
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  torchGlowMat = new THREE.SpriteMaterial({ map, transparent: true, opacity: TORCH_GLOW_OPACITY, blending: THREE.AdditiveBlending, depthWrite: false });
+  return torchGlowMat;
+}
+
+/** 揺らぎ（いくつかの sin を足した、-1〜1 くらいの値） */
+function wobble(s: number, phase: number): number {
+  return Math.sin(s * 11 + phase) * 0.5 + Math.sin(s * 23.7 + phase * 1.9) * 0.3 + Math.sin(s * 41.3 + phase * 3.1) * 0.2;
+}
+
+// 焚火の炎も松明と同じ見た目にするので、炎の舌の形・色・揺らぎ・まわりの光を貸す（actions/campfire.ts）
+export const FIRE_TONGUE_GEO = TORCH_GEO.flame;
+export const FIRE_MATS = { outer: torchFlameOuter, middle: torchFlameMiddle, core: torchFlameCore };
+export const FIRE_EMBER_MATS = torchEmberMats;
+export { wobble as fireWobble, glowMaterial as fireGlowMaterial };
+
+/**
+ * 炎の舌1本。描くたびに伸び縮みして、先が左右に揺れる（自分の画面だけの演出。手に持ったとき・ほかの人が持っているときのどちらでも揺れる）。
+ * x・y・z は根元の位置、r・h は太さと高さ、phase は揺らぎをずらす量
+ */
+function torchFlame(mat: THREE.Material, x: number, y: number, z: number, r: number, h: number, phase: number): THREE.Mesh {
+  const m = new THREE.Mesh(TORCH_GEO.flame, mat);
+  m.position.set(x, y, z);
+  m.scale.set(r, h, r); // 描く前から大きさを合わせておく（アイコンの撮影で大きさを測るとき、元の高さ 1 の形のままだと松明が小さく写る）
+  m.renderOrder = 3; // ほかの透ける物より後に描いて、炎が上に重なるように
+  m.onBeforeRender = () => {
+    const s = performance.now() / 1000;
+    const k = 1 + TORCH_FLICKER * wobble(s, phase);
+    const w = r * (1.15 - 0.15 * k); // 伸びると細くなる
+    m.scale.set(w, h * k, w);
+    // 根元を中心に少し傾けて、先を左右に揺らす
+    m.rotation.set((Math.sin(s * 7.3 + phase * 2) * TORCH_SWAY) / h, s * 1.5 + phase, (Math.sin(s * 8.9 + phase) * TORCH_SWAY) / h);
+    m.updateMatrixWorld();
+  };
+  return m;
+}
+
+/** 火の粉1つ。i 番目の火の粉は時間をずらして、炎の上へ舞い上がっては消えるのを繰り返す */
+function torchEmber(i: number, y: number): THREE.Mesh {
+  const m = new THREE.Mesh(TORCH_GEO.ember, torchEmberMats[i % 2]);
+  const offset = (i / TORCH_EMBERS) * TORCH_EMBER_LIFE;
+  m.onBeforeRender = () => {
+    const s = performance.now() / 1000 + offset;
+    const k = (s % TORCH_EMBER_LIFE) / TORCH_EMBER_LIFE; // 0→1 で上がって消える
+    const a = i * 2.399 + Math.floor(s / TORCH_EMBER_LIFE) * 1.3; // 回ごとに出る向きを変える
+    const spread = 0.02 + k * 0.05;
+    m.position.set(Math.cos(a) * spread + Math.sin(s * 6 + i) * 0.01, y + k * TORCH_EMBER_RISE, Math.sin(a) * spread);
+    m.scale.setScalar(Math.max(1 - k, 0.001));
+    m.rotation.set(s * 5, s * 3 + i, 0);
+    m.updateMatrixWorld();
+  };
+  return m;
+}
+
+/** glow が false なら、まわりの光と火の粉を付けない（アイコン用） */
+export function buildTorchModel(glow = true): THREE.Group {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(TORCH_GEO.handle, flat(PALETTE.trunk)));
+  // 柄の先に巻いた葉っぱの束（燃えて黒ずんだ色）と、縛ったツル。束の上のほうは燃えて赤く光る
+  const headY = TORCH_TOP + TORCH_HEAD_H * 0.3;
+  const head = new THREE.Mesh(TORCH_GEO.head, flat(shade(PALETTE.bark, 0.6)));
+  head.position.y = headY;
+  g.add(head);
+  const coals = new THREE.Mesh(TORCH_GEO.coals, torchCoalMat);
+  coals.position.y = headY + TORCH_HEAD_H * 0.38;
+  g.add(coals);
+  for (const dy of [-0.4, 0.05]) {
+    const band = new THREE.Mesh(TORCH_GEO.band, flat(PALETTE.leaf));
+    band.position.y = headY + dy * TORCH_HEAD_H;
+    g.add(band);
+  }
+  // 炎：赤い外側の舌の中に、だいだいの舌と黄色い芯を重ねる。舌ごとに揺らぎをずらす
+  const y = headY + TORCH_HEAD_H * 0.42;
+  const R = TORCH_FLAME_R;
+  const H = TORCH_FLAME_H;
+  g.add(
+    torchFlame(torchFlameOuter, 0, y, 0, R, H, 0),
+    torchFlame(torchFlameOuter, 0.02, y, 0.01, R * 0.6, H * 0.7, 1.7),
+    torchFlame(torchFlameOuter, -0.018, y, -0.012, R * 0.55, H * 0.6, 3.9),
+    torchFlame(torchFlameMiddle, 0.005, y, -0.004, R * 0.7, H * 0.72, 2.6),
+    torchFlame(torchFlameMiddle, -0.01, y, 0.012, R * 0.45, H * 0.55, 5.2),
+    torchFlame(torchFlameCore, 0, y - 0.005, 0, R * 0.42, H * 0.42, 4.4),
+  );
+  if (glow) {
+    const halo = new THREE.Sprite(glowMaterial());
+    halo.position.y = TORCH_FLAME_Y - 0.02;
+    halo.renderOrder = 2;
+    halo.onBeforeRender = () => {
+      halo.scale.setScalar(TORCH_GLOW_SIZE * (1 + 0.08 * wobble(performance.now() / 1000, 0.7)));
+      halo.updateMatrixWorld();
+    };
+    g.add(halo);
+    for (let i = 0; i < TORCH_EMBERS; i++) g.add(torchEmber(i, y + H * 0.3));
+  }
+  return g;
+}
+
 /** 板1枚。茶色で、上面に濃い木目が2本。長さは X、原点は板の中心 */
 export function buildPlankModel(): THREE.Group {
   const g = new THREE.Group();
@@ -530,7 +689,7 @@ function drawLine(g: THREE.Group, x1: number, z1: number, x2: number, z2: number
 }
 
 /** 設計図に描く物（設計図で作り方を覚える物の id） */
-export type BlueprintKind = 'boat' | 'pickaxe' | 'spear' | 'hammer' | 'fishingRod' | 'draftingTable';
+export type BlueprintKind = 'boat' | 'pickaxe' | 'spear' | 'hammer' | 'fishingRod' | 'draftingTable' | 'hoe';
 
 /** 設計図の図面。[x1, z1, x2, z2] の線を並べる（紙の中心が原点、紙は x が ±0.21・z が ±0.15） */
 const BLUEPRINT_DRAWINGS: Record<BlueprintKind, [number, number, number, number][]> = {
@@ -584,6 +743,14 @@ const BLUEPRINT_DRAWINGS: Record<BlueprintKind, [number, number, number, number]
     [-0.09, -0.04, 0.07, -0.04], // 広げた地図
     [-0.09, -0.04, -0.11, -0.07], // 地図の巻いた端
     [0.1, -0.04, 0.1, -0.1], // 羽ペン
+  ],
+  // 縦の柄と、先から横へ突き出して下へ曲がった刃
+  hoe: [
+    [0, 0.08, 0, -0.08], // 柄
+    [0, -0.08, 0.12, -0.05], // 刃の上の縁
+    [0.12, -0.05, 0.13, 0.0], // 刃先
+    [0.13, 0.0, 0, -0.04], // 刃の下の縁
+    [-0.02, -0.06, 0.02, -0.06], // 縛ったツル
   ],
 };
 

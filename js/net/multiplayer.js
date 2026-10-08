@@ -13,9 +13,14 @@ const MOTION_INTERVAL = 0.1; // ホストが落とし物・倒れた木の動き
 const CLOCK_INTERVAL = 2; // ホストがワールドの時刻を配る間隔（秒）
 const NAME_MAX = 16; // 名前の長さの上限
 const DEFAULT_NAME = 'だれか';
+const CHAT_MAX = 100; // チャットの書き込み1つの長さの上限
 /** 名前を、送ってよい長さの文字列にする */
 export function cleanName(name) {
     return (typeof name === 'string' ? name.trim().slice(0, NAME_MAX) : '') || DEFAULT_NAME;
+}
+/** チャットの書き込みを、送ってよい長さの文字列にする（空なら null） */
+function cleanChat(text) {
+    return (typeof text === 'string' ? text.trim().slice(0, CHAT_MAX) : '') || null;
 }
 /** 送る数を小数点以下 digits 桁に丸める（メッセージを小さくする） */
 function round(v, digits) {
@@ -55,6 +60,8 @@ export class Multiplayer {
     onJoin = () => { };
     /** 人が抜けた */
     onLeave = () => { };
+    /** ほかの人のチャットの書き込みが届いた */
+    onChat = () => { };
     /** 部屋とのつながりが切れた（参加者のとき。ホストが部屋を閉じた・ホストとの通信が切れた） */
     onClosed = () => { };
     constructor(hooks, others) {
@@ -237,6 +244,16 @@ export class Multiplayer {
         else if (this.role === 'guest')
             this.guestLink?.send({ t: 'look', look });
     }
+    /** チャットに書き込む（ほかの人へ送る。自分の画面に出すのは main） */
+    say(text) {
+        const clean = cleanChat(text);
+        if (!clean)
+            return;
+        if (this.role === 'host')
+            this.toAll({ t: 'chat', name: this.me.name, text: clean });
+        else if (this.role === 'guest')
+            this.guestLink?.send({ t: 'chat', text: clean });
+    }
     // ---- 届いたメッセージ ----
     /** ホスト：参加者から届いたもの */
     fromGuest({ from, data }) {
@@ -297,6 +314,15 @@ export class Multiplayer {
                 this.others.swing(from, data.kind);
                 this.toAll({ t: 'swing', id: from, kind: data.kind }, from);
                 return;
+            case 'chat': {
+                const peer = this.peers.get(from);
+                const text = cleanChat(data.text);
+                if (!peer || !text)
+                    return;
+                this.onChat(peer.name, text);
+                this.toAll({ t: 'chat', name: peer.name, text }, from);
+                return;
+            }
             case 'motion': {
                 // その場所の担当から届いた分だけを、自分の記録に写してほかの人へ配る
                 if (!this.peers.has(from) || !Array.isArray(data.at))
@@ -375,6 +401,12 @@ export class Multiplayer {
             case 'swing':
                 this.others.swing(msg.id, msg.kind);
                 return;
+            case 'chat': {
+                const text = cleanChat(msg.text);
+                if (text)
+                    this.onChat(cleanName(msg.name), text);
+                return;
+            }
         }
     }
     takePose(id, pose) {

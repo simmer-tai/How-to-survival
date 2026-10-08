@@ -4,6 +4,16 @@ import { waveOffset } from './waves.js';
 export { RAPIER };
 export const GRAVITY = 20;
 export const WATER_LEVEL = 0;
+/** 海の水が来ない所（洞窟の中）。今いる場所が変わったら入れ替える */
+let dryZone = null;
+/** 今いる場所の、海の水が来ない所を決める（なければ null） */
+export function setDryZone(fn) {
+    dryZone = fn;
+}
+/** (x, z) の海の水面の高さ。海の水が来ない所（洞窟の中）では -Infinity（泳がず、浮かばない） */
+export function seaSurface(x, z) {
+    return dryZone?.(x, z) ? -Infinity : WATER_LEVEL + waveOffset(x, z);
+}
 const BUOYANCY = 1.7; // 完全に沈んだときの浮力（重力の何倍か）
 const WATER_DRAG = 1.5;
 const WATER_DRAG_VERTICAL = 8; // 上下の揺れはすぐ収まるように強め
@@ -165,7 +175,7 @@ export class Physics {
             if (!body.isDynamic() || !body.isEnabled())
                 continue;
             const com = body.worldCom();
-            const depth = WATER_LEVEL + waveOffset(com.x, com.z) - com.y; // 波に合わせて上下する
+            const depth = seaSurface(com.x, com.z) - com.y; // 波に合わせて上下する
             const k = THREE.MathUtils.clamp(depth / (2 * radius) + 0.5, 0, 1); // 沈んでいる割合
             if (k <= 0)
                 continue;

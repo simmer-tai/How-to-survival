@@ -1,17 +1,20 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { flat, flatVertex, flatTransparent } from '../core/materials.js';
+import { flat, flatTransparent } from '../core/materials.js';
 import { RAPIER, COLLIDE } from '../core/physics.js';
 import { ITEMS } from '../items/inventory.js';
 import { itemIcon } from '../items/itemIcons.js';
 import { buildPlan, ingredients } from '../items/recipes.js';
-import { CELL, PIECES, pieceDef } from './pieces.js';
+import { CELL, PIECES, pieceDef, pieceMaterial } from './pieces.js';
 import { BuildMenu } from './buildMenu.js';
+import { splinterGeo, scatterSplinter } from './splinters.js';
 import { terrainHeight } from '../world/terrain.js';
 import { keyGuide } from '../ui/keyGuide.js';
 const REACH = 7; // 視線の先、この距離まで置ける
 const LAYER = 0.125; // 置く高さの刻み。部材の高さもこの倍数にして、積んだときに刻みからずれないようにする
 const MATCH_HEIGHT = 0.75; // 地面に置くとき、隣の部材との高さの差がこれ以内ならそろえる
+const SUPPORT_SNAP = 1.25; // 壁・柱は、狙った高さからこれだけ上にある床・土台の上面まで吸い付いて乗る（土台の高さ 1 より少し大きく）
+const TOUCH = CELL * 0.75; // マスの部材と、その辺・角に置く部材が接しているとみなす、中心どうしの距離（辺なら 1、角なら 1.41）
 const PLATFORM_CLEAR = 0.03; // 床・土台を地面に置くとき、上面を地面のいちばん高い所からこれだけ上にする（地面が床から突き出して歩きにくくならないように）
 const GROUND_SAMPLES = 4; // 部材の下の地面の高さを調べる点の数（1辺あたり。この数 + 1 の格子で調べる）
 const NUDGE = 0.1; // 視線が当たった点を面から離す量（面がマスの境目にあるとき、どちらのマスか決まるように）
@@ -34,20 +37,30 @@ const UP = new THREE.Vector3(0, 1, 0);
 const css = (c) => '#' + c.toString(16).padStart(6, '0');
 const debrisGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
 const snapCenter = (v) => Math.round(v / CELL) * CELL;
+/** いちばん近いマスの角 */
+const snapCorner = (v) => (Math.floor(v / CELL) + 0.5) * CELL;
 const yaw = (r) => new THREE.Quaternion().setFromAxisAngle(UP, (r * Math.PI) / 2);
 /**
- * 部材が使うグリッドの枠。cell はマス、edge はマスの辺（X 方向の辺と Z 方向の辺は別の枠）。
+ * 部材が使うグリッドの枠。cell はマス、edge はマスの辺（X 方向の辺と Z 方向の辺は別の枠）、corner はマスの角。
  * 同じ枠で高さの範囲が重なる部材は置けない。違う枠どうし（床と、その縁の壁など）は重なってよい。
  * free の部材は枠を使わない（null。物とぶつからないかだけで置けるか決める）
  */
-function slotKey(def, x, z, r) {
+function slotKeys(def, x, z, r) {
     if (def.snap === 'free')
-        return null;
-    if (def.snap === 'cell')
-        return `c${Math.round(x / CELL)},${Math.round(z / CELL)}`;
-    return r % 2 === 0
-        ? `z${Math.round(x / CELL)},${Math.round((z - CELL / 2) / CELL)}`
-        : `x${Math.round((x - CELL / 2) / CELL)},${Math.round(z / CELL)}`;
+        return [];
+    if (def.snap === 'cell') {
+        // 何マスも使う部材（階段）は、並んだマスの真ん中が原点。-Z 方向に並ぶマスを向きに合わせて回す
+        const cells = def.cells ?? 1;
+        return Array.from({ length: cells }, (_, i) => {
+            const o = new THREE.Vector3(0, 0, ((cells - 1) / 2 - i) * CELL).applyQuaternion(yaw(r));
+            return `c${Math.round((x + o.x) / CELL)},${Math.round((z + o.z) / CELL)}`;
+        });
+    }
+    if (def.snap === 'corner')
+        return [`p${Math.round((x - CELL / 2) / CELL)},${Math.round((z - CELL / 2) / CELL)}`];
+    return [r % 2 === 0
+            ? `z${Math.round(x / CELL)},${Math.round((z - CELL / 2) / CELL)}`
+            : `x${Math.round((x - CELL / 2) / CELL)},${Math.round(z / CELL)}`];
 }
 /**
  * 視線の先に部材を置く操作と、狙った部材を壊す操作。
@@ -298,7 +311,8 @@ export class Builder {
         if (def.snap === 'free')
             return this.aimFree(def, hit.point, normal, hit.object === this.terrain, on);
         // 同じマスの部材の上面を狙ったとき（床の上で床を選んでいるなど）は、上に重ねずに隣のマスへ広げる
-        const extend = on !== undefined && on.def === def && def.snap === 'cell' && normal.y > 0.7;
+        // 何マスも使う部材（階段）は広げず、上に積む
+        const extend = on !== undefined && on.def === def && def.snap === 'cell' && (def.cells ?? 1) === 1 && normal.y > 0.7;
         // ---- 横の位置と向き ----
         let x;
         let z;
@@ -313,6 +327,19 @@ export class Builder {
                 x = on.mesh.position.x + (Math.abs(dx) > Math.abs(dz) ? Math.sign(dx) * CELL : 0);
                 z = on.mesh.position.z + (Math.abs(dx) > Math.abs(dz) ? 0 : Math.sign(dz) * CELL);
             }
+            // 何マスも使う部材（階段）は、狙ったマスをいちばん手前（低い側）にして、上る向きへ伸ばす
+            const cells = def.cells ?? 1;
+            if (cells > 1) {
+                const o = new THREE.Vector3(0, 0, (-(cells - 1) / 2) * CELL).applyQuaternion(yaw(r));
+                x += o.x;
+                z += o.z;
+            }
+        }
+        else if (def.snap === 'corner') {
+            // 狙った点にいちばん近いマスの角に置く（壁の継ぎ目）
+            x = snapCorner(point.x);
+            z = snapCorner(point.z);
+            r = this.rotation;
         }
         else {
             // 狙った点にいちばん近いマスの辺に置く。R は裏返し
@@ -333,26 +360,90 @@ export class Builder {
             r = (r + (this.rotation % 2) * 2) % 4;
         }
         // ---- 高さ ----
+        // まず狙った面からおおよその高さを決め、そのあと壁・柱・床・土台はまわりの部材の段にそろえる（levelUp）
+        const onTerrain = !on && hit.object === this.terrain;
+        // 床・土台は、上面から地面が突き出さない高さより下げない（どの面を狙ったときも）
+        const minY = def.platform
+            ? Math.ceil((this.groundUnder(def, x, z, r).max + PLATFORM_CLEAR - def.height - EPS) / LAYER) * LAYER
+            : -Infinity;
         let y;
         if (on) {
+            if (normal.y < -0.7)
+                return { p: [x, on.baseY - def.height, z], r }; // 下に付ける（段にはそろえない）
+            const top = on.baseY + on.def.height;
             if (normal.y > 0.7 && !extend)
-                y = on.baseY + on.def.height; // 上に積む
-            else if (normal.y < -0.7)
-                y = on.baseY - def.height; // 下に付ける
+                y = top; // 上に積む
+            else if (on.def.platform && def.snap !== 'cell')
+                y = top; // 床・土台の横を狙っても、壁・柱は上に乗せる
+            else if (on.def.platform && def.platform)
+                y = top - def.height; // 床・土台の横に並べる床・土台は、上面をそろえる
             else
                 y = on.baseY; // 横に並べる
         }
-        else {
-            const ground = hit.object === this.terrain ? this.groundUnder(def, x, z, r) : hit.point.y;
-            // 地形の上は近い刻みへ、岩や桟橋の上は埋まらないように上の刻みへそろえる
-            y = hit.object === this.terrain ? Math.round(ground / LAYER) * LAYER : Math.ceil((ground - EPS) / LAYER) * LAYER;
-            // 上に乗る部材（床・土台）は、上面から地面が突き出さない高さより下げない
-            const minY = def.platform && hit.object === this.terrain
-                ? Math.ceil((ground + PLATFORM_CLEAR - def.height - EPS) / LAYER) * LAYER
-                : -Infinity;
-            y = this.matchNeighbor(def, x, Math.max(y, minY), z, minY);
+        else if (!onTerrain) {
+            // 岩や桟橋の上は、埋まらないように上の刻みへそろえる
+            y = Math.ceil((hit.point.y - EPS) / LAYER) * LAYER;
         }
+        else if (def.platform) {
+            y = Math.max(Math.round(this.groundUnder(def, x, z, r).max / LAYER) * LAYER, minY);
+        }
+        else {
+            // 壁・柱などは、底面のいちばん低い地面に合わせて下の刻みへそろえる（斜面では高い側が地面に埋まり、低い側が浮かない）
+            y = Math.floor((this.groundUnder(def, x, z, r).min + EPS) / LAYER) * LAYER;
+        }
+        if (def.platform || def.snap === 'edge' || def.snap === 'corner')
+            y = this.levelUp(def, x, Math.max(y, minY), z, onTerrain, minY);
+        else if (!on)
+            y = onTerrain ? this.matchNeighbor(def, x, y, z, y - MATCH_HEIGHT - EPS, y) : this.matchNeighbor(def, x, y, z);
         return { p: [x, y, z], r };
+    }
+    /**
+     * 壁・柱・床・土台の高さを、まわりの部材の「段」にそろえる（狙い方で高さがずれて、すき間や段差ができないように）。
+     * そろえるのは、壁・柱なら底面、床・土台なら上面。いちばん近い段に合わせ、近い段がなければ y のまま。
+     * - 壁・柱：接している床・土台の上面（上に乗る）、隣の壁・柱の底面と上面。柱は、角に接する床・土台の下面に上面を届かせる段にも
+     * - 床・土台：隣のマスの床・土台の上面、縁に立つ壁・柱の底面
+     * onTerrain：地面に置くか。地面では、隣の壁・柱にそろえて地面から浮かないよう、今より低い段にだけそろえる（床・土台の上面には乗る）。
+     * minY：これより下には置かない（床・土台の上面から地面が突き出さないように）
+     */
+    levelUp(def, x, y, z, onTerrain, minY) {
+        const lift = def.platform ? def.height : 0; // 底面から、そろえる高さまで
+        const ref = y + lift;
+        let best = ref;
+        let bestDiff = Infinity;
+        /** level にそろえられるなら候補にする。below・above は ref からどれだけ下・上の段までそろえるか */
+        const consider = (level, below, above) => {
+            const diff = level - ref;
+            if (diff < -below - EPS || diff > above + EPS || level - lift < minY - EPS)
+                return;
+            if (Math.abs(diff) < bestDiff) {
+                best = level;
+                bestDiff = Math.abs(diff);
+            }
+        };
+        for (const b of this.pieces.values()) {
+            const d = Math.hypot(b.mesh.position.x - x, b.mesh.position.z - z);
+            const top = b.baseY + b.def.height;
+            const wallLike = b.def.snap === 'edge' || b.def.snap === 'corner';
+            if (def.platform) {
+                if (b.def.platform && b.def.snap === 'cell' && d <= CELL + EPS)
+                    consider(top, MATCH_HEIGHT, MATCH_HEIGHT);
+                else if (wallLike && d <= TOUCH)
+                    consider(b.baseY, MATCH_HEIGHT, MATCH_HEIGHT);
+            }
+            else if (b.def.platform && b.def.snap === 'cell') {
+                if (d <= TOUCH)
+                    consider(top, MATCH_HEIGHT, SUPPORT_SNAP);
+                // 柱は、角に接する床・土台の下面まで持ち上げて届かせる（持ち上げるのは地面に埋めた脚の長さまで）
+                if (def.snap === 'corner' && d <= TOUCH)
+                    consider(b.baseY - def.height, MATCH_HEIGHT, def.legs ?? 0);
+            }
+            else if (wallLike && d <= CELL + EPS) {
+                const above = onTerrain ? 0 : MATCH_HEIGHT;
+                consider(b.baseY, MATCH_HEIGHT, above);
+                consider(top, MATCH_HEIGHT, above);
+            }
+        }
+        return best - lift;
     }
     /**
      * free の部材（作業台・焚火）の置き場所：グリッドに沿わず、狙った点にそのまま置く。
@@ -367,31 +458,34 @@ export class Builder {
         if (on)
             y = on.baseY + on.def.height; // 床などの上に乗せる
         else if (onTerrain)
-            y = this.groundUnder(def, x, z, r);
+            y = this.groundUnder(def, x, z, r).min; // 斜面でも脚や石が浮かないように、いちばん低い地面に合わせる
         else
             y = point.y; // 岩や桟橋の上
         return { p: [x, y, z], r };
     }
-    /** 部材の底面の範囲で、いちばん高い地面の高さ */
+    /** 部材の底面の範囲で、いちばん低い・高い地面の高さ */
     groundUnder(def, x, z, r) {
         const hx = def.halfX - 0.1;
         const hz = def.halfZ - 0.1;
         const turn = (r * Math.PI) / 2;
         const cos = Math.cos(turn);
         const sin = Math.sin(turn);
-        let top = -Infinity;
+        let min = Infinity;
+        let max = -Infinity;
         for (let i = 0; i <= GROUND_SAMPLES; i++) {
             for (let j = 0; j <= GROUND_SAMPLES; j++) {
                 // 部材の中の点を、部材の向きに回して地面の高さを調べる
                 const lx = hx * ((2 * i) / GROUND_SAMPLES - 1);
                 const lz = hz * ((2 * j) / GROUND_SAMPLES - 1);
-                top = Math.max(top, terrainHeight(x + lx * cos + lz * sin, z - lx * sin + lz * cos));
+                const h = terrainHeight(x + lx * cos + lz * sin, z - lx * sin + lz * cos);
+                min = Math.min(min, h);
+                max = Math.max(max, h);
             }
         }
-        return top;
+        return { min, max };
     }
-    /** 隣に同じ置き方の部材があり、高さが近ければ、その高さにそろえる（地面の凹凸で床の段がずれないように）。minY より下にはそろえない */
-    matchNeighbor(def, x, y, z, minY = -Infinity) {
+    /** 隣に同じ置き方の部材があり、高さが近ければ、その高さにそろえる（地面の凹凸で床の段がずれないように）。minY より下・maxY より上にはそろえない */
+    matchNeighbor(def, x, y, z, minY = -Infinity, maxY = Infinity) {
         let best = y;
         let bestDiff = MATCH_HEIGHT + EPS;
         for (const b of this.pieces.values()) {
@@ -399,7 +493,7 @@ export class Builder {
                 continue;
             if (Math.hypot(b.mesh.position.x - x, b.mesh.position.z - z) > CELL + EPS)
                 continue;
-            if (b.baseY < minY - EPS)
+            if (b.baseY < minY - EPS || b.baseY > maxY + EPS)
                 continue;
             const diff = Math.abs(b.baseY - y);
             if (diff < bestDiff) {
@@ -430,10 +524,10 @@ export class Builder {
     /** その場所・向きに部材を置けるか（他の部材と枠が重ならず、地形以外の物やプレイヤーにもぶつからない） */
     canPlace(def, [x, y, z], r) {
         const top = y + def.height;
-        const key = slotKey(def, x, z, r);
-        const list = key === null ? undefined : this.slots.get(key);
-        if (list?.some((b) => y < b.baseY + b.def.height - EPS && b.baseY < top - EPS))
-            return false;
+        for (const key of slotKeys(def, x, z, r)) {
+            if (this.slots.get(key)?.some((b) => y < b.baseY + b.def.height - EPS && b.baseY < top - EPS))
+                return false;
+        }
         const rotation = yaw(r);
         const center = new THREE.Vector3();
         for (const [w, h, d, px, py, pz] of def.collision) {
@@ -515,7 +609,7 @@ export class Builder {
     addPiece(pid, def, [x, y, z], r, pop, damage = 0) {
         r &= 3;
         const rotation = yaw(r);
-        const mesh = new THREE.Mesh(def.looks[pid % def.looks.length], flatVertex()); // 板の並び方は部材の ID で選ぶ（誰の画面でも同じ）
+        const mesh = new THREE.Mesh(def.looks[pid % def.looks.length], pieceMaterial(def)); // 板の並び方は部材の ID で選ぶ（誰の画面でも同じ）
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.position.set(x, y, z);
@@ -537,10 +631,12 @@ export class Builder {
             platform = { minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z, top: y + def.height };
             this.platforms.push(platform);
         }
-        const slot = slotKey(def, x, z, r) ?? `f${pid}`; // free の部材は自分だけの枠に入れる
-        const built = { pid, def, r, mesh, body, slot, baseY: y, platform, pop: pop ? 0 : 1, damage, shake: 0 };
+        const keys = slotKeys(def, x, z, r);
+        const slots = keys.length > 0 ? keys : [`f${pid}`]; // free の部材は自分だけの枠に入れる
+        const built = { pid, def, r, mesh, body, slots, baseY: y, platform, pop: pop ? 0 : 1, damage, shake: 0 };
         this.pieces.set(pid, built);
-        this.slots.set(slot, [...(this.slots.get(slot) ?? []), built]);
+        for (const slot of slots)
+            this.slots.set(slot, [...(this.slots.get(slot) ?? []), built]);
         this.byMesh.set(mesh, built);
         this.targets.push(mesh);
         this.nextPid = Math.max(this.nextPid, pid + 1);
@@ -557,11 +653,13 @@ export class Builder {
         for (const child of b.mesh.children)
             child.traverse((o) => o.geometry?.dispose());
         this.physics.world.removeRigidBody(b.body); // 付いているコライダーも消える
-        const rest = this.slots.get(b.slot).filter((o) => o !== b);
-        if (rest.length > 0)
-            this.slots.set(b.slot, rest);
-        else
-            this.slots.delete(b.slot);
+        for (const slot of b.slots) {
+            const rest = this.slots.get(slot).filter((o) => o !== b);
+            if (rest.length > 0)
+                this.slots.set(slot, rest);
+            else
+                this.slots.delete(slot);
+        }
         this.byMesh.delete(b.mesh);
         remove(this.targets, b.mesh);
         if (b.platform)
@@ -571,10 +669,15 @@ export class Builder {
     burst(b, count) {
         const box = new THREE.Box3().setFromObject(b.mesh);
         const size = box.getSize(new THREE.Vector3());
+        const wood = b.def.color === PALETTE.trunk;
         for (let n = 0; n < count; n++) {
-            const mesh = new THREE.Mesh(debrisGeo, flat(b.def.color));
+            const mesh = new THREE.Mesh(wood ? splinterGeo : debrisGeo, flat(b.def.color));
             mesh.position.set(box.min.x + Math.random() * size.x, box.min.y + Math.random() * size.y, box.min.z + Math.random() * size.z);
-            mesh.scale.setScalar(0.6 + Math.random() * 1.2);
+            // 木の部材は細長い針、石の部材は小さな塊
+            if (wood)
+                scatterSplinter(mesh, 0.7 + Math.random() * 0.6);
+            else
+                mesh.scale.setScalar(0.6 + Math.random() * 1.2);
             const velocity = new THREE.Vector3((Math.random() - 0.5) * 4, 2 + Math.random() * 3, (Math.random() - 0.5) * 4);
             this.world.add(mesh);
             this.debris.push({ mesh, velocity, life: DEBRIS_LIFE * (0.7 + Math.random() * 0.5) });

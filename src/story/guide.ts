@@ -211,7 +211,7 @@ function injectStyle(): void {
   const style = document.createElement('style');
   style.textContent = `
     .guide {
-      position: fixed; left: calc(16 * var(--u)); top: calc(64 * var(--u)); z-index: 5; max-width: calc(300 * var(--u));
+      position: fixed; left: calc(16 * var(--u)); top: calc(16 * var(--u) + var(--chat-h, 0px)); z-index: 5; max-width: calc(300 * var(--u));
       padding: calc(8 * var(--u)) calc(12 * var(--u)); border-radius: calc(10 * var(--u)); background: rgba(43, 38, 51, 0.55);
       color: #fff; font-size: calc(14 * var(--u)); font-weight: 700; line-height: 1.5; pointer-events: none; user-select: none;
       transition: box-shadow 0.3s;

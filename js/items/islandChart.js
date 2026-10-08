@@ -2,12 +2,10 @@ import { LAND_KINDS, LAND_NAMES } from './landInfo.js';
 // 島の地図の中身。製図台で白紙の地図と地形のメモを組み合わせると、島の地図が1枚できる。
 // 地図は「種（seed）」と「組み合わせたメモ（told）」だけを持ち、1つの整数（chart）にまとめてスタックに入れる。
 // 本当に島にある地形（lands）は、seed と told からいつも同じ計算で決める（誰の画面でも同じ島になる）。
-// メモどおりの島になるとは限らない：メモの地形が抜け落ちたり、メモにない地形が混ざったりする。
-// 出る見込みはプレイヤーには見せない。
+// メモの地形はかならず島に出る。ただしメモどおりの島になるとは限らず、メモにない地形が混ざることがある。
+// 混ざる見込みはプレイヤーには見せない。
 // 地図を作るのはインベントリの中で完結する自分だけの行動なので、種は作った人のブラウザで決める（釣りの魚と同じ）
 export const CHART_MAX_TOLD = 5; // 1枚の地図に組み合わせられるメモの数
-const SHOW_BASE = 0.95; // メモを1つだけ組み合わせたとき、その地形が島に出る見込み
-const SHOW_DECAY = 0.88; // メモが1つ増えるごとに、どの地形も出る見込みがこの割合に下がる（2つ：84%・3つ：74%・4つ：65%・5つ：57%）
 const EXTRA_SLOTS = 2; // メモにない地形が混ざる数の最大
 const EXTRA_BASE = 0.25; // メモを1つだけ組み合わせたとき、混ざる枠1つごとに地形が混ざる見込み
 const EXTRA_STEP = 0.08; // メモが1つ増えるごとに、混ざる見込みがこれだけ上がる（欲張るほど地図があいまいになる）
@@ -38,11 +36,8 @@ export function readChart(chart) {
     const seed = Math.floor(chart / 2 ** KIND_BITS);
     const told = toldOf(chart);
     const rand = chartRandom(seed);
-    // メモの地形が出るか（数が多いほど、どれも出にくくなる）。全部外れたら、1つだけは必ず出す
-    const show = SHOW_BASE * SHOW_DECAY ** (told.length - 1);
-    const kept = told.filter(() => rand() < show);
-    if (kept.length === 0)
-        kept.push(told[Math.floor(rand() * told.length)]);
+    // メモの地形は全部出る
+    const kept = [...told];
     // メモにない地形が混ざる
     const extra = Math.min(EXTRA_BASE + EXTRA_STEP * (told.length - 1), 1);
     const others = LAND_KINDS.filter((k) => !told.includes(k));

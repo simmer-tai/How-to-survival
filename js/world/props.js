@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flatVertex, solid } from '../core/materials.js';
 import { terrainHeight } from './terrain.js';
+import { domeQ, nearCave } from './cave.js';
 import { swayDepthMaterial, swayMaterial } from './wind.js';
 function mulberry32(seed) {
     return () => {
@@ -24,6 +25,9 @@ const BUSH_RING = 5; // まんなかのかたまりを囲む、葉のかたま�
 const BUSH_ROUGHNESS = 0.2; // 茂みのかたまりの頂点をずらす量（かたまりの大きさに対する割合）
 const BUSH_SPRIGS = 10; // 表面から飛び出す葉先の数（輪郭をギザギザにする）
 const BUSH_YOUNG = 0.2; // 上向きの面のうち、明るい若葉の色にする割合
+// ---- 遠くから見るときの形（world/lod.ts が入れかえる）の調整 ----
+const LOW_SIDES = 5; // 幹の周りの面の数
+const LOW_PINE_SIDES = 6; // 針葉樹の葉の段の周りの面の数
 const UP = new THREE.Vector3(0, 1, 0);
 /** 色を少し暗く・明るくする（パレットの色の濃淡だけを使う） */
 function shade(color, k) {
@@ -46,10 +50,10 @@ function rough(geo, amount, shape) {
     geo.computeVertexNormals();
     return geo;
 }
-/** ヤシの葉：根元と先が細く、両側の小葉が垂れて、全体が弓なりにしなる。原点は根元 */
-function frondGeometry() {
+/** ヤシの葉：根元と先が細く、両側の小葉が垂れて、全体が弓なりにしなる。原点は根元。across・along は横・縦の区切りの数 */
+function frondGeometry(across = 2, along = 8) {
     const LENGTH = 3.8;
-    const geo = new THREE.BoxGeometry(1.1, 0.05, LENGTH, 2, 1, 8);
+    const geo = new THREE.BoxGeometry(1.1, 0.05, LENGTH, across, 1, along);
     const pos = geo.getAttribute('position');
     for (let i = 0; i < pos.count; i++) {
         const t = pos.getZ(i) / LENGTH + 0.5; // 0 = 根元、1 = 先
@@ -64,9 +68,10 @@ function frondGeometry() {
 /**
  * objects の中のメッシュを、root から見た位置のまま、頂点に色を塗った1つのメッシュにまとめる。
  * 色の違う部品をまとめて1回で描けるようにする（見た目は元と同じ）。
- * sway を渡すと、頂点ごとの風での揺れやすさ（root から見た位置で決める）を aSway に焼き込み、風で揺れる材質で描く
+ * sway を渡すと、頂点ごとの風での揺れやすさ（root から見た位置で決める）を aSway に焼き込み、風で揺れる材質で描く。
+ * low なら、部品ごとに userData.low の面の少ないジオメトリを使う（null の部品は省く）
  */
-function mergeLooks(root, objects, sway) {
+function mergeLooks(root, objects, sway, low = false) {
     root.updateMatrixWorld(true);
     const toRoot = root.matrixWorld.clone().invert();
     const positions = [];
@@ -78,8 +83,11 @@ function mergeLooks(root, objects, sway) {
         o.traverse((child) => {
             if (!(child instanceof THREE.Mesh))
                 return;
+            const source = low && child.userData.low !== undefined ? child.userData.low : child.geometry;
+            if (!source)
+                return;
             m.multiplyMatrices(toRoot, child.matrixWorld);
-            const geo = child.geometry.index ? child.geometry.toNonIndexed() : child.geometry;
+            const geo = source.index ? source.toNonIndexed() : source;
             const pos = geo.getAttribute('position');
             const c = child.material.color;
             for (let i = 0; i < pos.count; i++) {
@@ -105,13 +113,29 @@ function mergeLooks(root, objects, sway) {
     mesh.receiveShadow = true;
     return mesh;
 }
-/** 木の葉・枝・実を1つにまとめた crown（風で揺れる）を足し、元の部品は隠しておく（倒れたら元の部品に戻す） */
-function addCrown(object, leaves, sway) {
-    const crown = mergeLooks(object, leaves, sway);
-    object.add(crown);
+/**
+ * 木の葉・枝・実を1つにまとめた crown（風で揺れる）を足し、元の部品は隠しておく（倒れたら元の部品に戻す）。
+ * 遠くから見るときの、幹と葉を面の少ない形でまとめた far も足して隠しておく（風では揺らさない）
+ */
+function finishTree({ group, trunk, leaves, sway }, wood) {
+    const crown = mergeLooks(group, leaves, sway);
+    const far = mergeLooks(group, [trunk, ...leaves], undefined, true);
+    far.visible = false;
+    far.raycast = () => { }; // 隠していても視線は当たるので、当たらないようにする（近くでは元の幹と葉に当てる）
+    group.add(crown, far);
     for (const leaf of leaves)
         leaf.visible = false;
-    return crown;
+    return { object: group, trunk, leaves, crown, far, wood };
+}
+/** 円すい（葉の段）の縁を下げて、枝先が垂れたスカートのような形にする */
+function skirt(geo, radius) {
+    const pos = geo.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+        const out = Math.hypot(pos.getX(i), pos.getZ(i)) / radius;
+        if (pos.getY(i) < 0)
+            pos.setY(i, pos.getY(i) - out * out * radius * 0.25);
+    }
+    return geo;
 }
 /** start から dir の向きに length だけ伸びる枝 */
 function branch(start, dir, length, radius) {
@@ -123,6 +147,7 @@ function branch(start, dir, length, radius) {
 // 共有ジオメトリ（ローポリ・誇張したプロポーション）
 const GEO = {
     palmFrond: frondGeometry(),
+    palmFrondLow: frondGeometry(1, 3),
     coconut: new THREE.IcosahedronGeometry(0.2, 0),
     rock: new THREE.DodecahedronGeometry(1, 0),
     plank: new THREE.BoxGeometry(2.8, 0.22, 0.5),
@@ -136,6 +161,7 @@ function slopeAt(x, z) {
 function pineTree(scale, shape) {
     const g = new THREE.Group();
     const trunk = solid(rough(new THREE.CylinderGeometry(0.16, 0.45, PINE_TRUNK_HEIGHT, 7, 4), 0.04, shape), PALETTE.trunk);
+    trunk.userData.low = new THREE.CylinderGeometry(0.16, 0.45, PINE_TRUNK_HEIGHT, LOW_SIDES, 1);
     trunk.position.y = PINE_TRUNK_HEIGHT / 2;
     g.add(trunk);
     const leaves = [];
@@ -143,15 +169,9 @@ function pineTree(scale, shape) {
         const t = k / (PINE_TIERS - 1); // 0 = いちばん下の段
         const radius = THREE.MathUtils.lerp(2.7, 0.75, t) * (0.9 + shape() * 0.2);
         const height = THREE.MathUtils.lerp(2.3, 1.7, t);
-        const geo = new THREE.ConeGeometry(radius, height, 9, 2);
-        // 段の縁を下げて、枝先が垂れたスカートのような形にする
-        const pos = geo.getAttribute('position');
-        for (let i = 0; i < pos.count; i++) {
-            const out = Math.hypot(pos.getX(i), pos.getZ(i)) / radius;
-            if (pos.getY(i) < 0)
-                pos.setY(i, pos.getY(i) - out * out * radius * 0.25);
-        }
+        const geo = skirt(new THREE.ConeGeometry(radius, height, 9, 2), radius);
         const tier = solid(rough(geo, radius * ROUGHNESS, shape), shade(PALETTE.leaf, k % 2 ? 1 : 0.9));
+        tier.userData.low = skirt(new THREE.ConeGeometry(radius, height, LOW_PINE_SIDES, 1), radius);
         tier.position.y = 2.7 + t * 6.2;
         tier.rotation.set((shape() - 0.5) * 0.14, shape() * Math.PI * 2, (shape() - 0.5) * 0.14);
         g.add(tier);
@@ -170,6 +190,7 @@ function roundTree(scale, rand, shape) {
     const g = new THREE.Group();
     const trunkHeight = 3.4;
     const trunk = solid(rough(new THREE.CylinderGeometry(0.26, 0.5, trunkHeight, 7, 3), 0.05, shape), PALETTE.trunk);
+    trunk.userData.low = new THREE.CylinderGeometry(0.26, 0.5, trunkHeight, LOW_SIDES, 1);
     trunk.position.y = trunkHeight / 2;
     g.add(trunk);
     const leaves = [];
@@ -188,6 +209,7 @@ function roundTree(scale, rand, shape) {
         const length = 1.5 + shape() * 0.6;
         const dir = new THREE.Vector3(Math.sin(lean) * Math.cos(a), Math.cos(lean), Math.sin(lean) * Math.sin(a));
         const b = branch(fork, dir, length, 0.17);
+        b.userData.low = null; // 遠くからは葉のかたまりに隠れて見えない
         g.add(b);
         leaves.push(b); // 枝も倒れたら葉と一緒に消える（幹の当たり判定に入れない）
         const tip = fork.clone().addScaledVector(dir, length).add(new THREE.Vector3(0, 0.35, 0));
@@ -207,17 +229,21 @@ function palmTree(outward, rand, shape) {
     const tilt = 0.25 + rand() * 0.2;
     const length = 5 + rand() * 1.5;
     const bend = Math.sin(tilt) * length * 1.3; // てっぺんが根元から海側へずれる量
-    // 幹：根元はまっすぐ立ち、上ほど海側へ反る。節ごとに少し太くする
-    const geo = new THREE.CylinderGeometry(0.2, 0.36, length, 7, PALM_RINGS);
-    const pos = geo.getAttribute('position');
-    for (let i = 0; i < pos.count; i++) {
-        const t = pos.getY(i) / length + 0.5;
-        const ring = Math.round(t * PALM_RINGS) % 2 === 0 ? 1.12 : 1;
-        pos.setX(i, pos.getX(i) * ring + bend * t * t);
-        pos.setZ(i, pos.getZ(i) * ring);
-    }
-    geo.computeVertexNormals();
-    const trunk = solid(geo, PALETTE.trunk);
+    // 幹：根元はまっすぐ立ち、上ほど海側へ反る。節ごとに少し太くする（遠くから見る形は節を付けず、区切りを減らす）
+    const trunkGeometry = (sides, rings, knots) => {
+        const geo = new THREE.CylinderGeometry(0.2, 0.36, length, sides, rings);
+        const pos = geo.getAttribute('position');
+        for (let i = 0; i < pos.count; i++) {
+            const t = pos.getY(i) / length + 0.5;
+            const ring = knots && Math.round(t * rings) % 2 === 0 ? 1.12 : 1;
+            pos.setX(i, pos.getX(i) * ring + bend * t * t);
+            pos.setZ(i, pos.getZ(i) * ring);
+        }
+        geo.computeVertexNormals();
+        return geo;
+    };
+    const trunk = solid(trunkGeometry(7, PALM_RINGS, true), PALETTE.trunk);
+    trunk.userData.low = trunkGeometry(LOW_SIDES, 3, false);
     trunk.position.y = length / 2;
     g.add(trunk);
     const top = new THREE.Vector3(bend, length, 0);
@@ -229,6 +255,7 @@ function palmTree(outward, rand, shape) {
         const droop = new THREE.Group();
         droop.rotation.x = pitch;
         const leaf = solid(GEO.palmFrond, PALETTE.leaf);
+        leaf.userData.low = GEO.palmFrondLow;
         leaf.scale.setScalar(size);
         droop.add(leaf);
         pivot.add(droop);
@@ -248,6 +275,7 @@ function palmTree(outward, rand, shape) {
     for (let k = 0; k < 3; k++) {
         const a = (k / 3) * Math.PI * 2 + shape();
         const nut = solid(GEO.coconut, shade(PALETTE.trunk, 0.8));
+        nut.userData.low = null; // 遠くからは小さすぎて見えない
         nut.position.copy(top).add(new THREE.Vector3(Math.cos(a) * 0.24, -0.3, Math.sin(a) * 0.24));
         g.add(nut);
         leaves.push(nut);
@@ -261,14 +289,7 @@ function palmTree(outward, rand, shape) {
  * ほかのかたまりに埋まって見えない面は省く。実をつけてよい（外から見える上向きの）面の番号を userData.berryFaces に入れる
  */
 function bushGeometry(shape) {
-    const clumps = [{ center: new THREE.Vector3(0, 0.1, 0), radius: 0.62 }];
-    const turn = shape() * Math.PI * 2;
-    for (let k = 0; k < BUSH_RING; k++) {
-        const a = turn + (k / BUSH_RING) * Math.PI * 2 + (shape() - 0.5) * 0.6;
-        const d = 0.42 + shape() * 0.15;
-        clumps.push({ center: new THREE.Vector3(Math.cos(a) * d, -0.05 + shape() * 0.15, Math.sin(a) * d), radius: 0.36 + shape() * 0.14 });
-    }
-    clumps.push({ center: new THREE.Vector3((shape() - 0.5) * 0.3, 0.42, (shape() - 0.5) * 0.3), radius: 0.38 + shape() * 0.1 });
+    const clumps = bushClumps(shape);
     const positions = [];
     const colors = [];
     const berryFaces = [];
@@ -341,6 +362,62 @@ function bushGeometry(shape) {
     geo.computeVertexNormals();
     geo.userData.berryFaces = berryFaces;
     return geo;
+}
+/** 茂みの葉のかたまりの位置と大きさ（bushGeometry と bushLowGeometry で同じになるよう、shape の最初の乱数だけで決める） */
+function bushClumps(shape) {
+    const clumps = [{ center: new THREE.Vector3(0, 0.1, 0), radius: 0.62 }];
+    const turn = shape() * Math.PI * 2;
+    for (let k = 0; k < BUSH_RING; k++) {
+        const a = turn + (k / BUSH_RING) * Math.PI * 2 + (shape() - 0.5) * 0.6;
+        const d = 0.42 + shape() * 0.15;
+        clumps.push({ center: new THREE.Vector3(Math.cos(a) * d, -0.05 + shape() * 0.15, Math.sin(a) * d), radius: 0.36 + shape() * 0.14 });
+    }
+    clumps.push({ center: new THREE.Vector3((shape() - 0.5) * 0.3, 0.42, (shape() - 0.5) * 0.3), radius: 0.38 + shape() * 0.1 });
+    return clumps;
+}
+/** 遠くから見るときの茂み：同じかたまりを面の少ない多面体にし、葉先は付けない。下ほど暗く上ほど明るいのは同じ */
+function bushLowGeometry(shape) {
+    const clumps = bushClumps(shape);
+    const positions = [];
+    const colors = [];
+    const leaf = new THREE.Color(PALETTE.leaf);
+    const v = new THREE.Vector3();
+    const mid = new THREE.Vector3();
+    clumps.forEach((clump, i) => {
+        const geo = new THREE.IcosahedronGeometry(clump.radius, 0);
+        geo.scale(1, 0.85, 1);
+        geo.translate(clump.center.x, clump.center.y, clump.center.z);
+        const pos = geo.getAttribute('position');
+        for (let f = 0; f < pos.count / 3; f++) {
+            mid.set(0, 0, 0);
+            for (let k = 0; k < 3; k++)
+                mid.add(v.fromBufferAttribute(pos, f * 3 + k));
+            mid.divideScalar(3);
+            if (clumps.some((o, j) => j !== i && mid.distanceTo(o.center) < o.radius * 0.85))
+                continue; // 埋まっている面は省く
+            const k = 0.62 + THREE.MathUtils.clamp((mid.y + 0.45) / 1.15, 0, 1) * 0.5;
+            for (let n = 0; n < 3; n++) {
+                v.fromBufferAttribute(pos, f * 3 + n);
+                positions.push(v.x, v.y, v.z);
+                colors.push(leaf.r * k, leaf.g * k, leaf.b * k);
+            }
+        }
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    return geo;
+}
+/**
+ * 茂みのメッシュ。形は seed から決める。遠くから見るときの面の少ないジオメトリを userData.low に入れる（world/lod.ts が入れかえる）
+ */
+function makeBush(seed) {
+    const bush = new THREE.Mesh(bushGeometry(mulberry32(seed)), flatVertex());
+    bush.userData.low = bushLowGeometry(mulberry32(seed));
+    bush.castShadow = true;
+    bush.receiveShadow = true;
+    return bush;
 }
 function rock(rand, size) {
     const m = solid(GEO.rock, PALETTE.rock);
@@ -432,10 +509,9 @@ export function plantedTree(gid, x, z) {
         model.group.rotation.y = rand() * Math.PI * 2;
         wood = Math.round(3 * s) + 1;
     }
-    const { group, trunk, leaves, sway } = model;
-    const crown = addCrown(group, leaves, sway);
-    const swayAttr = crown.geometry.getAttribute('aSway');
-    return { tree: { object: group, trunk, leaves, crown, wood }, scale: group.scale.x, sway: Float32Array.from(swayAttr.array) };
+    const tree = finishTree(model, wood);
+    const swayAttr = tree.crown.geometry.getAttribute('aSway');
+    return { tree, scale: model.group.scale.x, sway: Float32Array.from(swayAttr.array) };
 }
 export function buildProps() {
     const group = new THREE.Group();
@@ -465,10 +541,10 @@ export function buildProps() {
         if (y < 0.4 || y > 1.4 || !isFree(x, z, 5))
             continue;
         const outward = new THREE.Vector2(x, z).normalize();
-        const { group: palm, trunk, leaves, sway } = palmTree(outward, rand, shapeRand(trees.length));
-        palm.position.set(x, y - 0.1, z);
-        group.add(palm);
-        trees.push({ object: palm, trunk, leaves, crown: addCrown(palm, leaves, sway), wood: 3 });
+        const palm = palmTree(outward, rand, shapeRand(trees.length));
+        palm.group.position.set(x, y - 0.1, z);
+        group.add(palm.group);
+        trees.push(finishTree(palm, 3));
         placed.push(new THREE.Vector2(x, z));
         n++;
     }
@@ -481,11 +557,11 @@ export function buildProps() {
             continue;
         const s = 0.8 + rand() * 0.6;
         const shape = shapeRand(trees.length);
-        const { group: tree, trunk, leaves, sway } = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
-        tree.position.set(x, y - 0.2, z);
-        tree.rotation.y = rand() * Math.PI * 2;
-        group.add(tree);
-        trees.push({ object: tree, trunk, leaves, crown: addCrown(tree, leaves, sway), wood: Math.round(3 * s) + 1 });
+        const tree = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
+        tree.group.position.set(x, y - 0.2, z);
+        tree.group.rotation.y = rand() * Math.PI * 2;
+        group.add(tree.group);
+        trees.push(finishTree(tree, Math.round(3 * s) + 1));
         placed.push(new THREE.Vector2(x, z));
         n++;
     }
@@ -497,9 +573,7 @@ export function buildProps() {
         if (y < 1.7 || slopeAt(x, z) > 0.8 || !isFree(x, z, 2.5))
             continue;
         // 細かい形は配置用とは別に茂みの番号から作った乱数で決める（形を変えても配置と ID がずれない）
-        const bush = new THREE.Mesh(bushGeometry(mulberry32(9000 + bushes.length)), flatVertex());
-        bush.castShadow = true;
-        bush.receiveShadow = true;
+        const bush = makeBush(9000 + bushes.length);
         const s = 0.7 + rand() * 0.7;
         bush.scale.set(s * 1.3, s, s * 1.3);
         bush.rotation.y = rand() * Math.PI;
@@ -537,12 +611,13 @@ export function buildProps() {
         pierFoot: new THREE.Vector3(pierX, pierTop, pierStart),
     };
 }
-const ISLE_SPREAD = 140; // 海図に載せた島の物を置く範囲（中心からの四角の一辺。島は中心から 70m に収まる）
+const CAVE_ROCKS = { min: 2, max: 4 }; // 洞窟の地下の部屋1つに置く岩の数
+const ISLE_SPREAD = 250; // 海図に載せた島の物を置く範囲（中心からの四角の一辺。陸は中心から 124m に収まる）
 /**
  * 海図に載せた島の木・茂み・岩。seed（島の地図の種）から置き方を決めるので、誰の画面でも同じになる。
  * 木・茂み・岩の番号は、自分の島と同じくそれぞれの生成順。地面の高さは terrainHeight を見るので、world/terrain.ts の withField でその島の地形にしてから呼ぶ
  */
-export function buildIsleProps(seed, counts) {
+export function buildIsleProps(seed, counts, caves = []) {
     const group = new THREE.Group();
     const solids = [];
     const trees = [];
@@ -553,44 +628,49 @@ export function buildIsleProps(seed, counts) {
     const shapeRand = (id) => mulberry32(seed + 7000 + id);
     const isFree = (x, z, spacing) => placed.every((p) => Math.hypot(p.x - x, p.y - z) > spacing);
     const spot = () => [(rand() - 0.5) * ISLE_SPREAD, (rand() - 0.5) * ISLE_SPREAD];
+    const inCave = (x, z) => caves.some((c) => nearCave(c, x, z));
     // ヤシ（浜辺）
-    for (let n = 0, tries = 0; n < counts.palms && tries < 4000; tries++) {
+    for (let n = 0, tries = 0; n < counts.palms && tries < 12000; tries++) {
         const [x, z] = spot();
+        if (inCave(x, z))
+            continue;
         const y = terrainHeight(x, z);
         if (y < 0.4 || y > 1.4 || !isFree(x, z, 5))
             continue;
-        const { group: palm, trunk, leaves, sway } = palmTree(new THREE.Vector2(x, z).normalize(), rand, shapeRand(trees.length));
-        palm.position.set(x, y - 0.1, z);
-        group.add(palm);
-        trees.push({ object: palm, trunk, leaves, crown: addCrown(palm, leaves, sway), wood: 3 });
+        const palm = palmTree(new THREE.Vector2(x, z).normalize(), rand, shapeRand(trees.length));
+        palm.group.position.set(x, y - 0.1, z);
+        group.add(palm.group);
+        trees.push(finishTree(palm, 3));
         placed.push(new THREE.Vector2(x, z));
         n++;
     }
     // 森
-    for (let n = 0, tries = 0; n < counts.trees && tries < 8000; tries++) {
+    for (let n = 0, tries = 0; n < counts.trees && tries < 20000; tries++) {
         const [x, z] = spot();
+        if (inCave(x, z))
+            continue;
         const y = terrainHeight(x, z);
         if (y < 1.8 || slopeAt(x, z) > 0.9 || !isFree(x, z, 4))
             continue;
         const s = 0.8 + rand() * 0.6;
         const shape = shapeRand(trees.length);
-        const { group: tree, trunk, leaves, sway } = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
-        tree.position.set(x, y - 0.2, z);
-        tree.rotation.y = rand() * Math.PI * 2;
-        group.add(tree);
-        trees.push({ object: tree, trunk, leaves, crown: addCrown(tree, leaves, sway), wood: Math.round(3 * s) + 1 });
+        const tree = rand() < 0.6 ? pineTree(s, shape) : roundTree(s, rand, shape);
+        tree.group.position.set(x, y - 0.2, z);
+        tree.group.rotation.y = rand() * Math.PI * 2;
+        group.add(tree.group);
+        trees.push(finishTree(tree, Math.round(3 * s) + 1));
         placed.push(new THREE.Vector2(x, z));
         n++;
     }
     // 茂み
-    for (let n = 0, tries = 0; n < counts.bushes && tries < 4000; tries++) {
+    for (let n = 0, tries = 0; n < counts.bushes && tries < 12000; tries++) {
         const [x, z] = spot();
+        if (inCave(x, z))
+            continue;
         const y = terrainHeight(x, z);
         if (y < 1.7 || slopeAt(x, z) > 0.8 || !isFree(x, z, 2.5))
             continue;
-        const bush = new THREE.Mesh(bushGeometry(mulberry32(seed + 9000 + bushes.length)), flatVertex());
-        bush.castShadow = true;
-        bush.receiveShadow = true;
+        const bush = makeBush(seed + 9000 + bushes.length);
         const s = 0.7 + rand() * 0.7;
         bush.scale.set(s * 1.3, s, s * 1.3);
         bush.rotation.y = rand() * Math.PI;
@@ -609,21 +689,41 @@ export function buildIsleProps(seed, counts) {
         rocks.push(r);
         placed.push(new THREE.Vector2(x, z));
     };
-    for (let n = 0, tries = 0; n < counts.rocks && tries < 4000; tries++) {
+    for (let n = 0, tries = 0; n < counts.rocks && tries < 12000; tries++) {
         const [x, z] = spot();
+        if (inCave(x, z))
+            continue;
         const y = terrainHeight(x, z);
         if (y < -3 || !isFree(x, z, 3))
             continue;
         addRock(x, z, y, (y < 0.5 ? 1.2 + rand() * 1.6 : 0.6 + rand() * 1.2) * counts.big);
         n++;
     }
-    for (let n = 0, tries = 0; n < counts.reef && tries < 4000; tries++) {
+    for (let n = 0, tries = 0; n < counts.reef && tries < 12000; tries++) {
         const [x, z] = spot();
+        if (inCave(x, z))
+            continue;
         const y = terrainHeight(x, z);
         if (y < -4 || y > -1 || !isFree(x, z, 5))
             continue;
         addRock(x, z, y, 2 + rand() * 1.5);
         n++;
+    }
+    // 地下の部屋の岩（掘れる）
+    for (const r of caves.flatMap((c) => c.rooms)) {
+        const n = CAVE_ROCKS.min + Math.floor(rand() * (CAVE_ROCKS.max - CAVE_ROCKS.min + 1));
+        for (let i = 0, tries = 0; i < n && tries < 200; tries++) {
+            const l = (rand() * 2 - 1) * r.a;
+            const s = (rand() * 2 - 1) * r.b;
+            const x = r.x + l * Math.cos(r.yaw) - s * Math.sin(r.yaw);
+            const z = r.z + l * Math.sin(r.yaw) + s * Math.cos(r.yaw);
+            if (domeQ(r, x, z) > 0.5)
+                continue; // 口の前の壁（中心から縁の 0.6）より内側に
+            if (!isFree(x, z, 2.5))
+                continue;
+            addRock(x, z, r.floor, 0.7 + rand() * 0.7);
+            i++;
+        }
     }
     return { group, solids, trees, bushes, rocks, platforms: [] };
 }

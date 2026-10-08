@@ -1,6 +1,7 @@
 import { ITEMS } from '../items/inventory.js';
 import { buildPlan, ingredients } from '../items/recipes.js';
 import { BUSH_HP } from '../actions/foraging.js';
+import { CELL } from '../actions/pieces.js';
 import { WorldClock } from '../world/clock.js';
 // ワールドはブラウザの localStorage に保存する（ページの URL のオリジンごとに別々になる）。
 // 地形や木・茂みの配置は固定シードで毎回同じに生成されるので、変化した状態だけを持つ
@@ -29,7 +30,8 @@ import { WorldClock } from '../world/clock.js';
 // 23 → 24：種から育てた木（planted）が入った。穴は木の種を置いたか（holes.list[].s）を持つようになった
 // 24 → 25：インベントリ・落とし物の島の地図が、地図の中身（chart）を持つようになった
 // 25 → 26：島の地図から海図に載せた島（isles）が入った。プレイヤー・船の場所（loc）に isle0 などが入るようになった
-export const SAVE_VERSION = 26;
+// 26 → 27：木の階段が2マス使うようになった（位置 p が、並んだ2マスの真ん中になった）
+export const SAVE_VERSION = 27;
 /** 自分だけの状態（マルチでは各自のブラウザに残す） */
 export const PERSONAL_KEYS = ['player', 'inventory', 'vitals', 'guide', 'recipes'];
 /** 1 → 2：部材に並び順で ID を付ける */
@@ -169,6 +171,17 @@ function fromV24(old) {
 function fromV25(old) {
     return { ...old, version: 26, isles: { list: [] } };
 }
+/** 26 → 27：階段は、もとのマスをいちばん手前（低い側）にして、上る向き（部材の -Z）へ1マス伸ばす */
+function fromV26(old) {
+    const pieces = old.built.pieces.map((s) => {
+        if (s.id !== 'stairs')
+            return s;
+        const a = (s.r * Math.PI) / 2;
+        const half = CELL / 2;
+        return { ...s, p: [s.p[0] - Math.round(Math.sin(a)) * half, s.p[1], s.p[2] - Math.round(Math.cos(a)) * half] };
+    });
+    return { ...old, version: 27, built: { ...old.built, pieces } };
+}
 const INDEX_KEY = 'warfarming:worlds';
 const dataKey = (id) => `warfarming:world:${id}`;
 /** 最後に遊んだ順 */
@@ -246,6 +259,8 @@ export function loadWorld(id) {
         data = fromV24(data);
     if (data.version === 25)
         data = fromV25(data);
+    if (data.version === 26)
+        data = fromV26(data);
     if (data.version !== SAVE_VERSION)
         throw new Error(`unknown save version: ${data.version}`);
     return data;

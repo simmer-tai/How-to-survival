@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 // 時刻と天気に合わせて空の色・太陽と月・星・雲・光の向きと強さを変える（見た目だけ。時刻そのものは clock.ts、天気は weather.ts）
-const SUN_INTENSITY = 2.4; // 昼の太陽の光の強さ
+export const SUN_INTENSITY = 2.8; // 昼の太陽の光の強さ
 const MOON_INTENSITY = 0.7; // 夜の月明かりの強さ（夜でも周りが見える程度）
-const DAY_HEMI = 1.1; // 昼の空の光（半球光）の強さ
+const DAY_HEMI = 0.8; // 昼の空の光（半球光）の強さ。太陽に比べて強いほど、斜面の明暗の差が薄れて地形の凹凸が見えにくくなる
 const NIGHT_HEMI = 0.6; // 夜の空の光の強さ
 const NIGHT_SKY = 0.16; // 夜空の明るさ（海の色に掛ける）
 const NIGHT_GROUND = 0.35; // 夜の地面からの照り返しの明るさ
 const DUSK_TINT = 0.75; // 朝焼け・夕焼けで空を赤く染める強さ
 const SUN_TILT = 0.45; // 太陽と月の通り道を南（+Z）へ傾ける量
 const LIGHT_DISTANCE = 120; // 影を作る光を置く距離
+const SHADOW_SNAP = 16; // 影を作る範囲は、カメラの真下をこの間隔に丸めた所を中心にしてついていく（広い島でも影が切れないように）
 const SKY_DISTANCE = 420; // 太陽・月・星を置く距離（カメラの far より手前）
 const SUN_SIZE = 20; // 太陽の円盤の半径
 const MOON_SIZE = 13; // 月の円盤の半径
@@ -19,7 +20,7 @@ const CLOUD_COUNT = 40; // 空に浮かべる雲の数（雲の多さに合わ�
 const CLOUD_SEED = 2718; // 雲の配置を決める固定シード
 const CLOUD_DRIFT = 0.0004; // 雲が流れる速さ（ゲーム内の 1分あたりに回る角度。時刻から決めるので誰の画面でも同じ）
 const OVERCAST_TINT = 0.8; // 曇りの空を灰色に染める強さ
-const OVERCAST_SUN = 0.75; // 曇りで日差し（月明かり）を弱める割合
+const OVERCAST_SUN = 0.6; // 曇りで日差し（月明かり）を弱める割合（くもりでも地形の陰影が残るように、少し残す）
 const OVERCAST_HEMI = 0.2; // 曇りで空の光を弱める割合
 const LIGHTNING_INTERVAL = 9; // 嵐のとき、雷が光るまでの平均の間隔（秒）
 const LIGHTNING_HEMI = 2.5; // 雷が光った瞬間に空の光へ足す強さ
@@ -200,6 +201,10 @@ export class Sky {
             this.light.intensity = MOON_INTENSITY * THREE.MathUtils.smoothstep(-e, 0, 0.15);
         }
         this.light.intensity *= 1 - gloom * OVERCAST_SUN;
+        // 影を作る範囲をカメラについていかせる（細かく動かすと影がちらつくので、間隔に丸める）
+        const target = this.light.target.position.set(Math.round(camera.position.x / SHADOW_SNAP) * SHADOW_SNAP, 0, Math.round(camera.position.z / SHADOW_SNAP) * SHADOW_SNAP);
+        this.light.position.add(target);
+        this.light.target.updateMatrixWorld();
         // 雷：嵐のときときどき空がぱっと光る（光る瞬間は自分の画面だけの演出なので Math.random で決める）
         if (weather.storm > 0 && Math.random() < (dt * weather.storm) / LIGHTNING_INTERVAL)
             this.flash = 1;

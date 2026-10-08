@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { WORLD_SIZE } from '../world/terrain.js';
 import { locationDef } from '../world/location.js';
 import { keyGuide } from './keyGuide.js';
 // 地図：地図（アイテム）を持って右クリックすると広げ、今いる場所（島・街）を真上から見た図に、自分の位置と向きを描く。
@@ -136,7 +135,7 @@ export class AreaMap {
         if (!source)
             return null;
         const { field } = source;
-        const half = WORLD_SIZE / 2;
+        const half = field.half;
         // 陸地の範囲を調べて、まわりに少し海を入れた正方形に切り取る
         let minX = Infinity;
         let maxX = -Infinity;
@@ -154,7 +153,7 @@ export class AreaMap {
         }
         if (minX > maxX)
             [minX, maxX, minZ, maxZ] = [-half, half, -half, half];
-        const span = Math.min(WORLD_SIZE, Math.max(MIN_SPAN, maxX - minX + LAND_PAD * 2, maxZ - minZ + LAND_PAD * 2));
+        const span = Math.min(field.size, Math.max(MIN_SPAN, maxX - minX + LAND_PAD * 2, maxZ - minZ + LAND_PAD * 2));
         const x0 = THREE.MathUtils.clamp((minX + maxX) / 2 - span / 2, -half, half - span);
         const z0 = THREE.MathUtils.clamp((minZ + maxZ) / 2 - span / 2, -half, half - span);
         const image = document.createElement('canvas');

@@ -12,6 +12,7 @@ import { buildIsleProps, type IsleCounts, type IsleProps } from './props.js';
 import { withField } from './terrain.js';
 import { bakeSeabed } from './water.js';
 import { Grass } from './grass.js';
+import { buildCave, nearCave } from './cave.js';
 import { addIsle, isleId, isleIndex, setIsles, type IsleId, type LocationId } from './location.js';
 
 // 島の地図から海図に載せた島（共有ワールド）。島の地図を海図に書き写す（chartIsle）と、誰の海図にも載り、船で渡れるようになる。
@@ -23,12 +24,12 @@ import { addIsle, isleId, isleIndex, setIsles, type IsleId, type LocationId } fr
 
 const MAX_ISLES = 24; // 海図に載せられる島の数
 // 島にある地形ごとの、置く物の数（ない地形は少なめ）
-const PALMS = { with: 18, without: 4 }; // 白い渚：浜辺のヤシ
-const TREES = { with: 70, without: 10 }; // 木々の海：森の木
-const BUSHES = { with: 45, without: 8 }; // 風の原：茂み
-const ROCKS = { with: 40, without: 10 }; // 灰の牙：岩
+const PALMS = { with: 70, without: 14 }; // 白い渚：浜辺のヤシ
+const TREES = { with: 280, without: 40 }; // 木々の海：森の木
+const BUSHES = { with: 180, without: 30 }; // 風の原：茂み
+const ROCKS = { with: 150, without: 40 }; // 灰の牙：岩
 const BIG_ROCKS = 1.4; // 灰の牙：岩の大きさの倍率
-const REEF = 16; // 船喰い：沖の浅瀬に突き出た岩
+const REEF = 60; // 船喰い：沖の浅瀬に突き出た岩
 
 /** セーブデータ上の島1つ（島の番号順に並べる）。chart は島の地図の中身、ほかは自分の島と同じ形の、島の中の物の状態 */
 export interface IsleSave { chart: number; trees: TreeSave[]; bushes: BushSave[]; rocks: RockSave[]; drops: DropsSave }
@@ -123,7 +124,7 @@ export class Isles {
   /** 島に草を生やす（まだなら。初めてその島へ行ったときに呼ぶ） */
   grow(isle: Isle): Grass {
     if (!isle.grass) {
-      isle.grass = withField(isle.shape.field, () => new Grass(isle.props.rocks, isle.props.platforms));
+      isle.grass = withField(isle.shape.field, () => new Grass(isle.props.rocks, isle.props.platforms, isle.shape.field.half, (x, z) => isle.shape.caves.some((c) => nearCave(c, x, z))));
       isle.group.add(isle.grass.mesh);
     }
     return isle.grass;
@@ -176,9 +177,10 @@ export class Isles {
       reef: has('reef') ? REEF : 0,
     };
     const terrain = shape.field.createMesh();
-    const props = withField(shape.field, () => buildIsleProps(chart.seed, counts));
+    const props = withField(shape.field, () => buildIsleProps(chart.seed, counts, shape.caves));
+    const caves = shape.caves.map((c) => buildCave(c, (x, z) => shape.field.height(x, z)));
     const group = new THREE.Group();
-    group.add(terrain, props.group);
+    group.add(terrain, props.group, ...caves.map((c) => c.group));
     scene.add(group);
     const isle = physics.within(id, (): Isle => {
       const body = physics.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
@@ -186,6 +188,11 @@ export class Isles {
       for (const mesh of props.solids) if (!props.rocks.includes(mesh)) physics.addStatic(mesh, body); // 岩の当たり判定は RockMiner が付ける
       const blockers = [...props.trees.map((t) => t.object), ...props.bushes];
       aimTargets.push(terrain, ...props.solids);
+      for (const cave of caves) {
+        // 殻・管・地下の部屋の床の三角形そのものを当たり判定にする（殻の内側の面は外側と同じ三角形なので1回だけ）
+        for (const mesh of cave.solids) if (mesh !== cave.solids[1]) physics.addTerrain(mesh, body);
+        aimTargets.push(...cave.solids);
+      }
       const chopper = new TreeChopper(props.group, props.trees, physics);
       const forager = new BushForager(props.group, props.bushes);
       const miner = new RockMiner(props.group, props.rocks, physics, aimTargets, blockers, body);
@@ -199,7 +206,7 @@ export class Isles {
       forager.onHarvest = gain;
       miner.onHarvest = gain;
       for (const bush of props.bushes) sway(bush);
-      return { id, code, chart, shape, group, terrain, props, body, terrainCollider, seabed: bakeSeabed((x, z) => shape.field.height(x, z)), grass: null, chopper, forager, miner, drops };
+      return { id, code, chart, shape, group, terrain, props, body, terrainCollider, seabed: bakeSeabed((x, z) => shape.field.height(x, z), shape.field.size, (x, z) => shape.field.isDry(x, z)), grass: null, chopper, forager, miner, drops };
     });
     this.list.push(isle);
     return isle;

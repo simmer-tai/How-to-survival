@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PALETTE } from '../core/palette.js';
-import { flat, flatVertex } from '../core/materials.js';
+import { flat, flatVertex, woodVertex, WOOD_SPAN_U, WOOD_SPAN_V } from '../core/materials.js';
 
 // 建築部材の形。ハンマーで素材から建てる（素材は items/recipes.ts の BUILD_PLANS）。
 // 作業台・製図台・焚火はアイテムとしてクラフトし、手に持って設置する（id はアイテムの id と同じ）
@@ -35,42 +35,60 @@ const PLANK_SINK = 0.012; // 板の面を引っ込める量の最大（面がそ
 const PLANK_VARY = 0.3; // 板の幅のばらつき（割合）。手で切ったように太い板と細い板が混ざる
 const BRACE_W = 0.14; // 壁の片面に斜めに打つ筋交いの幅
 const BRACE_CHANCE = 0.5; // 壁に筋交いを打つ割合（並び方ごとに決まる）
-const POST_TOP = 0.08; // 柱の頭が壁より上に出る量の最大（柱ごとにばらつく）
+const POST_TOP = 0.05; // 壁・柵の両端の柱の頭が、壁・柵より上に出る量
 const POST_LEAN = 0.012; // 柱の傾きの最大（rad）
 const LOOK_VARIANTS = 4; // 板の並び方の種類。置いた部材ごとに ID から選ぶ
 const LOOK_SEED = 5150; // 板の並び方を決める乱数のシード
-const POST_W = 0.12; // 壁の両端の柱の幅
 const FRAME_W = 0.08; // 入口の枠の太さ
 const STUD_W = 0.08; // 壁の中の間柱・横木の太さ
 const STUD_SPAN = 0.9; // 壁の区画がこれより広ければ、真ん中に間柱を立てる
 const FENCE_T = 0.12; // 柵の厚み
-const FENCE_POST = 0.1; // 柵の両端の杭の幅
 const FENCE_PICKETS = 7; // 柵の縦板の枚数（片面）
 const FENCE_SHORT = 0.9; // 柵の縦板のいちばん低い高さ（0.9〜1 のあいだでばらつく）
 const FENCE_LEAN = 0.035; // 柵の縦板の傾きの最大（rad）
 const FENCE_RAILS = [0.2, 0.7]; // 柵の縦板を裏で支える横木の高さ
+const PILLAR_W = 0.26; // 柱の太さ（四角い角材）
+const PILLAR_BASE = 0.36; // 柱の根元の台座の幅
+const PILLAR_BASE_H = 0.12; // 台座の高さ
+const PILLAR_CAP = 0.34; // 柱の頭に載せる受け木の幅
+const PILLAR_CAP_H = 0.1; // 受け木の高さ
+const PILLAR_BANDS = [0.55, 1.75]; // 柱に巻いたツルの高さ
+const PILLAR_BAND_H = 0.06; // 巻いたツルの幅
+const PILLAR_REACH = 0.1; // 柱の見た目を当たり判定の上面より伸ばす量。上に載せた床の板の裏まで届かせる（床の板の上面より下）
+const PILLAR_LEGS = 0.5; // 柱の根元から地面に埋める長さ。上の床に届くよう持ち上げても、下が浮かない（actions/build.ts の levelUp）
 const FLOOR_PLANKS = 5; // 床に張る板の枚数
 const JOIST_W = 0.12; // 床板の下の根太の幅
 const STAIR_POLE = 0.09; // 階段の両脇の斜めの棒と、それを支える脚の太さ
 const STAIR_TREAD = 0.06; // 階段の踏み板の厚み
-const STAIR_TREAD_D = 0.32; // 階段の踏み板の奥行き（段の手前に寄せる。奥はすき間になる）
+const STAIR_TREAD_D = 0.2; // 階段の踏み板の奥行き（段の手前に寄せる。奥はすき間になる。1段の奥行きより小さくする）
 const STAIR_INTO = 0.02; // 踏み板の両端を棒に差し込む長さ
 const STAIR_TIE = 0.35; // 後ろの脚どうしをつなぐ横木の高さ
+const STAIR_CELLS = 2; // 階段が使うマスの数（上る向きに並ぶ。長いほど坂がゆるい）
+const STAIR_STEPS = 16; // 階段の段数（いちばん上は踊り場）。1段の高さは autostep で上れる高さより低くする
+const STAIR_LEN = CELL * STAIR_CELLS; // 階段の長さ
 const BENCH_PLANKS = 3; // 作業台の天板の板の枚数
 export const FIRE_RING = 0.42; // 焚火を囲む石の輪の半径
-const FIRE_STONES = 9; // 焚火を囲む石の数
-const FIRE_LOGS = 4; // 焚火の真ん中に組む薪の数（三角錐に立てかける）
-const FIRE_LOG_LEN = 0.55; // 薪の長さ
-const FIRE_LOG_LEAN = 0.5; // 薪を真ん中へ倒す角度（rad）
+const FIRE_STONES = 14; // 焚火を囲む石の数（すき間なく並ぶ数）
+const FIRE_PEBBLES = 14; // 石の輪の外側のすき間を埋める小石の数
+const FIRE_LOGS = 6; // 焚火の真ん中に組む薪の数（三角錐に立てかける）
+const FIRE_LOG_BASE = 0.27; // 薪の根元を置く、真ん中からの距離
+const FIRE_LOG_TOP = 0.44; // 薪の先が寄り合う高さ
+const FIRE_LOG_R = 0.036; // 薪の太さ（半径）
+const FIRE_LOG_TAPER = 0.7; // 薪の先の太さ（根元に対する割合）
+const FIRE_LOG_CHAR = 0.35; // 薪の先の、焦げて黒くなったところの長さ（割合）
+const FIRE_TWIGS = 3; // 灰の上に転がる小枝の数
 const FIRE_H = 0.3; // 焚火の当たり判定の高さ
 const FIRE_STONE_DETAIL = 1; // 焚火の石の丸さ（多面体を細かく割る回数。0 だと角ばる）
 const FIRE_STONE_SINK = 0.3; // 焚火の石を地面に埋める割合（高さに対して）
 
-export const PIECE_IDS = ['workbench', 'draftingTable', 'floor', 'wall', 'doorway', 'fence', 'stairs', 'foundation', 'campfire'] as const;
+export const PIECE_IDS = ['workbench', 'draftingTable', 'floor', 'wall', 'doorway', 'fence', 'stairs', 'foundation', 'campfire', 'pillar'] as const;
 export type PieceId = (typeof PIECE_IDS)[number];
 
-/** cell：マスの中央に置く　edge：マスの辺に沿って置く（壁・柵）　free：グリッドに沿わず、狙った所に置く（作業台・製図台・焚火） */
-export type Snap = 'cell' | 'edge' | 'free';
+/**
+ * cell：マスの中央に置く　edge：マスの辺に沿って置く（壁・柵）　corner：マスの角に置く（柱。壁の継ぎ目に立つ）
+ * free：グリッドに沿わず、狙った所に置く（作業台・製図台・焚火）
+ */
+export type Snap = 'cell' | 'edge' | 'corner' | 'free';
 
 /** 部材を形づくる箱 [幅, 高さ, 奥行き, x, y, z]。y は箱の底面の高さ */
 export type Part = [number, number, number, number, number, number];
@@ -78,8 +96,8 @@ export type Part = [number, number, number, number, number, number];
 /** 箱の傾き [x, y, z]（rad）。箱の中心のまわりに回す */
 type Tilt = [number, number, number];
 
-/** 見た目の箱と、その色、傾き。round なら箱でなく、箱に収まる丸い石の形にする */
-type Look = [Part, number, Tilt?, 'round'?];
+/** 見た目の箱と、その色、傾き。round なら箱でなく、箱に収まる丸い石の形にする。rod なら先（+Y）が細くなる丸太の形にする */
+type Look = [Part, number, Tilt?, ('round' | 'rod')?];
 
 /** 0〜1 の乱数を返す関数 */
 type Rand = () => number;
@@ -99,8 +117,10 @@ interface PieceSpec {
    * 見た目とほぼ同じ大きさにしておく
    */
   collision: Part[];
-  /** 当たり判定を箱ごとではなく、collision 全体の凸包（なめらかな坂）にする */
-  ramp?: boolean;
+  /** 当たり判定を箱ごとではなく、この点 [x, y, z, …] の凸包（なめらかな坂）にする */
+  ramp?: number[];
+  /** -Z 方向に並べて使うマスの数（cell の部材だけ。省くと 1）。原点は並んだマスの真ん中 */
+  cells?: number;
   /** 地面に埋める脚の長さ。見た目と当たり判定にだけ付け、置ける場所の判定には使わない */
   legs?: number;
   /** 上に乗れる平らな面か（泳いでいるときのよじ登り判定に使う） */
@@ -109,6 +129,8 @@ interface PieceSpec {
   hp: number;
   /** 部材と違う色の、見た目だけの飾り（当たり判定なし）。置くたびに新しく作る */
   details?: () => THREE.Object3D;
+  /** 木目のドット絵を重ねて描くか（pieceMaterial()） */
+  wood?: boolean;
 }
 
 export interface PieceDef extends PieceSpec {
@@ -132,10 +154,35 @@ function box([w, h, d, x, y, z]: Part): THREE.BufferGeometry {
   return new THREE.BoxGeometry(w, h, d).translate(x, y + h / 2, z);
 }
 
+/**
+ * 箱の面ごとの UV を、長さに合わせて振り直す（1 が WOOD_SPAN_U / V。長い板でも木目が引き伸ばされない）。
+ * 木目（テクスチャの u）は面の長い向きに沿わせる。箱ごとに模様の位置をずらし、同じ所がそろって見えないようにする
+ */
+function woodUV(g: THREE.BoxGeometry, w: number, h: number, d: number, seed: number): THREE.BoxGeometry {
+  // BoxGeometry の面の順（+x, -x, +y, -y, +z, -z）と、それぞれの u・v の向きの長さ
+  const faces: [number, number][] = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  const uv = g.getAttribute('uv') as THREE.BufferAttribute;
+  const ou = Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
+  const ov = Math.abs(Math.sin(seed * 78.233) * 12543.123) % 1;
+  for (let i = 0; i < uv.count; i++) {
+    const [lu, lv] = faces[Math.floor(i / 4)];
+    const u = uv.getX(i);
+    const v = uv.getY(i);
+    if (lu >= lv) uv.setXY(i, (u * lu) / WOOD_SPAN_U + ou, (v * lv) / WOOD_SPAN_V + ov);
+    else uv.setXY(i, (v * lv) / WOOD_SPAN_U + ou, (u * lu) / WOOD_SPAN_V + ov);
+  }
+  return g;
+}
+
 /** 頂点に色を塗った箱か丸い石（傾きがあれば中心のまわりに回す） */
 function coloredBox([[w, h, d, x, y, z], color, tilt, shape]: Look): THREE.BufferGeometry {
   // 丸い石は面ごとに頂点を持つ形（インデックスなし）なので、箱とまとめるときは mergeLooks() で形をそろえる
-  const g = shape === 'round' ? new THREE.IcosahedronGeometry(0.5, FIRE_STONE_DETAIL).scale(w, h, d) : new THREE.BoxGeometry(w, h, d);
+  const g =
+    shape === 'round'
+      ? new THREE.IcosahedronGeometry(0.5, FIRE_STONE_DETAIL).scale(w, h, d)
+      : shape === 'rod'
+        ? new THREE.CylinderGeometry(0.5 * FIRE_LOG_TAPER, 0.5, 1, 7).scale(w, h, d)
+        : woodUV(new THREE.BoxGeometry(w, h, d), w, h, d, x + y + z);
   if (tilt) g.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(...tilt)));
   g.translate(x, y + h / 2, z);
   const c = new THREE.Color(color);
@@ -188,9 +235,13 @@ function define(spec: PieceSpec): PieceDef {
   const colliders = [...spec.collision, ...legs];
   let hull: Float32Array | undefined;
   if (spec.ramp) {
-    const g = mergeGeometries(colliders.map(box), false)!;
-    hull = new Float32Array(g.getAttribute('position').array);
-    g.dispose();
+    const pts = [...spec.ramp];
+    if (legs.length) {
+      const g = mergeGeometries(legs.map(box), false)!;
+      pts.push(...g.getAttribute('position').array);
+      g.dispose();
+    }
+    hull = new Float32Array(pts);
   }
   return { ...spec, looks, geometry: looks[0], colliders, hull, height, halfX, halfZ };
 }
@@ -259,27 +310,26 @@ function plankPanel(rand: Rand, x0: number, x1: number, y0: number, y1: number, 
   return out;
 }
 
-/** 壁の両端の柱（濃い色）。頭の高さと傾きが柱ごとにばらつく */
-function posts(rand: Rand): Look[] {
-  return [-1, 1].map((sx): Look => [
-    [POST_W, WALL_H + rand() * POST_TOP, WALL_T, sx * (CELL / 2 - POST_W / 2), 0, 0],
-    PALETTE.bark,
-    [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)],
-  ]);
+/**
+ * 壁・柵の両端の柱（濃い色）。マスの角の点を中心にした、厚み t の角柱。
+ * 角で直角に組んだ壁・柵も、まっすぐ並べた壁・柵も、角の柱が同じ形で重なってすき間を埋める（だから傾けたり高さを変えたりしない）
+ */
+function cornerPosts(t: number, h: number): Look[] {
+  return [-1, 1].map((sx): Look => [[t, h + POST_TOP, t, (sx * CELL) / 2, 0, 0], PALETTE.bark]);
 }
 
 /** 壁：両端の柱と、そのあいだの横板 */
 function wallLook(rand: Rand): Look[] {
-  const x = CELL / 2 - POST_W;
-  return [...posts(rand), ...plankPanel(rand, -x, x, 0, WALL_H, WALL_T, true)];
+  const x = CELL / 2 - WALL_T / 2; // 柱の内側
+  return [...cornerPosts(WALL_T, WALL_H), ...plankPanel(rand, -x, x, 0, WALL_H, WALL_T, true)];
 }
 
 /** 入口のある壁：柱、入口の枠、枠の左右の横板と、枠より上の柱から柱までの横板 */
 function doorwayLook(rand: Rand): Look[] {
-  const x = CELL / 2 - POST_W;
+  const x = CELL / 2 - WALL_T / 2; // 柱の内側
   const jamb = DOOR_W / 2 + FRAME_W; // 枠の外側
   return [
-    ...posts(rand),
+    ...cornerPosts(WALL_T, WALL_H),
     ...plankPanel(rand, -x, -jamb, 0, DOOR_H + FRAME_W, WALL_T),
     ...plankPanel(rand, jamb, x, 0, DOOR_H + FRAME_W, WALL_T),
     ...plankPanel(rand, -x, x, DOOR_H + FRAME_W, WALL_H, WALL_T),
@@ -290,14 +340,10 @@ function doorwayLook(rand: Rand): Look[] {
 
 /** 柵：両端の杭、裏の横木、両面に張った縦板（幅・高さ・傾きがばらつく） */
 function fenceLook(rand: Rand): Look[] {
-  const inner = CELL - FENCE_POST * 2;
+  const inner = CELL - FENCE_T; // 両端の柱の内側
   const rail = FENCE_T - PLANK_T * 2; // 両面の縦板のあいだ
   const out: Look[] = [
-    ...[-1, 1].map((sx): Look => [
-      [FENCE_POST, 1 + rand() * POST_TOP, FENCE_T, sx * (CELL / 2 - FENCE_POST / 2), 0, 0],
-      PALETTE.bark,
-      [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)],
-    ]),
+    ...cornerPosts(FENCE_T, 1),
     ...FENCE_RAILS.map((y): Look => [[inner, STUD_W, rail, 0, y, 0], PALETTE.bark]),
   ];
   for (const [x, pw] of split(inner, FENCE_PICKETS, rand)) {
@@ -326,6 +372,19 @@ function floorLook(rand: Rand): Look[] {
   return out;
 }
 
+/** 柱：根元の台座と頭の受け木（濃い色）のあいだに、少し傾いた角材を立て、ツルを2か所巻く */
+function pillarLook(rand: Rand): Look[] {
+  const lean: Tilt = [wobble(rand, POST_LEAN), wobble(rand, 0.08), wobble(rand, POST_LEAN)];
+  const top = WALL_H + PILLAR_REACH;
+  const shaft = top - PILLAR_BASE_H - PILLAR_CAP_H;
+  return [
+    [[PILLAR_BASE, PILLAR_BASE_H, PILLAR_BASE, 0, 0, 0], PALETTE.bark],
+    [[PILLAR_W, shaft, PILLAR_W, wobble(rand, PLANK_SHIFT), PILLAR_BASE_H, wobble(rand, PLANK_SHIFT)], PALETTE.trunk, lean],
+    ...PILLAR_BANDS.map((y): Look => [[PILLAR_W + 0.03, PILLAR_BAND_H, PILLAR_W + 0.03, 0, y + wobble(rand, 0.05), 0], PALETTE.leaf, [0, wobble(rand, 0.1), 0]]),
+    [[PILLAR_CAP, PILLAR_CAP_H, PILLAR_CAP, 0, top - PILLAR_CAP_H, 0], PALETTE.bark, [0, wobble(rand, 0.06), 0]],
+  ];
+}
+
 /**
  * 階段：両脇の斜めの棒を前後の脚で支え、棒のあいだに踏み板を1枚ずつ渡す（下は抜けている）。
  * いちばん上の段は、板2枚を並べた踊り場
@@ -336,7 +395,7 @@ function stairsLook(rand: Rand): Look[] {
   const half = STAIR_POLE / 2;
   const px = CELL / 2 - half; // 棒と脚の x
   const inner = CELL - STAIR_POLE * 2; // 両脇の棒のあいだ
-  const slope = WALL_H / CELL;
+  const slope = WALL_H / STAIR_LEN;
   const out: Look[] = [];
 
   const tread = (z: number, d: number, y: number) => {
@@ -348,23 +407,24 @@ function stairsLook(rand: Rand): Look[] {
   for (const [, h, d, , , z] of steps.slice(0, -1)) tread(z + d / 2 - STAIR_TREAD_D / 2, STAIR_TREAD_D, h - STAIR_TREAD);
   for (const [tz, td] of split(topD, 2, rand)) tread(topZ + tz, td, topH - STAIR_TREAD);
 
-  // 斜めの棒は踏み板の真ん中を通す。手前は短い脚に、奥は踊り場の下の受け木につなぐ
+  // 斜めの棒は踏み板の真ん中を通す。手前は短い脚に、奥は踊り場の下の受け木につなぎ、真ん中も脚で支える
   const [, h0, d0, , , z0] = steps[0];
   const tz0 = z0 + d0 / 2 - STAIR_TREAD_D / 2;
   const ty0 = h0 - STAIR_TREAD / 2;
   const poleY = (z: number) => ty0 + slope * (tz0 - z); // 棒の中心の高さ
   const landingY = topH - STAIR_TREAD - STAIR_POLE; // 踊り場の受け木の底
-  const front = CELL / 2 - half;
+  const front = STAIR_LEN / 2 - half;
   const back = tz0 - (landingY + half - ty0) / slope;
   const len = Math.hypot(front - back, poleY(back) - poleY(front));
   const mid = (front + back) / 2;
-  const backPost = -CELL / 2 + half;
+  const backPost = -STAIR_LEN / 2 + half;
   for (const sx of [-1, 1]) {
     out.push(
       [[STAIR_POLE, STAIR_POLE, len, sx * px, poleY(mid) - half, mid], PALETTE.bark, [Math.atan(slope), 0, 0]],
       [[STAIR_POLE, STAIR_POLE, topD, sx * px, landingY, topZ], PALETTE.bark],
       [[STAIR_POLE, poleY(front), STAIR_POLE, sx * px, 0, front], PALETTE.bark, [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)]],
       [[STAIR_POLE, landingY, STAIR_POLE, sx * px, 0, backPost], PALETTE.bark, [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)]],
+      [[STAIR_POLE, poleY(0) - half, STAIR_POLE, sx * px, 0, 0], PALETTE.bark, [wobble(rand, POST_LEAN), 0, wobble(rand, POST_LEAN)]],
     );
   }
   out.push([[inner, STAIR_POLE, STAIR_POLE, 0, STAIR_TIE, backPost], PALETTE.bark]);
@@ -390,49 +450,110 @@ function workbenchLook(rand: Rand): Look[] {
   ];
 }
 
-/** 焚火：輪に並べた丸い石（大きさと向きがばらつき、少し地面に埋まる）、真ん中の灰、三角錐に立てかけた薪 */
+/** 色を k 倍に明るく（暗く）する（パレットの色から濃淡を作る） */
+const shadeColor = (c: number, k: number) => new THREE.Color(c).multiplyScalar(k).getHex();
+const CHAR_COLOR = shadeColor(PALETTE.bark, 0.35); // 焦げた薪の先
+const CUT_COLOR = shadeColor(PALETTE.trunk, 1.3); // 薪の切り口（明るい木の色）
+const Y_UP = new THREE.Vector3(0, 1, 0);
+
+/** from から to へ伸びる丸太の形（to の側が細い）。r は根元の半径 */
+function rod(from: THREE.Vector3, to: THREE.Vector3, r: number, color: number): Look {
+  const dir = to.clone().sub(from);
+  const len = dir.length();
+  const e = new THREE.Euler().setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(Y_UP, dir.normalize()));
+  const mid = from.clone().add(to).multiplyScalar(0.5);
+  return [[r * 2, len, r * 2, mid.x, mid.y - len / 2, mid.z], color, [e.x, e.y, e.z], 'rod'];
+}
+
+/** 焚火の石1つ。a は輪の上の向き、ring は真ん中からの距離 */
+function fireStone(rand: Rand, a: number, ring: number, w: number, h: number, d: number): Look {
+  return [
+    [w, h, d, Math.sin(a) * ring, -h * FIRE_STONE_SINK, Math.cos(a) * ring],
+    shadeColor(PALETTE.rock, 0.82 + rand() * 0.26), // 石ごとに少し濃さを変える
+    [wobble(rand, 0.25), a + wobble(rand, 0.3), wobble(rand, 0.25)], // 長い辺を輪に沿わせる
+    'round',
+  ];
+}
+
+/**
+ * 焚火：すき間なく輪に並べた丸い石（大きさ・向き・濃さがばらつき、少し地面に埋まる）と、外側のすき間を埋める小石、真ん中の灰、
+ * 三角錐に立てかけた丸い薪（先が細く焦げて黒く、根元には明るい切り口。枝を払った跡の出っ張りがあるものも）と、灰の上の小枝
+ */
 function campfireLook(rand: Rand): Look[] {
   const out: Look[] = [[[FIRE_RING * 1.4, 0.03, FIRE_RING * 1.4, 0, 0, 0], PALETTE.bark]]; // 灰
   for (let i = 0; i < FIRE_STONES; i++) {
-    const a = ((i + wobble(rand, 0.15)) / FIRE_STONES) * Math.PI * 2;
-    const w = 0.24 + rand() * 0.08;
-    const h = 0.17 + rand() * 0.08;
-    const stone: Look = [
-      [w, h, 0.2 + rand() * 0.05, Math.sin(a) * FIRE_RING, -h * FIRE_STONE_SINK, Math.cos(a) * FIRE_RING],
-      PALETTE.rock,
-      [wobble(rand, 0.25), a + wobble(rand, 0.3), wobble(rand, 0.25)], // 長い辺を輪に沿わせる
-      'round',
-    ];
-    out.push(stone);
+    const a = ((i + wobble(rand, 0.1)) / FIRE_STONES) * Math.PI * 2;
+    out.push(fireStone(rand, a, FIRE_RING + wobble(rand, 0.02), 0.2 + rand() * 0.06, 0.13 + rand() * 0.07, 0.17 + rand() * 0.05));
   }
-  // 薪は根元を輪の内側に置き、先を真ん中に寄せる（箱は中心のまわりに回すので、中心を内側へずらしておく）
-  const lean = Math.sin(FIRE_LOG_LEAN) * (FIRE_LOG_LEN / 2);
+  for (let i = 0; i < FIRE_PEBBLES; i++) {
+    const a = ((i + 0.5 + wobble(rand, 0.15)) / FIRE_PEBBLES) * Math.PI * 2;
+    out.push(fireStone(rand, a, FIRE_RING + 0.09 + rand() * 0.03, 0.1 + rand() * 0.05, 0.07 + rand() * 0.04, 0.09 + rand() * 0.04));
+  }
+  // 薪は根元を輪の内側に少し埋め、先を真ん中の少し向こうまで伸ばして寄り合わせる
   for (let i = 0; i < FIRE_LOGS; i++) {
-    const a = ((i + 0.5) / FIRE_LOGS) * Math.PI * 2 + wobble(rand, 0.2);
+    const a = ((i + 0.5) / FIRE_LOGS) * Math.PI * 2 + wobble(rand, 0.25);
     const sx = Math.sin(a);
     const sz = Math.cos(a);
-    const r = FIRE_RING * 0.5 - lean;
-    const y = (Math.cos(FIRE_LOG_LEAN) * FIRE_LOG_LEN) / 2 - FIRE_LOG_LEN / 2;
-    const log: Look = [
-      [0.07, FIRE_LOG_LEN, 0.07, sx * r, y, sz * r],
-      i % 2 === 0 ? PALETTE.trunk : PALETTE.bark,
-      [-FIRE_LOG_LEAN * sz, 0, FIRE_LOG_LEAN * sx],
-    ];
-    out.push(log);
+    const r = FIRE_LOG_R * (0.8 + rand() * 0.4);
+    const base = FIRE_LOG_BASE + wobble(rand, 0.03);
+    const from = new THREE.Vector3(sx * base, -0.02, sz * base);
+    const past = 0.03 + rand() * 0.04; // 先が真ん中を越える長さ
+    const side = wobble(rand, 0.04); // 先を少し横へずらして、薪どうしが重ならないように
+    const to = new THREE.Vector3(-sx * past + sz * side, FIRE_LOG_TOP + wobble(rand, 0.05), -sz * past - sx * side);
+    const dir = to.clone().sub(from);
+    const charAt = from.clone().addScaledVector(dir, 1 - FIRE_LOG_CHAR);
+    const wood = shadeColor(i % 2 === 0 ? PALETTE.trunk : PALETTE.bark, 0.9 + rand() * 0.2);
+    out.push(rod(from, charAt, r, wood));
+    // 焦げた先は、根元の部分の先の太さから続ける
+    out.push(rod(charAt, to, r * (1 - (1 - FIRE_LOG_TAPER) * (1 - FIRE_LOG_CHAR)), CHAR_COLOR));
+    // 根元の切り口：少しだけ外へはみ出した、明るい色の輪切り
+    out.push(rod(from.clone().addScaledVector(dir, -0.012 / dir.length()), from, r * 0.85, CUT_COLOR));
+    if (rand() < 0.5) {
+      // 枝を払った跡の短い出っ張り
+      const at = from.clone().addScaledVector(dir, 0.3 + rand() * 0.25);
+      const stub = new THREE.Vector3(sx, 0.6, sz).normalize().multiplyScalar(0.06 + rand() * 0.03);
+      out.push(rod(at, at.clone().add(stub), r * 0.4, wood));
+    }
+  }
+  // 灰の上に転がる、燃え残りの小枝
+  for (let i = 0; i < FIRE_TWIGS; i++) {
+    const a = rand() * Math.PI * 2;
+    const d = 0.08 + rand() * 0.12;
+    const at = new THREE.Vector3(Math.sin(a) * d, 0.035, Math.cos(a) * d);
+    const t = a + Math.PI / 2 + wobble(rand, 0.6);
+    const half = new THREE.Vector3(Math.sin(t), 0, Math.cos(t)).multiplyScalar(0.08 + rand() * 0.05);
+    out.push(rod(at.clone().sub(half), at.clone().add(half), 0.012, i === 0 ? CHAR_COLOR : PALETTE.bark));
   }
   return out;
 }
 
-/** 階段の当たり判定：-Z へ向かって上る4段（凸包にするのでなめらかな坂になる） */
+/** 階段の当たり判定の箱：-Z へ向かって上る段（2マス分。置ける場所・積む高さ・底面の大きさに使う。歩く面は stairRamp()） */
 function stairParts(): Part[] {
-  const steps = 4;
-  const depth = CELL / steps;
-  return Array.from({ length: steps }, (_, i): Part => [CELL, (WALL_H / steps) * (i + 1), depth, 0, 0, CELL / 2 - depth * (i + 0.5)]);
+  const depth = STAIR_LEN / STAIR_STEPS;
+  return Array.from({ length: STAIR_STEPS }, (_, i): Part => [CELL, (WALL_H / STAIR_STEPS) * (i + 1), depth, 0, 0, STAIR_LEN / 2 - depth * (i + 0.5)]);
+}
+
+/**
+ * 階段の歩く面：踏み板の真ん中を通る坂と、奥の平らな踊り場の凸包。
+ * 段の箱の凸包だと、手前に段差（1段の高さ）が立ち、坂も踏み板の角を通って急になるので、
+ * 坂を踏み板の奥行きの半分だけ下げて、手前の段差を自動で上れる高さにする
+ */
+function stairRamp(): number[] {
+  const steps = stairParts();
+  const [, rise, depth] = steps[0];
+  const slope = rise / depth;
+  const lip = rise - (STAIR_TREAD_D / 2) * slope; // 手前の段差の高さ
+  const top = WALL_H;
+  const h = STAIR_LEN / 2;
+  const topZ = h - (top - lip) / slope; // 坂が踊り場の高さに届く所
+  const pts: number[] = [];
+  for (const x of [-CELL / 2, CELL / 2]) pts.push(x, 0, h, x, 0, -h, x, lip, h, x, top, topZ, x, top, -h);
+  return pts;
 }
 
 /** 入口のある壁の当たり判定：左右の柱と、入口の上の梁 */
 function doorwayParts(): Part[] {
-  const side = (CELL - DOOR_W) / 2;
+  const side = (CELL + WALL_T - DOOR_W) / 2; // 入口の脇の壁の幅（両端は角の柱の外側まで）
   const x = DOOR_W / 2 + side / 2;
   return [
     [side, WALL_H, WALL_T, -x, 0, 0],
@@ -551,10 +672,11 @@ export const PIECES: PieceDef[] = [
   define({ id: 'workbench', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: blueprint }),
   define({ id: 'draftingTable', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: draftingDetails }),
   define({ id: 'floor', snap: 'cell', color: PALETTE.trunk, look: floorLook, collision: [[CELL, FLOOR_H, CELL, 0, 0, 0]], platform: true, hp: 8 }),
-  define({ id: 'wall', snap: 'edge', color: PALETTE.trunk, look: wallLook, collision: [[CELL, WALL_H, WALL_T, 0, 0, 0]], platform: false, hp: 10 }),
-  define({ id: 'doorway', snap: 'edge', color: PALETTE.trunk, look: doorwayLook, collision: doorwayParts(), platform: false, hp: 10 }),
-  define({ id: 'fence', snap: 'edge', color: PALETTE.trunk, look: fenceLook, collision: [[CELL, 1, FENCE_T, 0, 0, 0]], platform: false, hp: 4 }),
-  define({ id: 'stairs', snap: 'cell', color: PALETTE.trunk, look: stairsLook, collision: stairParts(), ramp: true, platform: false, hp: 8 }),
+  define({ id: 'wall', snap: 'edge', color: PALETTE.trunk, look: wallLook, collision: [[CELL + WALL_T, WALL_H, WALL_T, 0, 0, 0]], platform: false, hp: 10, wood: true }),
+  define({ id: 'doorway', snap: 'edge', color: PALETTE.trunk, look: doorwayLook, collision: doorwayParts(), platform: false, hp: 10, wood: true }),
+  define({ id: 'pillar', snap: 'corner', color: PALETTE.trunk, look: pillarLook, collision: [[PILLAR_W, WALL_H, PILLAR_W, 0, 0, 0]], legs: PILLAR_LEGS, platform: false, hp: 8 }),
+  define({ id: 'fence', snap: 'edge', color: PALETTE.trunk, look: fenceLook, collision: [[CELL + FENCE_T, 1, FENCE_T, 0, 0, 0]], platform: false, hp: 4 }),
+  define({ id: 'stairs', snap: 'cell', color: PALETTE.trunk, look: stairsLook, collision: stairParts(), ramp: stairRamp(), cells: STAIR_CELLS, platform: false, hp: 8 }),
   define({
     id: 'foundation',
     snap: 'cell',
@@ -582,11 +704,16 @@ export function pieceDef(id: string): PieceDef | undefined {
   return PIECE_BY_ID.get(id);
 }
 
+/** 置いた部材を描くマテリアル（木目を重ねる部材は woodVertex()） */
+export function pieceMaterial(def: PieceSpec): THREE.Material {
+  return def.wood ? woodVertex() : flatVertex();
+}
+
 /** アイコン用の部材のモデル。脚は地面に埋まる部分なので描かない */
 export function pieceIconModel(id: PieceId): THREE.Object3D {
   const def = PIECE_BY_ID.get(id)!;
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(mergeLooks(def.look(lookRand(id, 0))), flatVertex()));
+  g.add(new THREE.Mesh(mergeLooks(def.look(lookRand(id, 0))), pieceMaterial(def)));
   if (def.details) g.add(def.details());
   g.rotation.set(id === 'campfire' ? 0.7 : 0.45, id === 'stairs' ? 2.4 : -0.6, 0);
   return g;

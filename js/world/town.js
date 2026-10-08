@@ -61,6 +61,16 @@ const LAMP_INTENSITY = 5; // 灯っているときの明かりの強さ
 const LAMP_RANGE = 12; // 明かりがとどく距離
 const PIER_SEED = 31337; // 桟橋の板のばらつきを決める乱数のシード
 const STONE_SEED = 4242; // 石の大きさ・色のばらつきを決める乱数のシード
+/** 海図の模型に描く、街のおおまかな間取り（広場・突堤・建物の真ん中） */
+export const TOWN_PLAN = {
+    plaza: { x0: QUAY_X, x1: PLAZA_EAST, halfZ: PLAZA_HALF, top: QUAY_TOP },
+    jetty: { x0: JETTY_END, x1: QUAY_X, z: JETTY_Z, half: JETTY_HALF },
+    buildings: [
+        { x: HOUSE_X, z: HOUSE_Z },
+        { x: MAP_SHOP_X, z: MAP_SHOP_Z },
+    ],
+    stall: { x: STALL_X, z: STALL_Z },
+};
 function townRaw(x, z) {
     const dx = x - ISLE_X;
     const r = Math.hypot(dx, z);

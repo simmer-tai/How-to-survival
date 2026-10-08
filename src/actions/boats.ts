@@ -6,11 +6,11 @@ import { waveOffset } from '../core/waves.js';
 import type { BoatCommand, BoatRequest, Requester } from '../core/commands.js';
 import type { Inventory } from '../items/inventory.js';
 import { BOAT_H, BOAT_SEAT, buildBoatModel, buildBoatOpening } from '../items/itemModels.js';
-import { WORLD_SIZE, islandField, terrainHeight, type HeightField } from '../world/terrain.js';
+import { islandField, terrainHeight, type HeightField } from '../world/terrain.js';
 import { townField } from '../world/town.js';
 import { locationDef, toLocation, type LocationId } from '../world/location.js';
 
-const BOAT_SCALE = 3.2; // アイテムのモデル（長さ 1）を何倍にして浮かべるか（長さ約 3.2、人が2人乗れるくらい）
+export const BOAT_SCALE = 3.2; // アイテムのモデル（長さ 1）を何倍にして浮かべるか（長さ約 3.2、人が2人乗れるくらい）
 const DRAFT = 0.28; // 船底が水面より沈む深さ
 const MIN_DEPTH = 0.45; // 船の下の水の深さがこれ以上ないと浮かべられない（波の谷で底に着かないように）
 const PLACE_REACH = 7; // 視線の先、この距離までの水面に浮かべられる
@@ -28,14 +28,14 @@ const TURN_ACCEL = 4; // 向きを変える速さが目標に近づく速さ
 const BUMP_SLOW = 3; // 岸や岩をこすって進むときに速さが落ちる割合（毎秒）
 const MOVE_DEPTH = DRAFT + 0.04; // 漕いで進める水の深さの下限（これより浅い所には乗り上げずに止まる）
 const MOVE_CLEAR = 0.5; // 漕いで進むとき、水面からこの高さまでに物がないか調べる（低い桟橋の下はくぐれない）
-const MOVE_BOUND = WORLD_SIZE / 2 - 6; // 世界の端からこれだけ内側までしか漕いでいけない
+const MOVE_MARGIN = 6; // 場所の端からこれだけ内側までしか漕いでいけない
 const SIT_EYE = 0.8; // 座ったときの、座り板から目までの高さ
 const STEP_OFF = 0.8; // 船から降りるとき、船の縁からこれだけ離れた所に降りる
 const LAND_MIN = -0.6; // 降りる先の地面が水面からこの高さより上なら、そこに立つ（それより深ければ水に降りる）
 const SWIM_FEET = -1.3; // 水に降りるときの、水面からの足元の高さ
-const MAP_EDGE = WORLD_SIZE / 2 - 10; // ここより外へ漕ぎ出すと海図を開く（MOVE_BOUND より内側）
-const EDGE_RESET = 4; // 海図を閉じたあと、MAP_EDGE よりこれだけ内側へ戻るまでは、また開かない
-const ARRIVE_OUT = WORLD_SIZE / 2 - 18; // 別の場所へ渡ったとき、その場所の中心からこれだけ離れた沖に着く（MAP_EDGE - EDGE_RESET より内側）
+const MAP_MARGIN = 10; // 場所の端からこれだけ内側の線より外へ漕ぎ出すと海図を開く（MOVE_MARGIN より内側）
+const EDGE_RESET = 4; // 海図を閉じたあと、海図を開く線よりこれだけ内側へ戻るまでは、また開かない
+const ARRIVE_MARGIN = 18; // 別の場所へ渡ったとき、その場所の端からこれだけ内側の沖に着く（海図を開く線 - EDGE_RESET より内側）
 const ARRIVE_GAP = 5; // 着いた所にほかの船があれば、これだけ横にずらす
 const ARRIVE_CLEAR = 4.5; // 着いた所から、ほかの船の中心がこれより近ければ重なるとみなす
 const STEP_LIFT = 0.2; // 降りるとき、足元を地面からこれだけ浮かせて置く（斜面に体が引っかからないように。すぐ着地する）
@@ -91,7 +91,7 @@ function toWorld(x: number, z: number, yaw: number, lx: number, lz: number): [nu
 }
 
 /** (x, z) に yaw の向きで浮かぶ船の、波に合わせた位置と向き（波は時刻から決まるので、誰の画面でも同じ動きになる） */
-function floatPose(x: number, z: number, yaw: number, pos: THREE.Vector3, rot: THREE.Quaternion): void {
+export function floatPose(x: number, z: number, yaw: number, pos: THREE.Vector3, rot: THREE.Quaternion): void {
   const at = (lx: number, lz: number) => waveOffset(...toWorld(x, z, yaw, lx, lz));
   const bow = at(SIZE.halfL, 0);
   const stern = at(-SIZE.halfL, 0);
@@ -111,7 +111,7 @@ function floatPose(x: number, z: number, yaw: number, pos: THREE.Vector3, rot: T
 const lidMat = new THREE.MeshBasicMaterial({ colorWrite: false, transparent: true, side: THREE.DoubleSide });
 
 /** 浮かべた船の見た目。影を落とす。lid なら船の口に見えない蓋をして、中に海の水面が見えないようにする */
-function boatObject(lid: boolean): THREE.Group {
+export function boatObject(lid: boolean): THREE.Group {
   const g = new THREE.Group();
   const model = buildBoatModel();
   model.scale.setScalar(BOAT_SCALE);
@@ -471,17 +471,18 @@ export class Boats {
     const dir = new THREE.Vector2(fx - tx, fz - tz).normalize(); // 海図の右が +X、下が +Z
     const yaw = Math.atan2(dir.y, -dir.x); // 中心へ（-dir の向きへ）舳先を向ける
     const others = [...this.boats.values()].filter((o) => o !== b && o.loc === to);
+    const out = this.fieldOf(to).half - ARRIVE_MARGIN;
     for (let k = 0; ; k++) {
       const shift = Math.ceil(k / 2) * (k % 2 === 0 ? 1 : -1) * ARRIVE_GAP; // 0, -1, +1, -2, +2 … 個分ずらす
-      const x = dir.x * ARRIVE_OUT - dir.y * shift;
-      const z = dir.y * ARRIVE_OUT + dir.x * shift;
+      const x = dir.x * out - dir.y * shift;
+      const z = dir.y * out + dir.x * shift;
       if (k > 20 || others.every((o) => Math.hypot(o.x - x, o.z - z) > ARRIVE_CLEAR)) return { p: [x, z], yaw };
     }
   }
 
   /** 漕いでいる船が (x, z)・yaw へ進めないか（浅瀬・岩・桟橋・世界の端） */
   private moveBlocked(b: Boat, x: number, z: number, yaw: number): boolean {
-    if (Math.max(Math.abs(x), Math.abs(z)) > MOVE_BOUND) return true;
+    if (Math.max(Math.abs(x), Math.abs(z)) > this.fieldOf(b.loc).half - MOVE_MARGIN) return true;
     return this.blockedAt(x, z, yaw, MOVE_DEPTH, MOVE_CLEAR, COLLIDE.boatMove, b.collider) !== null;
   }
 
@@ -525,12 +526,13 @@ export class Boats {
 
     // 世界の端まで来たら、海図を開いてほかの場所へ渡れるようにする
     const out = Math.max(Math.abs(b.x), Math.abs(b.z));
-    if (out > MAP_EDGE && this.edgeReady) {
+    const edge = this.fieldOf(b.loc).half - MAP_MARGIN;
+    if (out > edge && this.edgeReady) {
       this.edgeReady = false;
       ride.speed = 0;
       ride.turn = 0;
       this.onEdge();
-    } else if (out < MAP_EDGE - EDGE_RESET) {
+    } else if (out < edge - EDGE_RESET) {
       this.edgeReady = true;
     }
   }

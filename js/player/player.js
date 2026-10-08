@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
-import { WORLD_SIZE, terrainHeight } from '../world/terrain.js';
-import { RAPIER, COLLIDE, WATER_LEVEL } from '../core/physics.js';
-import { waveOffset } from '../core/waves.js';
+import { placeHalf, terrainHeight } from '../world/terrain.js';
+import { RAPIER, COLLIDE, WATER_LEVEL, seaSurface } from '../core/physics.js';
 const EYE_HEIGHT = 1.7;
 const BODY_RADIUS = 0.4;
 const BODY_HALF = 0.5; // カプセルの円柱部分の半分（全高 = 2 × (0.5 + 0.4) = 1.8）
@@ -11,8 +10,8 @@ const CROUCH_HALF = 0.15; // しゃがんだときの円柱部分の半分（全
 const CROUCH_DROP = 0.65; // しゃがんだときに目線が下がる量（目の高さ 1.05）
 const CROUCH_SPEED = 2.8;
 const MASS = 60; // 木材や丸太を押すときの重さ
-const WALK_SPEED = 6;
-const RUN_SPEED = 11;
+const WALK_SPEED = 5.2;
+const RUN_SPEED = 8.2;
 const JUMP_SPEED = 8.5;
 const GRAVITY = 26;
 const SWIM_DEPTH = 1.25; // 足元がこれより深く水に浸かると泳ぎになる
@@ -23,8 +22,16 @@ const CLIMB_REACH = 2.6; // 水面から手が届く段差の高さ（足元か�
 const SNAP = 0.5;
 const EYE_SMOOTH = 14; // 地面を歩くときの視点の高さの追従の速さ。地面の面の継ぎ目で視点がカクつかないようにする
 const EYE_LAG_MAX = 0.3; // 視点の高さが体から遅れてよい最大の量
+const CLIMB_ANGLE = 52; // 歩いて上れる斜面の最大（度）。木の階段の坂（約 50°）より少し大きくする
 const SLIDE_ANGLE = 75; // これ以上急な斜面には立っていられず滑り落ちる（度）
 const SLIDE_COS = Math.cos(THREE.MathUtils.degToRad(SLIDE_ANGLE));
+const CLIMB_COS = Math.cos(THREE.MathUtils.degToRad(CLIMB_ANGLE));
+const GROUND_PROBE_UP = 0.3; // 足元の面を調べる光線を、足元からどれだけ上から飛ばすか
+const GROUND_PROBE_DOWN = 0.6; // 足元からどれだけ下まで調べるか
+const STEP_HEIGHT = 0.5; // 歩いたままひとりでに上れる段差の高さ（m。これより高いと跳ぶ）
+const STEP_BLOCKED = 0.95; // 進もうとした量のこの割合も進めなかったら、段差に引っかかったとみなす（低い段は坂として上らされて遅くなるだけなので、少しの減速でも調べる）
+const STEP_SKIN = 0.02; // 段差を調べるとき、まわりの物との間にあける隙間
+const NO_TURN = { x: 0, y: 0, z: 0, w: 1 };
 const UP = new THREE.Vector3(0, 1, 0);
 export class Player {
     physics;
@@ -46,6 +53,8 @@ export class Player {
     surface = WATER_LEVEL;
     /** 船に座っているか（座っている間は自分では動かず、目の位置は船が決める） */
     seated = false;
+    /** 直前に立っていた面の法線（坂を上るときに、動く向きを坂に沿わせる） */
+    ground = null;
     body;
     collider;
     mover;
@@ -61,9 +70,9 @@ export class Player {
         this.body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(spawn.x, spawn.y + BODY_CENTER, spawn.z));
         this.collider = world.createCollider(RAPIER.ColliderDesc.capsule(BODY_HALF, BODY_RADIUS).setCollisionGroups(COLLIDE.player), this.body);
         this.mover = world.createCharacterController(0.02);
-        this.mover.enableAutostep(0.45, 0.2, true);
+        this.mover.enableAutostep(STEP_HEIGHT, 0.2, true);
         this.mover.enableSnapToGround(SNAP);
-        this.mover.setMaxSlopeClimbAngle(THREE.MathUtils.degToRad(50));
+        this.mover.setMaxSlopeClimbAngle(THREE.MathUtils.degToRad(CLIMB_ANGLE));
         this.mover.setMinSlopeSlideAngle(THREE.MathUtils.degToRad(SLIDE_ANGLE));
         this.mover.setApplyImpulsesToDynamicBodies(true);
         this.mover.setCharacterMass(MASS);
@@ -111,6 +120,10 @@ export class Player {
     /** 地面を歩いて（走って）いるか */
     get walking() {
         return this.onGround && !this.swimming && Math.hypot(this.velocity.x, this.velocity.z) > 0.5;
+    }
+    /** 手元の揺れ（HandSway）に渡す体の動き */
+    sway() {
+        return { velocity: this.velocity, grounded: this.onGround && !this.swimming && !this.seated, swimming: this.swimming, stepPhase: this.bobPhase };
     }
     /** しゃがんでいるか */
     get isCrouching() {
@@ -203,7 +216,7 @@ export class Player {
         const wantCrouch = input && this.keys.has('KeyC');
         const running = input && !this.crouched && (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'));
         const feet = this.position.y - EYE_HEIGHT;
-        this.surface = WATER_LEVEL + waveOffset(this.position.x, this.position.z);
+        this.surface = seaSurface(this.position.x, this.position.z); // 洞窟の中は水が来ないので -Infinity
         const submerged = this.surface - feet;
         const wasSwimming = this.swimming;
         // 浅瀬に足が着いている間は歩き、それより深いと泳ぐ
@@ -232,6 +245,14 @@ export class Player {
         // 下へ押すと、平らな箱（床など）の上で引っかかって横の動きまで止まる
         if (this.onGround && !this.swimming && desired.y < 0)
             desired.y = 0;
+        // 上り坂では動く向きを坂に沿わせる。水平に押すと坂に沿って滑らされ、急な坂ほど遅くなる（50° で4割ほど）。
+        // 坂に沿わせて、水平の速さは平らな所と同じにする
+        const n = this.ground;
+        if (this.onGround && !this.swimming && desired.y === 0 && n && n.y >= CLIMB_COS && n.y < 0.999) {
+            const rise = -(n.x * desired.x + n.z * desired.z) / n.y;
+            if (rise > 0)
+                desired.y = rise;
+        }
         const wasGrounded = this.onGround;
         this.mover.computeColliderMovement(this.collider, desired, undefined, COLLIDE.player);
         const m = this.mover.computedMovement();
@@ -240,6 +261,12 @@ export class Player {
         const support = this.swimming ? null : this.supportNormal();
         const sliding = support !== null && support.y < SLIDE_COS;
         this.onGround = this.mover.computedGrounded() && !sliding;
+        // 低い段差に引っかかって進めなかったら、段の上へ持ち上げて歩き続ける（Rapier の autostep は取りこぼすことがある）
+        const step = wasGrounded && !this.swimming && !sliding && this.velocity.y <= 0 ? this.stepUp(desired, moved) : null;
+        if (step) {
+            moved.copy(step);
+            this.onGround = true;
+        }
         // 立っていられる斜面では、重力が斜面に沿って流されて横へずれる分を捨てる。
         // 水平に動く量を入力した分までに抑え、高さも同じ割合で縮める（止まっていれば動かない）
         if (wasGrounded && this.onGround && this.velocity.y <= 0) {
@@ -267,6 +294,7 @@ export class Player {
         this.position.x += moved.x;
         this.position.y += moved.y;
         this.position.z += moved.z;
+        this.ground = this.onGround && !this.swimming ? this.groundNormal() : null;
         // 体の大きさは移動を計算し終えてから変える（次の物理ステップで新しい位置に収まる）
         if (wantCrouch && !this.swimming && !this.crouched)
             this.setCrouched(true);
@@ -380,6 +408,57 @@ export class Player {
         this.velocity.y = THREE.MathUtils.damp(this.velocity.y, target.y, 4, dt);
         this.velocity.z = THREE.MathUtils.damp(this.velocity.z, target.z, 4, dt);
     }
+    /**
+     * 進もうとした向き（desired）に STEP_HEIGHT 以下の段差があって、実際の移動（moved）が止められていたら、
+     * 段の上に乗る移動を返す（段差でなければ null）。体を持ち上げ、前へ進め、下ろして段の上面を探す
+     */
+    stepUp(desired, moved) {
+        const want = Math.hypot(desired.x, desired.z);
+        const got = Math.hypot(moved.x, moved.z);
+        if (want < 1e-4 || got > want * STEP_BLOCKED)
+            return null;
+        const { world } = this.physics;
+        const shape = new RAPIER.Capsule(this.crouched ? CROUCH_HALF : BODY_HALF, BODY_RADIUS - STEP_SKIN);
+        const cast = (from, dir, max) => world.castShape(from, NO_TURN, dir, shape, 0, max, false, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, COLLIDE.player, this.collider);
+        const center = { x: this.position.x, y: this.position.y - EYE_HEIGHT + this.bodyCenter, z: this.position.z };
+        // 頭の上が空いている分だけ持ち上げる
+        const above = cast(center, { x: 0, y: 1, z: 0 }, STEP_HEIGHT);
+        const lift = above ? above.time_of_impact - STEP_SKIN : STEP_HEIGHT;
+        if (lift < 0.05)
+            return null;
+        // 持ち上げた高さで前へ進めるか（進めなければ段差でなく壁）
+        const dir = { x: desired.x / want, y: 0, z: desired.z / want };
+        const raised = { x: center.x, y: center.y + lift, z: center.z };
+        const ahead = cast(raised, dir, want);
+        const fwd = ahead ? ahead.time_of_impact - STEP_SKIN : want;
+        if (fwd <= got + 1e-3)
+            return null; // 持ち上げても先へ進めない
+        // 前へ進んだ所から下ろして、段の上面に乗るか
+        const over = { x: raised.x + dir.x * fwd, y: raised.y, z: raised.z + dir.z * fwd };
+        const below = cast(over, { x: 0, y: -1, z: 0 }, lift);
+        if (!below)
+            return null; // 下に何もない（段差ではない）
+        const rise = lift - below.time_of_impact;
+        if (rise < 0.005)
+            return null;
+        // 体の丸い底は段の角に当たるので、体の前の端から真下へ光線を飛ばし、段の上面が立てる向きか調べる
+        const feet = this.position.y - EYE_HEIGHT + rise;
+        const edge = new RAPIER.Ray({ x: over.x + dir.x * BODY_RADIUS * 0.9, y: feet + STEP_HEIGHT, z: over.z + dir.z * BODY_RADIUS * 0.9 }, { x: 0, y: -1, z: 0 });
+        const top = world.castRayAndGetNormal(edge, STEP_HEIGHT + 0.1, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, COLLIDE.player, this.collider);
+        if (!top || top.normal.y < CLIMB_COS)
+            return null;
+        return new THREE.Vector3(dir.x * fwd, rise, dir.z * fwd);
+    }
+    /**
+     * 足元の真下にある面の法線（なければ null）。坂に沿って動けたフレームは面に触れず、
+     * 触れた面（computedCollision）からは分からないので、真下へ光線を飛ばして調べる
+     */
+    groundNormal() {
+        const feet = this.position.y - EYE_HEIGHT;
+        const ray = new RAPIER.Ray({ x: this.position.x, y: feet + GROUND_PROBE_UP, z: this.position.z }, { x: 0, y: -1, z: 0 });
+        const hit = this.physics.world.castRayAndGetNormal(ray, GROUND_PROBE_UP + GROUND_PROBE_DOWN, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, COLLIDE.player, this.collider);
+        return hit ? new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z) : null;
+    }
     /** 直前の移動で触れた面のうち、いちばん平らな床の法線（床に触れていなければ null） */
     supportNormal() {
         let best = null;
@@ -395,7 +474,7 @@ export class Player {
         return best;
     }
     inBounds(x, z) {
-        const limit = WORLD_SIZE / 2 - 2;
+        const limit = placeHalf() - 2;
         return Math.abs(x) <= limit && Math.abs(z) <= limit;
     }
 }

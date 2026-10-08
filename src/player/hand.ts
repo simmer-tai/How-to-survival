@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { woodPiece } from '../items/drops.js';
-import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildDirtModel, type BlueprintKind } from '../items/itemModels.js';
+import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildDirtModel, buildTorchModel, type BlueprintKind } from '../items/itemModels.js';
 import { FISH_KINDS, type FishId } from '../items/fishKinds.js';
 import { perLandInfo, type LandKind } from '../items/landInfo.js';
-import { HandModel, type HandAnchor, type HandPoseName, type Vec3 } from './handModel.js';
+import { HandModel, HAND_POSES, type HandAnchor, type HandPoseName, type Vec3 } from './handModel.js';
 import { pieceIconModel } from '../actions/pieces.js';
 
 /** 腕を伸ばす向き（カメラ基準）。どの持ち方でも、画面の右下手前から手へまっすぐ腕が伸びる */
@@ -37,6 +37,22 @@ const SWING_KEYS: SwingKey[] = [
   { t: 0.52, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構えに戻る
 ];
 const IMPACT_AT = 0.25; // 振り下ろしきって当たるタイミング（秒）
+/**
+ * 持ち替えたときの握りの動き（drawFlip のとき）。道具は最初から宙にあり、画面の下から回りながら上がってくる。
+ * 開いた手を下から差し出して待ち、落ちてきたところを受け止める
+ */
+const FLIP_KEYS: SwingKey[] = [
+  { t: 0, pos: [0, -0.25, 0.08], rot: [0.3, 0, 0], ease: 'smooth' }, // 画面の下
+  { t: 0.22, pos: [0, 0.01, 0], rot: [0, 0, 0], ease: 'out' }, // 手を差し出して待つ
+  { t: 0.5, pos: [0, 0.01, 0], rot: [0, 0, 0], ease: 'smooth' }, // 落ちてくる道具を待つ
+  { t: 0.58, pos: [0, -0.05, 0.02], rot: [0.12, 0, 0], ease: 'out' }, // 受け止めて沈む
+  { t: 0.78, pos: [0, 0, 0], rot: [0, 0, 0], ease: 'smooth' }, // 構えに戻る
+];
+const FLIP_SPEED = 1.5; // 持ち替えの動きを再生する速さ（1 で FLIP_KEYS の秒数どおり）
+const FLIP_CATCH = 0.5; // 道具を受け止める時間（秒）。それまでは宙を飛んでいる
+const FLIP_FROM = -0.45; // 飛びはじめの道具の高さ（握りから。画面の下）
+const FLIP_ARC = 1.7; // 放物線のふくらみ（大きいほど高く上がる。1.7 で握りの約0.23m上まで）
+const FLIP_CENTER = 0.28; // 宙で回る中心の高さ（握りから柄に沿って。重い頭のほうへ寄せる）
 /** 斧・ハンマー・ナイフ・ツルハシの、肩の上から振り下ろす動き */
 const CHOP_MOTION: SwingMotion = { keys: SWING_KEYS, impactAt: IMPACT_AT };
 /** 槍の、いったん手元へ引いてから前へまっすぐ突き出す動き（槍は前へ水平近くに構えたまま、向きを変えずに押し出す） */
@@ -55,6 +71,17 @@ const SHOULDER_DIST = 0.55;
 const HAMMER_HEAD_Y = 0.4; // ハンマーの頭の高さ（握りから）
 const HAMMER_HEAD_R = 0.07; // ハンマーの頭の太さ
 const HAMMER_HEAD_L = 0.24; // ハンマーの頭の長さ
+
+/** キーフレームの t 秒の、握りの移動と回転 */
+function sampleKeys(keys: SwingKey[], t: number): [Vec3, Vec3] {
+  let i = 1;
+  while (i < keys.length - 1 && t > keys[i].t) i++;
+  const a = keys[i - 1];
+  const b = keys[i];
+  const k = ease(THREE.MathUtils.clamp((t - a.t) / (b.t - a.t), 0, 1), b.ease);
+  const mix = (p: Vec3, q: Vec3): Vec3 => [0, 1, 2].map((j) => THREE.MathUtils.lerp(p[j], q[j], k)) as Vec3;
+  return [mix(a.pos, b.pos), mix(a.rot, b.rot)];
+}
 
 function ease(k: number, e: Ease): number {
   if (e === 'out') return 1 - (1 - k) * (1 - k);
@@ -133,7 +160,6 @@ export function buildAxe(): THREE.Group {
   g.add(new THREE.Mesh(new THREE.TubeGeometry(haft, 8, 0.024, 6, false), flat(PALETTE.trunk)));
   g.add(part(new THREE.CylinderGeometry(0.025, 0.025, 0.01, 6), PALETTE.trunk, 0, 0.55, 0)); // 柄の先のふた
   g.add(part(new THREE.CylinderGeometry(0.04, 0.03, 0.05, 6), PALETTE.trunk, 0, -0.205, 0.03)); // 柄尻
-  g.add(part(new THREE.CylinderGeometry(0.031, 0.031, 0.15, 6), PALETTE.accent, 0, -0.04, 0.002)); // 握りの布
 
   // 石の斧頭と、柄に縛りつけるつる。形の +u を -Z（刃の向き）へ回す
   const head = new THREE.Group();
@@ -166,7 +192,6 @@ export function buildHammer(): THREE.Group {
   const g = new THREE.Group();
   g.add(part(new THREE.CylinderGeometry(0.022, 0.026, 0.62, 6), PALETTE.trunk, 0, 0.1, 0)); // 柄
   g.add(part(new THREE.CylinderGeometry(0.036, 0.03, 0.04, 6), PALETTE.trunk, 0, -0.21, 0)); // 柄尻
-  g.add(part(new THREE.CylinderGeometry(0.031, 0.031, 0.15, 6), PALETTE.accent, 0, -0.04, 0)); // 握りの布
 
   // 丸太を切った頭。両端に帯を巻く
   const head = new THREE.Group();
@@ -247,7 +272,6 @@ export function buildSpear(): THREE.Group {
   const g = new THREE.Group();
   const len = SPEAR_SHAFT_TOP - SPEAR_SHAFT_BOTTOM;
   g.add(part(new THREE.CylinderGeometry(SPEAR_SHAFT_R * 0.9, SPEAR_SHAFT_R, len, 6), PALETTE.trunk, 0, (SPEAR_SHAFT_TOP + SPEAR_SHAFT_BOTTOM) / 2, 0)); // 柄
-  g.add(part(new THREE.CylinderGeometry(SPEAR_SHAFT_R + 0.006, SPEAR_SHAFT_R + 0.006, 0.15, 6), PALETTE.bark, 0, -0.04, 0)); // 握りに巻いたツル
 
   // 穂先：石のナイフの握りの部分を柄の先に重ねる
   const tip = part(buildStoneKnifeGeometry(), PALETTE.rock, 0, SPEAR_SHAFT_TOP, 0);
@@ -315,7 +339,6 @@ export function buildPickaxe(): THREE.Group {
   const g = new THREE.Group();
   g.add(part(new THREE.CylinderGeometry(0.022, 0.026, 0.68, 6), PALETTE.trunk, 0, 0.13, 0)); // 柄
   g.add(part(new THREE.CylinderGeometry(0.038, 0.03, 0.05, 6), PALETTE.trunk, 0, -0.205, 0)); // 柄尻
-  g.add(part(new THREE.CylinderGeometry(0.031, 0.031, 0.15, 6), PALETTE.accent, 0, -0.04, 0)); // 握りの布
 
   // 石の頭と、柄に縛りつけるつる。形の +u を -Z へ回す
   const head = new THREE.Group();
@@ -338,6 +361,36 @@ export function buildPickaxe(): THREE.Group {
       s.rotation.z = tilt;
       head.add(s);
     }
+  }
+  g.add(head);
+  return g;
+}
+
+const HOE_HEAD_Y = 0.5; // くわの刃を縛りつける高さ（握りから）
+const HOE_BLADE_TILT = 0.35; // くわの刃を柄のほうへ倒す角度（rad）
+const HOE_HAFT_TOP = 0.07; // 刃の板を貫いた柄の先が、刃の上へ出る長さ
+
+/** 木のくわ。木材を平たく削った板の刃に枝の柄を貫通させ、刃を前（-Z）へ突き出す。原点が握りの位置 */
+export function buildHoe(): THREE.Group {
+  const g = new THREE.Group();
+  const haftTop = HOE_HEAD_Y + HOE_HAFT_TOP;
+  const haftBottom = -0.18;
+  g.add(part(new THREE.CylinderGeometry(0.02, 0.026, haftTop - haftBottom, 6), PALETTE.trunk, 0, (haftTop + haftBottom) / 2, 0)); // 柄（刃の板を貫く）
+  g.add(part(new THREE.CylinderGeometry(0.038, 0.03, 0.05, 6), PALETTE.trunk, 0, -0.205, 0)); // 柄尻
+  const head = new THREE.Group();
+  head.position.y = HOE_HEAD_Y;
+  // 柄が通る穴のある後ろの端から、前へ突き出した平たい板の刃（削ったばかりの明るい木肌）
+  const blade = new THREE.Group();
+  blade.rotation.x = HOE_BLADE_TILT;
+  blade.add(part(new THREE.BoxGeometry(0.13, 0.03, 0.26), PALETTE.sand, 0, 0, -0.08));
+  blade.add(part(new THREE.BoxGeometry(0.15, 0.022, 0.04), PALETTE.sand, 0, -0.004, -0.2)); // 少し広がった刃先
+  head.add(blade);
+  // 刃の板の下で柄に巻いたつる（刃が下へずれないように留める）
+  const ring = new THREE.TorusGeometry(0.028, 0.009, 4, 8);
+  for (const y of [-0.05, -0.035]) {
+    const r = part(ring, PALETTE.bark, 0, y, 0);
+    r.rotation.x = Math.PI / 2;
+    head.add(r);
   }
   g.add(head);
   return g;
@@ -451,7 +504,6 @@ export function buildShovel(): THREE.Group {
   ]);
   g.add(new THREE.Mesh(new THREE.TubeGeometry(haft, 8, SHOVEL_HAFT_R, 6, false), flat(PALETTE.trunk)));
   g.add(part(new THREE.CylinderGeometry(0.038, 0.03, 0.05, 6), PALETTE.trunk, 0, -0.215, 0.015)); // 柄尻
-  g.add(part(new THREE.CylinderGeometry(0.031, 0.031, 0.15, 6), PALETTE.accent, 0, -0.04, 0.002)); // 握りの布
 
   // 刃。柄の先が刃の裏に来るよう、刃を前へずらす
   const head = new THREE.Group();
@@ -526,7 +578,6 @@ export function buildFishingRodRig(): FishingRodRig {
   parent.add(tip);
 
   root.add(part(new THREE.CylinderGeometry(ROD_BASE_R, ROD_BASE_R, 0.01, 6), PALETTE.trunk, 0, -ROD_BUTT, 0)); // 竿尻のふた
-  root.add(part(new THREE.CylinderGeometry(0.03, 0.03, 0.15, 6), PALETTE.accent, 0, -0.04, 0)); // 握りの布
   // 枝の継ぎ目と竿先に巻いたツル
   const ring = new THREE.TorusGeometry(0.019, 0.007, 4, 8);
   for (const [i, y] of [[4, -0.012], [4, 0.012], [ROD_SEGMENTS - 1, segLength * 0.85]]) {
@@ -566,43 +617,68 @@ export function buildFishingRod(): THREE.Group {
   return buildFishingRodRig().root;
 }
 
+/** カメラの子にした root を、左右反転した入れ物に入れ直して左手に持たせる（右手の構えを鏡に映す） */
+function mirrorToLeft(root: THREE.Object3D): void {
+  const camera = root.parent!;
+  const mirror = new THREE.Group();
+  mirror.scale.x = -1;
+  camera.remove(root);
+  mirror.add(root);
+  camera.add(mirror);
+}
+
 /** 一人称視点で手に持つ道具（斧・ハンマー・ナイフ・ツルハシ・釣り竿）。カメラの子として描画し、左クリックで振り下ろす */
 export class ToolHand {
   private readonly root = new THREE.Group();
   private readonly pivot = new THREE.Group();
+  /** 構えた道具の向き。握る手はここに付け、道具は spin を通して付ける */
+  private readonly frame = new THREE.Group();
+  /** 道具だけを放り上げて回す入れ物（手は止まったまま） */
+  private readonly spin = new THREE.Group();
   private swingTime = -1; // 振っていないときは負
+  private flipTime = -1; // 持ち替えの一回転をしていないときは負
   private impacted = false;
   private readonly grip: HandModel;
-  private readonly tool: THREE.Group;
   private readonly shoulder = new THREE.Vector3(); // root 基準の肩の位置
 
   /** 振り下ろしが当たるタイミングで呼ばれる */
   onImpact: () => void = () => {};
+  /** 持ち替えたときに、道具を放り上げて一回転させてから受け止める（自分の画面だけの演出） */
+  drawFlip = false;
 
   /**
    * tool は原点が握りで、柄が +Y、刃や打つ面が -Z を向いたモデル（buildAxe・buildHammer・buildStoneKnife・buildSpear・buildPickaxe・buildFishingRod）。
    * lean は構えたときに道具を前へ倒す角度（釣り竿のように長い物が画面の上へはみ出さないように）。
    * motion は左クリックで振る動き（槍は THRUST_MOTION で突く）
    */
-  constructor(camera: THREE.Camera, tool: THREE.Group, lean = 0, private readonly motion: SwingMotion = CHOP_MOTION) {
+  constructor(camera: THREE.Object3D, tool: THREE.Group, lean = 0, private readonly motion: SwingMotion = CHOP_MOTION) {
     // 画面右下に構え、振り下ろす面が照準の先（約3m）で画面中央に来るよう少し内側へ向ける
     this.root.position.set(0.48, -0.42, -0.78);
     this.root.rotation.y = Math.atan2(0.5, 3);
     // 道具そのものは刃をほぼ正面に向け、横顔が少し見える程度にひねる
-    tool.rotation.set(0.05 - lean, 0.12, 0.12);
-    // 握りの布を右手で握る。指は刃の向き（-Z）、手のひらは左を向く
+    this.frame.rotation.set(0.05 - lean, 0.12, 0.12);
+    // 柄の握りを右手で握る。指は刃の向き（-Z）、手のひらは左を向く
     const grip = new HandModel('grip');
     grip.grip([0, -0.04, 0], [0, 1, 0], [0, 0, -1]);
-    grip.pointForearm(toLocal(ARM_DIR, this.root.quaternion.clone().multiply(tool.quaternion)));
+    grip.pointForearm(toLocal(ARM_DIR, this.root.quaternion.clone().multiply(this.frame.quaternion)));
     this.grip = grip;
-    this.tool = tool;
     this.shoulder.set(...toLocal(ARM_DIR, this.root.quaternion)).multiplyScalar(SHOULDER_DIST);
-    tool.add(grip.root);
-    this.pivot.add(tool);
+    // 宙で回すときの中心を柄の途中にする（止まっているときは握りの位置に重なる）
+    this.spin.position.y = FLIP_CENTER;
+    tool.position.y = -FLIP_CENTER;
+    this.spin.add(tool);
+    this.frame.add(grip.root, this.spin);
+    this.pivot.add(this.frame);
     this.root.add(this.pivot);
     this.root.visible = false;
     toViewLayer(this.root);
     camera.add(this.root);
+  }
+
+  /** 左手に持つ（左手のマスの物を見せる。左手では振らない） */
+  toLeft(): this {
+    mirrorToLeft(this.root);
+    return this;
   }
 
   get visible(): boolean {
@@ -613,33 +689,41 @@ export class ToolHand {
     if (v === this.root.visible) return;
     this.root.visible = v;
     this.swingTime = -1;
-    this.applySwing(this.motion.keys[0].pos, this.motion.keys[0].rot);
+    this.flipTime = v && this.drawFlip ? 0 : -1;
+    if (this.flipTime >= 0) this.applyFlip(0);
+    else {
+      this.resetFlip();
+      this.applySwing(this.motion.keys[0].pos, this.motion.keys[0].rot);
+    }
   }
 
   /** 振っていないときの、構えからの握りの移動 pos と回転 rot（釣り竿を振りかぶる・魚に引かれるときに使う） */
   pose(pos: Vec3, rot: Vec3): void {
-    if (this.swingTime < 0) this.applySwing(pos, rot);
+    if (this.swingTime < 0 && this.flipTime < 0) this.applySwing(pos, rot);
   }
 
   swing(): void {
-    if (!this.root.visible || this.swingTime >= 0) return;
+    if (!this.root.visible || this.swingTime >= 0 || this.flipTime >= 0) return;
     this.swingTime = 0;
     this.impacted = false;
   }
 
   update(dt: number): void {
+    if (this.flipTime >= 0) {
+      this.flipTime += dt * FLIP_SPEED;
+      const end = FLIP_KEYS[FLIP_KEYS.length - 1].t;
+      if (this.flipTime >= end) {
+        this.flipTime = -1;
+        this.resetFlip();
+        this.applySwing([0, 0, 0], [0, 0, 0]);
+      } else this.applyFlip(this.flipTime);
+      return;
+    }
     if (this.swingTime < 0) return;
     this.swingTime += dt;
-    const keys = this.motion.keys;
-    const end = keys[keys.length - 1].t;
+    const end = this.motion.keys[this.motion.keys.length - 1].t;
     const t = Math.min(this.swingTime, end);
-    let i = 1;
-    while (i < keys.length - 1 && t > keys[i].t) i++;
-    const a = keys[i - 1];
-    const b = keys[i];
-    const k = ease((t - a.t) / (b.t - a.t), b.ease);
-    const mix = (p: Vec3, q: Vec3): Vec3 => [0, 1, 2].map((j) => THREE.MathUtils.lerp(p[j], q[j], k)) as Vec3;
-    this.applySwing(mix(a.pos, b.pos), mix(a.rot, b.rot));
+    this.applySwing(...sampleKeys(this.motion.keys, t));
 
     if (!this.impacted && t >= this.motion.impactAt) {
       this.impacted = true;
@@ -648,12 +732,29 @@ export class ToolHand {
     if (t >= end) this.swingTime = -1;
   }
 
+  /** 持ち替えの t 秒の姿。宙にある間は手を開き、道具は下から放物線を描きながら手前へ一回転する */
+  private applyFlip(t: number): void {
+    this.applySwing(...sampleKeys(FLIP_KEYS, t));
+    const flying = t < FLIP_CATCH;
+    const u = flying ? t / FLIP_CATCH : 1;
+    this.spin.position.y = FLIP_CENTER + FLIP_FROM * (1 - u) + FLIP_ARC * u * (1 - u);
+    this.spin.rotation.x = Math.PI * 2 * u;
+    this.grip.setPose(HAND_POSES[flying ? 'relaxed' : 'grip']);
+  }
+
+  /** 道具を握りに戻す */
+  private resetFlip(): void {
+    this.spin.position.y = FLIP_CENTER;
+    this.spin.rotation.x = 0;
+    this.grip.setPose(HAND_POSES.grip);
+  }
+
   /** 握りを動かし、手首から肩へ向けて腕を伸ばし直す */
   private applySwing(pos: Vec3, rot: Vec3): void {
     this.pivot.position.set(...pos);
     this.pivot.rotation.set(...rot);
     const toShoulder = this.shoulder.clone().sub(this.pivot.position);
-    const q = this.pivot.quaternion.clone().multiply(this.tool.quaternion);
+    const q = this.pivot.quaternion.clone().multiply(this.frame.quaternion);
     this.grip.pointForearm(toLocal(toShoulder.toArray(), q));
   }
 }
@@ -799,6 +900,7 @@ const HOLD_STYLES = {
   hammerBlueprint: blueprintHold('hammer'),
   fishingRodBlueprint: blueprintHold('fishingRod'),
   draftingTableBlueprint: blueprintHold('draftingTable'),
+  hoeBlueprint: blueprintHold('hoe'),
   // 白紙の地図・島の地図：設計図と同じように手のひらにのせ、紙の表が見えるようにこちらへ傾ける
   map: mapHold(buildMapModel),
   islandMap: mapHold(buildIslandMapModel),
@@ -824,6 +926,14 @@ const HOLD_STYLES = {
     scale: 0.17,
     hand: { pose: 'cup', at: [0, -0.03, 0.02], fingers: [-0.4, 0.15, -1], palm: [0, 1, 0.15], anchor: 'palm' },
   },
+  // 松明：火を上にして、柄を握ってまっすぐ立てる。何本持っていても1本だけ見せる
+  torch: {
+    build: buildTorchModel,
+    slots: [[0, 0, 0, 0, 0, 0]],
+    rotation: [0, 0, 0],
+    scale: 0.8,
+    hand: { pose: 'grip', at: [0, -0.04, 0], fingers: [-0.15, 0, -1], anchor: 'grip' },
+  },
 } satisfies Record<string, HoldStyle>;
 
 export type HeldMaterial = keyof typeof HOLD_STYLES;
@@ -835,8 +945,10 @@ const TOOL_MODELS: Record<string, () => THREE.Group> = {
   stoneKnife: buildStoneKnife,
   pickaxe: buildPickaxe,
   shovel: buildShovel,
+  hoe: buildHoe,
   spear: buildSpear,
   fishingRod: buildFishingRod,
+  torch: buildTorchModel, // 体の手には、道具と同じように柄を握らせる
 };
 
 /**
@@ -860,13 +972,12 @@ export class ItemHand {
   private readonly root = new THREE.Group();
   private readonly pieces: THREE.Object3D[] = [];
   private raise = 0; // 0→1 で持ち上がる
-  private bob = 0;
   private bump = 0; // 拾ったときに少し跳ねる（1→0）
   private count = 0;
   private eatTime = -1; // 口へ運んでいる間の経過時間（-1 なら食べていない）
   private eatDuration = 0;
 
-  constructor(camera: THREE.Camera, kind: HeldMaterial) {
+  constructor(camera: THREE.Object3D, kind: HeldMaterial) {
     const style: HoldStyle = HOLD_STYLES[kind];
     this.root.position.copy(HOLD);
     this.root.rotation.set(...style.rotation);
@@ -896,6 +1007,12 @@ export class ItemHand {
     camera.add(this.root);
   }
 
+  /** 左手に持つ（左手のマスの物を見せる） */
+  toLeft(): this {
+    mirrorToLeft(this.root);
+    return this;
+  }
+
   /** 持っている数（0 なら手に何も持たない） */
   setCount(count: number): void {
     if (count > this.count && this.count > 0) this.bump = 1;
@@ -911,17 +1028,16 @@ export class ItemHand {
     this.eatDuration = duration;
   }
 
-  update(dt: number, moving: boolean): void {
+  update(dt: number): void {
     if (!this.root.visible) {
       this.eatTime = -1;
       return;
     }
     this.raise = Math.min(this.raise + dt / RAISE_TIME, 1);
     this.bump = Math.max(this.bump - dt * 5, 0);
-    if (moving) this.bob += dt * 9;
     const lift = 1 - (1 - this.raise) ** 3;
-    this.root.position.y = HOLD.y - (1 - lift) * 0.35 + Math.sin(this.bob) * 0.012 + Math.sin(this.bump * Math.PI) * 0.03;
-    this.root.position.x = HOLD.x + Math.cos(this.bob * 0.5) * 0.01;
+    this.root.position.copy(HOLD);
+    this.root.position.y += -(1 - lift) * 0.35 + Math.sin(this.bump * Math.PI) * 0.03;
     if (this.eatTime >= 0) {
       this.eatTime += dt;
       const k = Math.min(this.eatTime / this.eatDuration, 1);
@@ -961,13 +1077,13 @@ export class EmptyHand {
   private readonly shoulder = new THREE.Vector3(...ARM_DIR).multiplyScalar(EMPTY_SHOULDER_DIST); // 構えたこぶしから見た肩
   private next = 0; // 次に殴る手
   private shown = false;
+  private leftBusy = false; // 左手に物を持っていれば、右手のこぶしだけ見せて右手だけで殴る
   private raise = 0;
-  private bob = 0;
 
   /** こぶしが当たるタイミングで呼ばれる */
   onImpact: () => void = () => {};
 
-  constructor(camera: THREE.Camera) {
+  constructor(camera: THREE.Object3D) {
     this.roots.forEach((root, i) => {
       const hand = new HandModel('fist');
       this.hands.push(hand);
@@ -987,7 +1103,7 @@ export class EmptyHand {
   set visible(v: boolean) {
     if (v === this.shown) return;
     this.shown = v;
-    for (const root of this.roots) root.visible = v;
+    this.roots.forEach((root, i) => (root.visible = v && !(i === 1 && this.leftBusy)));
     if (v) this.raise = 0;
     this.punchTime.fill(-1);
     this.offsets.forEach((o, i) => {
@@ -996,18 +1112,27 @@ export class EmptyHand {
     });
   }
 
-  /** 右手・左手を交互に突き出す */
+  /** 左手に物を持っているか（持っていれば左手のこぶしは見せない） */
+  set leftHolding(v: boolean) {
+    if (v === this.leftBusy) return;
+    this.leftBusy = v;
+    this.roots[1].visible = this.shown && !v;
+    this.punchTime[1] = -1;
+    this.offsets[1].set(0, 0, 0);
+    this.aim(1, 0);
+  }
+
+  /** 右手・左手を交互に突き出す（左手がふさがっていれば右手だけ） */
   punch(): void {
-    const i = this.next;
+    const i = this.leftBusy ? 0 : this.next;
     if (!this.shown || this.raise < 1 || this.punchTime[i] >= 0) return;
     this.punchTime[i] = 0;
     this.next = 1 - i;
   }
 
-  update(dt: number, moving: boolean): void {
+  update(dt: number): void {
     if (!this.shown) return;
     this.raise = Math.min(this.raise + dt / RAISE_TIME, 1);
-    if (moving) this.bob += dt * 9;
     const lift = 1 - (1 - this.raise) ** 3;
     this.roots.forEach((root, i) => {
       let twist = 0;
@@ -1025,11 +1150,10 @@ export class EmptyHand {
         if (t >= PUNCH_END) this.punchTime[i] = -1;
         this.aim(i, twist);
       }
-      const phase = this.bob + i * Math.PI; // 歩くと左右の手が交互に揺れる
       const o = this.offsets[i];
       root.position.set(
-        (EMPTY_HOLD.x + o.x + Math.cos(phase * 0.5) * 0.01) * root.scale.x,
-        EMPTY_HOLD.y + o.y - (1 - lift) * 0.35 + Math.sin(phase) * 0.012,
+        (EMPTY_HOLD.x + o.x) * root.scale.x,
+        EMPTY_HOLD.y + o.y - (1 - lift) * 0.35,
         EMPTY_HOLD.z + o.z,
       );
     });

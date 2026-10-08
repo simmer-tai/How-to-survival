@@ -21,6 +21,8 @@ export class Saplings {
     request = () => false;
     /** 苗をワールドに足したとき（obj）、育ちきって幹の剛体ができたとき（body）に呼ばれる（街にいる間は隠すため。main.ts が差し替える） */
     onAdd = () => { };
+    /** 苗をワールドに足したとき、その木を渡す（遠くでの描き方を変えるため。main.ts が差し替える） */
+    onTree = () => { };
     /** fixedTrees は最初から島にある木（そばに植えられないようにする） */
     constructor(world, chopper, fixedTrees) {
         this.world = world;
@@ -51,6 +53,7 @@ export class Saplings {
         this.resize(p);
         this.world.add(tree.object);
         this.onAdd(tree.object, null);
+        this.onTree(tree);
     }
     /**
      * 苗を育てる（全員が進めて大きさを見せる）。育ちきった苗は、木にする頼みを出す（世界の頼みなので、マルチではホストのものだけが通る）。

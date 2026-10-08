@@ -10,8 +10,8 @@
 | ファイル | 中身 |
 |---|---|
 | `palette.ts` | `PALETTE`。**色はここにある色だけを使う**（UI の濃い文字色・縁取りの `#2b2633` は例外） |
-| `materials.ts` | ローポリ用のフラットシェーディングのマテリアル（`flat()`・`flatVertex()`・`flatTransparent()`・`solid()`） |
-| `physics.ts` | Rapier のラッパー `Physics`。`GRAVITY`・`WATER_LEVEL`、浮力・水の抵抗、衝突グループ `COLLIDE`、凸包コライダーを作る `hullDesc()`。剛体は場所ごとに止める：`within(loc, fn)` の中で作った剛体は loc の物になり、今いない場所なら作ったその場で止まる。場所を移るときは `moveTo(loc, keep)` |
+| `materials.ts` | ローポリ用のフラットシェーディングのマテリアル（`flat()`・`flatVertex()`・`flatTransparent()`・`solid()`）。木目のドット絵を頂点の色に重ねる `woodVertex()`（模様は明るさだけで、色は頂点の `PALETTE` の色。コードで描く 32×16 のテクスチャを1枚だけ使う。UV は 1 が `WOOD_SPAN_U` / `WOOD_SPAN_V` の長さ。近くはくっきり・遠くはミップマップでならす） |
+| `physics.ts` | Rapier のラッパー `Physics`。`GRAVITY`・`WATER_LEVEL`、海の水面の高さ `seaSurface()`（`setDryZone()` で決めた海の水が来ない所＝洞窟の中では -Infinity。泳ぎ・浮力・水中の見た目はこれで調べる）、浮力・水の抵抗、衝突グループ `COLLIDE`、凸包コライダーを作る `hullDesc()`。剛体は場所ごとに止める：`within(loc, fn)` の中で作った剛体は loc の物になり、今いない場所なら作ったその場で止まる。場所を移るときは `moveTo(loc, keep)` |
 | `waves.ts` | 海の波の式。水面のシェーダー（`WAVE_GLSL`）と CPU 側の浮力・泳ぎ（`waveOffset()`）で**同じ式**を使う。嵐では `setWaveScale()` で波を高くする |
 | `commands.ts` | ワールドコマンドの型。木・茂み・岩・落とし物のコマンドは、海図に載せた島の物なら `loc`（`OnIsle`）を持つ。島の地図を海図に書き写す `chartIsle`。入力側が作る「頼み」（`WorldRequest`）と、ホストが確かめて ID などを決めた「コマンド」（`WorldCommand`）。頼みを出す関数の型 `Requester` |
 | `save.ts` | ワールドのセーブ（localStorage）。`WorldData` の形、`SAVE_VERSION` と版ごとの変換、`listWorlds`・`createWorld`・`loadWorld`・`saveWorld`・`deleteWorld`。自分だけの状態 `PersonalData` と共有ワールド `SharedWorld` の分け方。マルチの参加者の自分だけの状態（`loadGuest`・`saveGuest`。ホストのワールドの id ごと） |

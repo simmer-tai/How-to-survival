@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
+import { splinterGeo, scatterSplinter } from './splinters.js';
 import type { Tree } from '../world/props.js';
 import { RAPIER, COLLIDE, hullDesc, type Physics } from '../core/physics.js';
 import type { ChopTree, OnIsle, Requester } from '../core/commands.js';
@@ -26,7 +27,6 @@ const PUNCH_CHIP_COUNT = 2; // 素手で殴ったときの木くず
 const BREAK_CHIP_COUNT = 18;
 const UP = new THREE.Vector3(0, 1, 0);
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
-const chipGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
 
 /** standing: 立っている → falling: 倒れて葉が縮む → log: 丸太 → breaking: ばらけて消える */
 type Phase = 'standing' | 'falling' | 'log' | 'breaking';
@@ -46,6 +46,13 @@ interface TreeState {
 }
 
 interface Chip { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }
+
+/** 立っている間だけの見た目（まとめた葉と、遠くから見る形）を外す。遠くで幹を隠していたら（world/lod.ts）見せる */
+function dropStandingLooks(tree: Tree): void {
+  tree.crown.removeFromParent();
+  tree.far.removeFromParent();
+  tree.trunk.visible = true;
+}
 
 /** セーブデータ上の木1本。null は丸太をばらして消えた木。log は倒れた丸太の位置・向き [x, y, z, qx, qy, qz, qw] */
 export type TreeSave = { hp: number; log?: number[] } | null;
@@ -309,7 +316,7 @@ export class TreeChopper {
     s.body.setAngularDamping(LOG_DAMPING.angular);
     obj.position.set(x, y, z);
     obj.quaternion.set(qx, qy, qz, qw);
-    s.tree.crown.removeFromParent();
+    dropStandingLooks(s.tree);
     for (const leaf of s.tree.leaves) leaf.removeFromParent();
     this.physics.link(s.body, obj);
     this.physics.addFloater(s.body, 0.5);
@@ -321,7 +328,7 @@ export class TreeChopper {
     s.phase = 'falling';
     s.time = 0;
     // まとめて描いていた葉を、1つずつ縮められる元の部品に戻す
-    s.tree.crown.removeFromParent();
+    dropStandingLooks(s.tree);
     for (const leaf of s.tree.leaves) leaf.visible = true;
     const { world } = this.physics;
     s.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
@@ -436,9 +443,9 @@ export class TreeChopper {
   /** 叩いた場所から木くずを飛ばす（手前側へ） */
   private spawnChips(point: THREE.Vector3, away: THREE.Vector3, count: number): void {
     for (let n = 0; n < count; n++) {
-      const mesh = new THREE.Mesh(chipGeo, flat(PALETTE.trunk));
+      const mesh = new THREE.Mesh(splinterGeo, flat(PALETTE.trunk));
       mesh.position.copy(point);
-      mesh.scale.setScalar(0.6 + Math.random() * 0.8);
+      scatterSplinter(mesh, 0.7 + Math.random() * 0.6);
       const velocity = away.clone().multiplyScalar(-2 - Math.random() * 2);
       velocity.x += (Math.random() - 0.5) * 3;
       velocity.z += (Math.random() - 0.5) * 3;

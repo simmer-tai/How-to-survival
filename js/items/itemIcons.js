@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
-import { buildAxe, buildFishingRod, buildHammer, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
-import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel } from './itemModels.js';
+import { buildAxe, buildFishingRod, buildHammer, buildHoe, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
+import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel, buildTorchModel } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
 import { FISH_KINDS } from './fishKinds.js';
 import { perLandInfo } from './landInfo.js';
@@ -120,19 +120,6 @@ function buildBerry() {
     }
     g.add(part(new THREE.CylinderGeometry(0.015, 0.015, 0.12, 5), PALETTE.leaf, 0, 0.27, 0));
     g.rotation.set(0.35, -0.3, 0);
-    return g;
-}
-function buildHoe() {
-    const g = new THREE.Group();
-    g.add(part(new THREE.CylinderGeometry(0.024, 0.024, 0.8, 6), PALETTE.trunk, 0, 0.05, 0));
-    g.add(part(new THREE.CylinderGeometry(0.03, 0.03, 0.14, 6), PALETTE.accent, 0, -0.22, 0)); // 握りの布
-    g.add(part(new THREE.BoxGeometry(0.07, 0.08, 0.07), PALETTE.rock, 0, 0.42, 0)); // 柄を差し込む部分
-    // 柄の先から手前（柄尻側）へ折れた刃
-    const blade = new THREE.Group();
-    blade.position.set(0, 0.42, 0);
-    blade.rotation.z = 0.55;
-    blade.add(part(new THREE.BoxGeometry(0.22, 0.035, 0.13), PALETTE.rock, -0.12, 0, 0));
-    g.add(blade);
     return g;
 }
 function buildSword() {
@@ -273,11 +260,12 @@ const MODELS = {
     hammerBlueprint: () => buildBlueprintIcon('hammer'),
     fishingRodBlueprint: () => buildBlueprintIcon('fishingRod'),
     draftingTableBlueprint: () => buildBlueprintIcon('draftingTable'),
+    hoeBlueprint: () => buildBlueprintIcon('hoe'),
     map: () => buildMapIcon(buildMapModel),
     islandMap: () => buildMapIcon(buildIslandMapModel),
     ...perLandInfo((k) => () => buildLandInfoIcon(k)),
     boat: buildBoatIcon,
-    hoe: () => tools(buildHoe()),
+    hoe: () => tools(sideView(buildHoe())),
     axe: () => tools(sideView(buildAxe())),
     sword: () => tools(buildSword()),
     stoneKnife: () => tools(sideView(buildStoneKnife())),
@@ -290,6 +278,7 @@ const MODELS = {
     workbench: () => pieceIconModel('workbench'),
     draftingTable: () => pieceIconModel('draftingTable'),
     campfire: () => pieceIconModel('campfire'),
+    torch: () => tools(buildTorchModel(false)),
 };
 /** 道具は斜めに置いて、少し奥行きが見える角度から見る */
 function tools(model) {

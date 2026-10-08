@@ -27,6 +27,8 @@ export interface PoseMsg {
   body?: number;
   /** 手に持っている物（ITEMS の id） */
   held: string | null;
+  /** 左手に持っている物（左手のマス。無い古い版から届いたら持っていないとみなす） */
+  left?: string | null;
   /** 槍を投げる力を溜めている具合（溜めていなければ null） */
   charge: number | null;
   /** いる場所 */
@@ -44,6 +46,8 @@ export type GuestMsg =
   | { t: 'pose'; pose: PoseMsg }
   | { t: 'look'; look: AvatarLook }
   | { t: 'swing'; kind: AvatarSwing }
+  /** チャットの書き込み */
+  | { t: 'chat'; text: string }
   /** 物理の担当になっている場所の、動いている物の位置 */
   | ({ t: 'motion' } & Motion);
 
@@ -73,6 +77,8 @@ export type HostMsg =
   /** 人が抜けた */
   | { t: 'gone'; id: number }
   | { t: 'swing'; id: number; kind: AvatarSwing }
+  /** チャットの書き込み（name は書いた人の名前） */
+  | { t: 'chat'; name: string; text: string }
   /** 場所ごとの物理の担当 [場所, 担当の人の番号]（だれもいない場所は入らない） */
   | { t: 'sims'; at: [string, number][] };
 

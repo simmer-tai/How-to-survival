@@ -1,11 +1,11 @@
 import { PALETTE } from '../core/palette.js';
 import { keyGuide } from './keyGuide.js';
-// コマンドメニュー（Enter で開く）。上の入力欄に「/weather rain」のようなコマンドを打つか、下に並んだボタンを押して実行する。
+// コマンドメニュー（0 キーで開く）。上の入力欄に「/weather rain」のようなコマンドを打つか、下に並んだボタンを押して実行する。
 // コマンドの中身（何をするか）は main が register() で登録する。共有ワールドを変えるコマンドは、登録した側がワールドコマンドの頼みにする
 const css = (c) => '#' + c.toString(16).padStart(6, '0');
 export class CommandMenu {
     isOpen = false;
-    /** 開いた時刻（開いたのと同じ Enter で実行しないように） */
+    /** 開いた時刻（開いたのと同じキー入力をメニューで扱わないように） */
     openedAt = 0;
     root;
     input;
@@ -74,20 +74,22 @@ export class CommandMenu {
     }
     /** コマンドの文字列を実行する。できたら閉じてゲームに戻る（天気などが変わっていくのを見られるように） */
     execute(text) {
-        const [head, ...args] = text.replace(/^[/／]/, '').split(/\s+/);
-        const name = head.toLowerCase();
-        const def = this.commands.find((c) => c.name === name || c.aliases?.includes(name));
-        if (!def) {
-            this.showMessage(`「${head}」というコマンドはありません`, true);
-            return;
-        }
-        const result = def.run(args);
+        const result = this.run(text);
         if (result.error) {
             this.showMessage(result.message, true);
             return;
         }
         this.setOpen(false);
         this.onResult(result.message);
+    }
+    /** コマンドの文字列を実行し、結果を返す（メニューは開け閉めしない。チャットからも使う） */
+    run(text) {
+        const [head, ...args] = text.trim().replace(/^[/／]/, '').split(/\s+/);
+        const name = head.toLowerCase();
+        const def = this.commands.find((c) => c.name === name || c.aliases?.includes(name));
+        if (!def)
+            return { message: `「${head}」というコマンドはありません`, error: true };
+        return def.run(args);
     }
     showMessage(text, error, help = false) {
         this.messageEl.textContent = text;
@@ -104,7 +106,7 @@ export class CommandMenu {
             title.textContent = group.title;
             const row = document.createElement('div');
             row.className = 'cmd-buttons';
-            for (const { label, command } of group.buttons) {
+            for (const { label, command } of typeof group.buttons === 'function' ? group.buttons() : group.buttons) {
                 const button = document.createElement('button');
                 button.className = 'cmd-button' + (command === current ? ' active' : '');
                 button.textContent = label;

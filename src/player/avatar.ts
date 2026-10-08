@@ -3,6 +3,7 @@ import { PALETTE } from '../core/palette.js';
 import { solid } from '../core/materials.js';
 import { box, headGeometry, joint, lathe, limb, mix, shade } from './bodyParts.js';
 import { buildHeldModel } from './hand.js';
+import { TORCH_FLAME_Y } from '../items/itemModels.js';
 
 /** 自分の体を描くレイヤー。一人称のときは画面に映さず影だけ落とし、三人称のときはカメラに映す */
 export const AVATAR_LAYER = 2;
@@ -30,6 +31,7 @@ const POSE_SPEED = 12; // しゃがむ・座る・泳ぐなどの姿勢が切り
 const BREATH_SPEED = 1.5; // 呼吸の速さ
 const BLINK_TIME = 0.12; // まばたきで目を閉じている時間（秒）
 const LONG_TOOL_TILT = 2.25; // 槍や釣り竿を、前の上へ向けて持つための手首での傾き
+const TORCH_TILT = 1.45; // 松明をまっすぐ上へ立てて持つための手首での傾き（構えた腕の肩と肘の角度を打ち消す）
 const ITEM_ELBOW = -1.3; // 素材を持つときに肘を曲げて、前腕を前へ出す角度
 
 /** 色の選択肢 */
@@ -172,8 +174,8 @@ interface Rig {
   head: THREE.Group;
   shoulders: THREE.Group[];
   elbows: THREE.Group[];
-  /** 右手の、持ち物を付ける所 */
-  holder: THREE.Group;
+  /** 持ち物を付ける所 [右手, 左手] */
+  holders: THREE.Group[];
   thighs: THREE.Group[];
   knees: THREE.Group[];
   ankles: THREE.Group[];
@@ -209,9 +211,10 @@ export class Avatar {
   private swingTime = -1; // 振っていないときは負
   private charge = 0; // 槍を投げる力を溜めている間、腕を振りかぶる（0〜1）
   private chargeTarget = 0;
-  private held: string | null = null;
-  private grip: Grip = 'none';
-  private heldModel: THREE.Object3D | null = null;
+  // 持ち物は [右手, 左手]
+  private readonly held: (string | null)[] = [null, null];
+  private readonly grips: Grip[] = ['none', 'none'];
+  private readonly heldModels: (THREE.Object3D | null)[] = [null, null];
 
   /** layer は体を描くレイヤー（自分の体は AVATAR_LAYER。マルチで描く他の人の体は、いつも見える 0） */
   constructor(look: AvatarLook, private readonly layer = AVATAR_LAYER) {
@@ -236,41 +239,53 @@ export class Avatar {
         if (o instanceof THREE.Mesh) o.geometry.dispose(); // 持ち物も一緒に捨てて、作り直す
       });
     }
-    const held = this.held;
-    this.held = null;
-    this.heldModel = null;
+    const held = [...this.held];
+    this.held.fill(null);
+    this.heldModels.fill(null);
     this.build();
-    this.setHeld(held);
+    held.forEach((item, side) => this.setHeld(item, side));
   }
 
-  /** 右手に持つ物（ITEMS の id。何も持たなければ null） */
-  setHeld(item: string | null): void {
-    if (item === this.held) return;
-    this.held = item;
-    if (this.heldModel) {
-      this.rig.holder.remove(this.heldModel);
-      this.heldModel.traverse((o) => {
+  /** 手に持つ物（ITEMS の id。何も持たなければ null）。side は 0 が右手、1 が左手 */
+  setHeld(item: string | null, side = 0): void {
+    if (item === this.held[side]) return;
+    this.held[side] = item;
+    const old = this.heldModels[side];
+    if (old) {
+      this.rig.holders[side].remove(old);
+      old.traverse((o) => {
         if (o instanceof THREE.Mesh) o.geometry.dispose();
       });
-      this.heldModel = null;
+      this.heldModels[side] = null;
     }
     const held = item ? buildHeldModel(item) : null;
-    this.grip = !held ? 'none' : !held.tool ? 'item' : item === 'spear' || item === 'fishingRod' ? 'long' : 'tool';
+    const grip: Grip = !held ? 'none' : !held.tool ? 'item' : item === 'spear' || item === 'fishingRod' || item === 'torch' ? 'long' : 'tool';
+    this.grips[side] = grip;
     if (!held) return;
     const model = held.model;
-    if (this.grip === 'tool') {
+    if (grip === 'tool') {
       // 柄を腕の延長に沿わせ、刃を振り下ろす向きへ向ける（振りかぶると頭が肩から一番遠くなる）
       model.rotation.set(-0.4, 0, Math.PI);
-    } else if (this.grip === 'long') {
-      model.rotation.x = LONG_TOOL_TILT;
+    } else if (grip === 'long') {
+      model.rotation.x = item === 'torch' ? TORCH_TILT : LONG_TOOL_TILT;
     } else {
       // 肘を曲げた前腕の上に、水平にのせる
       model.rotation.x = -ITEM_ELBOW;
       model.position.set(0, -0.02, 0.06);
     }
-    this.heldModel = model;
-    this.rig.holder.add(model);
+    this.heldModels[side] = model;
+    this.rig.holders[side].add(model);
     this.toLayer(model);
+  }
+
+  /** 松明を持って見えていれば、その炎の位置（ワールド座標）を out に足す（player/torchLight.ts の明かりを置く）。両手に持てば2つ */
+  torchFlames(out: THREE.Vector3[]): void {
+    if (!this.object.visible) return;
+    this.heldModels.forEach((model, side) => {
+      if (this.held[side] !== 'torch' || !model) return;
+      model.updateWorldMatrix(true, false);
+      out.push(model.localToWorld(new THREE.Vector3(0, TORCH_FLAME_Y, 0)));
+    });
   }
 
   /** 右腕で道具を振る（一人称の振りと同じ間合い） */
@@ -347,7 +362,6 @@ export class Avatar {
     });
 
     // ---- 腕：歩くと脚と逆に振る。泳ぐと水をかき、座ると前で櫂を握る。右手は持ち物の持ち方に合わせる ----
-    const grip = this.grip;
     this.charge = damp(this.charge, this.chargeTarget, 14, dt);
     let swingArm: [number, number] | null = null;
     if (this.swingTime >= 0) {
@@ -367,7 +381,7 @@ export class Avatar {
       const s = Math.sin(this.phase + i * Math.PI);
       const stroke = Math.sin(this.time * 3 + (pose.speed > 0.5 ? 0 : i * Math.PI));
       const [restShoulder, restElbow] = this.restArm(i);
-      let shoulder = restShoulder + s * ARM_SWING * (stride + this.run * 0.6) * (i === 0 && grip !== 'none' ? 0.3 : 1) + air * -0.4;
+      let shoulder = restShoulder + s * ARM_SWING * (stride + this.run * 0.6) * (this.grips[i] !== 'none' ? 0.3 : 1) + air * -0.4;
       let elbow = restElbow - this.run * 0.6 - c * 0.3;
       let spread = side * (0.1 + air * 0.25);
       // 泳ぐ：前へ倒れて進むときは平泳ぎのように前へ伸ばしてかき、浮いているときは横へ広げて水をかく
@@ -390,7 +404,7 @@ export class Avatar {
       r.shoulders[i].rotation.z = spread;
       r.elbows[i].rotation.x = elbow;
     });
-    if (this.heldModel) this.heldModel.visible = swim < 0.5; // 泳いでいる間は持ち物をしまう
+    for (const model of this.heldModels) if (model) model.visible = swim < 0.5; // 泳いでいる間は持ち物をしまう
 
     // ---- 頭：視線の向きを向く（首を振るのは、首と頭で分け合う）。体を倒して泳ぐ間は前を見るように起こす ----
     const yawLimit = sit > 0.5 ? 1.5 : HEAD_YAW_MAX + 0.3;
@@ -414,8 +428,7 @@ export class Avatar {
 
   /** 構えた腕の角度 [肩, 肘]。i=0 が右腕 */
   private restArm(i: number): [number, number] {
-    if (i !== 0) return [0, -0.2];
-    switch (this.grip) {
+    switch (this.grips[i]) {
       case 'tool':
         return [-0.15, -0.55];
       case 'long':
@@ -479,7 +492,7 @@ export class Avatar {
     // ---- 腕：半袖。i=0 が右腕（体の正面は +Z なので、右は -X） ----
     const shoulders: THREE.Group[] = [];
     const elbows: THREE.Group[] = [];
-    let holder!: THREE.Group;
+    const holders: THREE.Group[] = [];
     for (const side of [-1, 1]) {
       const shoulder = joint(spine, side * 0.2, SHOULDER_Y, 0);
       const cap = solid(new THREE.SphereGeometry(0.06, 8, 6), shirt);
@@ -496,7 +509,7 @@ export class Avatar {
       fingers.rotation.x = -0.15;
       const thumb = box(wrist, 0.022, 0.06, 0.022, skin, -side * 0.01, -0.06, 0.045);
       thumb.rotation.x = -0.3;
-      if (side === -1) holder = joint(wrist, 0, -0.09, 0);
+      holders.push(joint(wrist, 0, -0.09, 0));
       shoulders.push(shoulder);
       elbows.push(elbow);
     }
@@ -528,7 +541,7 @@ export class Avatar {
     this.buildHair(head, hair, look.hairStyle);
     this.buildHat(head, look.hat);
 
-    this.rig = { hips, spine, chest, neck, head, shoulders, elbows, holder, thighs, knees, ankles, eyes };
+    this.rig = { hips, spine, chest, neck, head, shoulders, elbows, holders, thighs, knees, ankles, eyes };
     this.toLayer(this.body);
   }
 

@@ -47,6 +47,8 @@ export class Saplings {
   request: Requester = () => false;
   /** 苗をワールドに足したとき（obj）、育ちきって幹の剛体ができたとき（body）に呼ばれる（街にいる間は隠すため。main.ts が差し替える） */
   onAdd: (obj: THREE.Object3D, body: RAPIER.RigidBody | null) => void = () => {};
+  /** 苗をワールドに足したとき、その木を渡す（遠くでの描き方を変えるため。main.ts が差し替える） */
+  onTree: (tree: Tree) => void = () => {};
 
   /** fixedTrees は最初から島にある木（そばに植えられないようにする） */
   constructor(
@@ -78,6 +80,7 @@ export class Saplings {
     this.resize(p);
     this.world.add(tree.object);
     this.onAdd(tree.object, null);
+    this.onTree(tree);
   }
 
   /**
