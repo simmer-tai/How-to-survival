@@ -46,12 +46,21 @@ export function markStone(c) {
     STONE_COLORS.add(c);
     return c;
 }
+/** 漆喰の色（markPlaster() した色）。これで塗った所に漆喰のドット絵を付ける */
+const PLASTER_COLORS = new WeakSet();
+/** この色を漆喰の壁の色として印を付ける */
+export function markPlaster(c) {
+    PLASTER_COLORS.add(c);
+    return c;
+}
 /** たくさんの石や木箱を、頂点の色を変えて1つのメッシュにまとめる（描く回数を減らすため） */
 export class Batch {
     positions = [];
     colors = [];
     /** 頂点ごとに石か（1 が石） */
     stones = [];
+    /** 頂点ごとに漆喰か（1 が漆喰） */
+    plasters = [];
     m = new THREE.Matrix4();
     v = new THREE.Vector3();
     q = new THREE.Quaternion();
@@ -66,11 +75,13 @@ export class Batch {
     addMatrix(geo, m, color) {
         const pos = geo.getAttribute('position');
         const stone = STONE_COLORS.has(color) ? 1 : 0;
+        const plaster = PLASTER_COLORS.has(color) ? 1 : 0;
         for (let i = 0; i < pos.count; i++) {
             this.v.fromBufferAttribute(pos, i).applyMatrix4(m);
             this.positions.push(this.v.x, this.v.y, this.v.z);
             this.colors.push(color.r, color.g, color.b);
             this.stones.push(stone);
+            this.plasters.push(plaster);
         }
     }
     /** 傾いた箱。ax・ay・az は箱の X・Y・Z が向く単位ベクトル（互いに直交し、右手系） */
@@ -95,18 +106,19 @@ export class Batch {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
         geo.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
-        // 石の色で塗った所（石積み・石畳・石板）には石のドット絵、茶色の木材の所には木のドット絵を付ける（布・葉・漆喰は付けない）
+        // 石の色で塗った所（石積み・石畳・石板）には石のドット絵、茶色の木材の所には木のドット絵、漆喰の壁には漆喰のドット絵を付ける（布・葉は付けない）
         geo.setAttribute('aStone', new THREE.Float32BufferAttribute(this.stones, 1));
         const wood = new Float32Array(this.stones.length);
         const c = new THREE.Color();
         const hsl = { h: 0, s: 0, l: 0 };
         for (let i = 0; i < wood.length; i++) {
-            if (this.stones[i])
+            if (this.stones[i] || this.plasters[i])
                 continue;
             c.fromArray(this.colors, i * 3).getHSL(hsl);
             wood[i] = hsl.h >= WOOD_HUE[0] && hsl.h <= WOOD_HUE[1] && hsl.s > WOOD_SATURATION ? 1 : 0;
         }
         geo.setAttribute('aWood', new THREE.BufferAttribute(wood, 1));
+        geo.setAttribute('aPlaster', new THREE.Float32BufferAttribute(this.plasters, 1));
         geo.computeVertexNormals();
         const mesh = new THREE.Mesh(geo, townVertex());
         mesh.castShadow = true;
