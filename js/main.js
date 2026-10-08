@@ -262,7 +262,7 @@ const rodHand = new ToolHand(handRoot, rodRig.root, ROD_LEAN);
 const SPEAR_LEAN = 1.4;
 const spearHand = new ToolHand(handRoot, buildSpear(), SPEAR_LEAN, THRUST_MOTION);
 // 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・白紙の地図・島の地図・地形のメモ・船・焚火は選んでいる間、手に持って見せる
-const MATERIAL_KINDS = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'boatBlueprint', 'pickaxeBlueprint', 'spearBlueprint', 'hammerBlueprint', 'fishingRodBlueprint', 'draftingTableBlueprint', 'hoeBlueprint', 'map', 'islandMap', ...LAND_INFO_IDS, 'boat', 'campfire', 'torch'];
+const MATERIAL_KINDS = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'ironOre', 'boatBlueprint', 'pickaxeBlueprint', 'spearBlueprint', 'hammerBlueprint', 'fishingRodBlueprint', 'draftingTableBlueprint', 'hoeBlueprint', 'map', 'islandMap', ...LAND_INFO_IDS, 'boat', 'campfire', 'torch'];
 const materialHands = MATERIAL_KINDS.map((kind) => ({ kind, hand: new ItemHand(handRoot, kind) }));
 // 左手のマス（ホットバーの左）の物は、右手と同じ持ち方を鏡に映して左手に持つ。左手では振ったり食べたりしない
 const leftTools = [

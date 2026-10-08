@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { woodPiece } from '../items/drops.js';
-import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildDirtModel, buildTorchModel } from '../items/itemModels.js';
+import { PLANK_T, buildBerryModel, buildSeedModel, buildBobberModel, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildDirtModel, buildIronOreModel, buildTorchModel } from '../items/itemModels.js';
 import { FISH_KINDS } from '../items/fishKinds.js';
 import { perLandInfo } from '../items/landInfo.js';
 import { HandModel, HAND_POSES } from './handModel.js';
@@ -815,6 +815,14 @@ const HOLD_STYLES = {
     dirt: {
         build: buildDirtModel,
         slots: [[0, 0.1, 0, 0, 0, 0], [0.12, 0.13, -0.08, 0.3, 1.2, 0.2], [-0.06, 0.2, -0.04, -0.2, 2.3, -0.1]],
+        rotation: [0.25, -0.3, 0],
+        scale: 0.55,
+        hand: { pose: 'cup', at: [0.04, -0.02, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
+    },
+    // 鉄鉱石：土と同じように手のひらにかたまりをのせる（たくさん持つと積み重なる）
+    ironOre: {
+        build: buildIronOreModel,
+        slots: [[0, 0.1, 0, 0, 0, 0], [0.13, 0.12, -0.08, 0.3, 1.2, 0.2], [-0.06, 0.2, -0.04, -0.2, 2.3, -0.1]],
         rotation: [0.25, -0.3, 0],
         scale: 0.55,
         hand: { pose: 'cup', at: [0.04, -0.02, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },

@@ -72,6 +72,7 @@ export const ITEMS = {
   stone: { id: 'stone', name: '石', maxStack: MAX_STACK },
   vine: { id: 'vine', name: 'ツル', maxStack: MAX_STACK }, // 石のナイフで茂みを刈ると採れる
   dirt: { id: 'dirt', name: '土', maxStack: MAX_STACK }, // 木のスコップで地面を掘ると採れる
+  ironOre: { id: 'ironOre', name: '鉄鉱石', maxStack: MAX_STACK }, // 「鉄鉱脈」の島の洞窟にある鉱脈を、石のツルハシで叩くと採れる
   seed: { id: 'seed', name: '木の種', maxStack: MAX_STACK },
   berry: { id: 'berry', name: 'ベリー', maxStack: 32 },
   // 魚：釣り竿で釣れる。持って右クリックで食べる（種類ごとの見た目・釣れる場所は items/fishKinds.ts）
@@ -120,6 +121,7 @@ export const ITEMS = {
   reefInfo: { id: 'reefInfo', name: landInfoName('reef'), maxStack: INFO_STACK },
   streamInfo: { id: 'streamInfo', name: landInfoName('stream'), maxStack: INFO_STACK },
   hollowInfo: { id: 'hollowInfo', name: landInfoName('hollow'), maxStack: INFO_STACK },
+  ironInfo: { id: 'ironInfo', name: landInfoName('iron'), maxStack: INFO_STACK },
   boat: { id: 'boat', name: '木製の船', maxStack: 1 }, // 設計図で作り方を覚えると、作業台で作れる。持って左クリックで水に浮かべる（actions/boats.ts。乗るのはこれから）
 } satisfies Record<string, ItemDef>;
 

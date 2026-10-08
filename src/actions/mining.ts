@@ -3,6 +3,7 @@ import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import type { Physics, RAPIER } from '../core/physics.js';
 import { ITEMS, type ItemId } from '../items/inventory.js';
+import { ORE_BIT } from '../items/itemModels.js';
 import { terrainHeight } from '../world/terrain.js';
 import type { MineRock, MineTool, OnIsle, Requester, RockRequest } from '../core/commands.js';
 
@@ -12,6 +13,9 @@ const TRICKLE_PER_SIZE = 3; // 岩の大きさ 1 あたりの、叩いている�
 const MIN_TRICKLE = 1;
 const BREAK_PER_SIZE = 5; // 岩の大きさ 1 あたりの、壊したときにまとめて採れる石の数
 const MIN_BREAK = 3;
+const ORE_TRICKLE_PER_SIZE = 1; // 鉄の鉱脈の大きさ 1 あたりの、叩いている間に採れる鉄鉱石の数
+const ORE_BREAK_PER_SIZE = 3; // 鉄の鉱脈の大きさ 1 あたりの、壊したときにまとめて採れる鉄鉱石の数
+const ORE_MIN_BREAK = 2;
 const DAMAGE: Record<MineTool, number> = { pickaxe: 1 }; // 1回叩くと減る耐久値
 const SHAKE_TIME = 0.25; // 叩いたときに揺れる時間
 const CHIPS_PER_HIT = 5; // 叩いたときに飛ぶ石のかけら
@@ -38,9 +42,11 @@ interface RockState {
   mesh: THREE.Mesh;
   baseScale: THREE.Vector3;
   collider: RAPIER.Collider;
+  item: ItemId; // 採れる物（ふつうの岩は石、鉄の鉱脈は鉄鉱石）
+  chip: number; // 叩いたときに飛ぶかけらの色
   maxHp: number;
-  trickle: number; // 叩いている間に採れる石の数
-  burst: number; // 壊したときに採れる石の数
+  trickle: number; // 叩いている間に採れる数
+  burst: number; // 壊したときに採れる数
   hp: number;
   phase: Phase;
   shake: number; // 揺れの残り時間
@@ -88,12 +94,15 @@ export class RockMiner {
       const s = mesh.scale;
       const size = Math.cbrt(s.x * s.y * s.z);
       const maxHp = Math.max(MIN_HP, Math.round(HP_PER_SIZE * size));
-      const trickle = Math.max(MIN_TRICKLE, Math.round(TRICKLE_PER_SIZE * size));
-      const burst = Math.max(MIN_BREAK, Math.round(BREAK_PER_SIZE * size));
+      // 採れる物は岩の userData.yield（鉄の鉱脈なら 'ironOre'。world/props.ts）。なければ石
+      const ore = mesh.userData.yield === 'ironOre';
+      const trickle = ore ? Math.max(MIN_TRICKLE, Math.round(ORE_TRICKLE_PER_SIZE * size)) : Math.max(MIN_TRICKLE, Math.round(TRICKLE_PER_SIZE * size));
+      const burst = ore ? Math.max(ORE_MIN_BREAK, Math.round(ORE_BREAK_PER_SIZE * size)) : Math.max(MIN_BREAK, Math.round(BREAK_PER_SIZE * size));
       const collider = physics.addStatic(mesh, body);
-      const r: RockState = { mesh, baseScale: s.clone(), collider, maxHp, trickle, burst, hp: maxHp, phase: 'full', shake: 0 };
+      const item: ItemId = ore ? 'ironOre' : 'stone';
+      const r: RockState = { mesh, baseScale: s.clone(), collider, item, chip: ore ? ORE_BIT : PALETTE.rock, maxHp, trickle, burst, hp: maxHp, phase: 'full', shake: 0 };
       this.list.push(r);
-      this.byMesh.set(mesh, r);
+      mesh.traverse((o) => this.byMesh.set(o, r)); // 鉱脈の鉄の粒を狙っても、その岩を叩く
     }
   }
 
@@ -133,7 +142,7 @@ export class RockMiner {
     const after = Math.min(before + damage, r.maxHp);
     const share = Math.floor((r.trickle * after) / r.maxHp) - Math.floor((r.trickle * before) / r.maxHp);
     const n = share + (after === r.maxHp ? r.burst : 0);
-    return { type: 'mineRock', rock: req.rock, damage, items: n > 0 ? [['stone', n]] : [], ...this.at };
+    return { type: 'mineRock', rock: req.rock, damage, items: n > 0 ? [[r.item, n]] : [], ...this.at };
   }
 
   // ---- 全員：コマンドを適用する ----
@@ -147,10 +156,10 @@ export class RockMiner {
     if (mine) {
       for (const [item, count] of cmd.items) if (item in ITEMS) this.onHarvest(item as ItemId, count);
     }
-    this.spawnChips(r.mesh, CHIPS_PER_HIT);
+    this.spawnChips(r, CHIPS_PER_HIT);
     if (r.hp === 0) {
       r.mesh.scale.copy(r.baseScale);
-      this.spawnChips(r.mesh, CHIPS_ON_BREAK);
+      this.spawnChips(r, CHIPS_ON_BREAK);
       this.spawnChunks(r);
       this.remove(r);
       r.mesh.visible = false;
@@ -259,13 +268,13 @@ export class RockMiner {
     }
   }
 
-  /** 岩の上のほうから石のかけらを飛ばす（自分の画面だけの演出） */
-  private spawnChips(rock: THREE.Mesh, count: number): void {
-    const box = new THREE.Box3().setFromObject(rock);
+  /** 岩の上のほうから石のかけらを飛ばす（自分の画面だけの演出。鉄の鉱脈なら鉄の色のかけらも混ぜる） */
+  private spawnChips(r: RockState, count: number): void {
+    const box = new THREE.Box3().setFromObject(r.mesh);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     for (let n = 0; n < count; n++) {
-      const mesh = new THREE.Mesh(chipGeo, flat(PALETTE.rock));
+      const mesh = new THREE.Mesh(chipGeo, flat(n % 2 ? r.chip : PALETTE.rock));
       mesh.scale.setScalar(CHIP_SIZE * (0.6 + Math.random() * 0.8));
       mesh.position.set(
         center.x + (Math.random() - 0.5) * size.x * 0.6,

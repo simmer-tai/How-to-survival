@@ -1,8 +1,7 @@
 // 地形のメモ。海の向こうの島にある地形の話で、街の地図屋からコインで買う。
-// 今はアイテムとして持てるだけ。あとで、いくつかを組み合わせて島の地図を作れるようにする
-// （組み合わせたメモがそのまま島に出るとは限らない）
-/** メモに出てくる地形（並びは地図屋の売り物の並び） */
-export const LAND_KINDS = ['forest', 'meadow', 'beach', 'crag', 'lake', 'cliff', 'torrent', 'bamboo', 'reef', 'stream', 'hollow'];
+// 製図台で白紙の地図と組み合わせると、島の地図になる（items/islandChart.ts）
+/** メモに出てくる地形。島の地図の中身はこの並びの番号で持つので、新しい地形はかならず後ろに足す（並べ替えない） */
+export const LAND_KINDS = ['forest', 'meadow', 'beach', 'crag', 'lake', 'cliff', 'torrent', 'bamboo', 'reef', 'stream', 'hollow', 'iron'];
 /** 地形の名前（メモでの呼び名） */
 export const LAND_NAMES = {
     forest: '木々の海', // 森林
@@ -16,6 +15,7 @@ export const LAND_NAMES = {
     reef: '船喰い', // 岩礁
     stream: '水流', // 川
     hollow: '空洞', // 洞窟
+    iron: '鉄鉱脈', // 洞窟に鉄鉱石が出る
 };
 export const landInfoId = (kind) => `${kind}Info`;
 /** メモのアイテムの名前 */

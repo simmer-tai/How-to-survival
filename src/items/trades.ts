@@ -1,7 +1,6 @@
 import type { ItemId } from './inventory.js';
-import { LAND_INFO_IDS } from './landInfo.js';
 
-const LAND_INFO_PRICE = 3; // 地形のメモ1枚の値段（コイン。どの地形も同じ）
+const LAND_INFO_PRICE = 3; // 地形のメモ1枚の値段（コイン）
 
 // 住人との取引。持ち物を渡して、代わりの物を受け取る（コインもアイテムなので、売るのも買うのも同じ形で書く）。
 // 住人は在庫を持たず、変わるのは自分のインベントリだけなので、自分だけの行動としてその場で処理する（ワールドコマンドにはしない）
@@ -35,10 +34,12 @@ export const TRADES: Record<MerchantId, Trade[]> = {
     { give: { coin: 2 }, get: { item: 'seed', count: 3 } }, // コイン2枚で木の種3つ
     { give: { coin: 6 }, get: { item: 'hoeBlueprint', count: 1 } }, // くわの設計図
   ],
-  // 地図売りは白紙の地図・製図台の設計図・地形のメモを売る（買い取りはしない）
+  // 地図売りは白紙の地図・製図台の設計図・「木々の海」と「鉄鉱脈」のメモを売る（買い取りはしない）。
+  // ほかの地形のメモは遊びへの影響が小さいので売らない（アイテムとしては残すので、持っている分は使える）
   mapmaker: [
     { give: { coin: 8 }, get: { item: 'map', count: 1 } }, // コイン8枚で白紙の地図
     { give: { coin: 12 }, get: { item: 'draftingTableBlueprint', count: 1 } }, // 製図台の設計図（製図台で白紙の地図とメモから島の地図を作る）
-    ...LAND_INFO_IDS.map((item): Trade => ({ give: { coin: LAND_INFO_PRICE }, get: { item, count: 1 } })),
+    { give: { coin: LAND_INFO_PRICE }, get: { item: 'forestInfo', count: 1 } }, // 「木々の海」のメモ
+    { give: { coin: LAND_INFO_PRICE }, get: { item: 'ironInfo', count: 1 } }, // 「鉄鉱脈」のメモ（島の洞窟に鉄鉱石が出る）
   ],
 };
