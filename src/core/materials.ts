@@ -136,22 +136,28 @@ ${s.sizes
  * weight を渡すと、その名前の頂点の値（0〜1）の割合だけムラを付ける（1つのメッシュの中で、付ける所と付けない所を分ける）
  */
 export function withBlotch<T extends THREE.Material>(mat: T, s: BlotchSpec, key: string, weight?: string): T {
-  const beforeSrc = mat.onBeforeCompile.toString();
+  const prevKey = mat.customProgramCacheKey(); // 先に足したムラ（同じマテリアルに何度も足せる）も見分けに入れる
   const before = mat.onBeforeCompile.bind(mat);
+  const mul = `blotchMul_${key}`;
+  const vw = weight ? `vBlotch_${weight}` : '';
   mat.onBeforeCompile = (shader, renderer) => {
     before(shader, renderer);
-    const w = weight ? `attribute float ${weight};\nvarying float vBlotchWeight;` : '';
+    // 位置の varying と乱数の関数は、先に足したムラと共有する（2回目は宣言しない）
+    const first = !shader.vertexShader.includes('varying vec3 vBlotchPos;');
+    const vertDecl = (first ? 'varying vec3 vBlotchPos;\n' : '') + (weight ? `attribute float ${weight};\nvarying float ${vw};` : '');
+    const vertSet = (first ? 'vBlotchPos = position;\n' : '') + (weight ? `${vw} = ${weight};` : '');
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\nvarying vec3 vBlotchPos;\n${w}`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>\nvBlotchPos = position;${weight ? `\nvBlotchWeight = ${weight};` : ''}`);
+      .replace('#include <common>', `#include <common>\n${vertDecl}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${vertSet}`);
+    const fragDecl = (first ? `varying vec3 vBlotchPos;\n${BLOTCH_HASH_GLSL}\n` : '') + (weight ? `varying float ${vw};` : '');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying vec3 vBlotchPos;\n${weight ? 'varying float vBlotchWeight;' : ''}\n${BLOTCH_HASH_GLSL}`)
+      .replace('#include <common>', `#include <common>\n${fragDecl}`)
       .replace(
         '#include <color_fragment>',
-        `#include <color_fragment>\n${blotchGlsl('vBlotchPos', s, 'blotchMul', 3)}\ndiffuseColor.rgb *= ${weight ? 'mix(1.0, blotchMul, vBlotchWeight)' : 'blotchMul'};`,
+        `#include <color_fragment>\n${blotchGlsl('vBlotchPos', s, mul, 3)}\ndiffuseColor.rgb *= ${weight ? `mix(1.0, ${mul}, ${vw})` : mul};`,
       );
   };
-  mat.customProgramCacheKey = () => `${beforeSrc}|blotch:${key}:${weight ?? ''}`;
+  mat.customProgramCacheKey = () => `${prevKey}|blotch:${key}:${weight ?? ''}`;
   return mat;
 }
 
@@ -200,10 +206,29 @@ export const STONE_BLOTCH: BlotchSpec = {
   fade: 60,
 };
 
-let stoneVertexMat: THREE.MeshLambertMaterial | null = null;
+/** 街の木材（木組み・扉・木箱・桟橋など）のドット絵（木の幹と同じくらいの薄さ） */
+export const TIMBER_BLOTCH: BlotchSpec = {
+  dot: 0.08, // 1ドットの大きさ（m）
+  stretch: 1,
+  sizes: [3, 2, 1],
+  bright: 1.02,
+  dark: 0.957,
+  brightRate: 0.12,
+  darkRate: 0.18,
+  fade: 60,
+};
 
-/** flatVertex() に、頂点の aStone（1 が石）の所だけ石のドット絵（STONE_BLOTCH）を足したもの（街のまとめたメッシュに使う） */
-export function stoneVertex(): THREE.MeshLambertMaterial {
-  stoneVertexMat ??= withBlotch(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), STONE_BLOTCH, 'stone', 'aStone');
-  return stoneVertexMat;
+let townVertexMat: THREE.MeshLambertMaterial | null = null;
+
+/**
+ * flatVertex() に、頂点の aStone（1 が石）の所に石のドット絵（STONE_BLOTCH）、aWood（1 が木材）の所に木のドット絵（TIMBER_BLOTCH）を
+ * 足したもの（街のまとめたメッシュに使う）
+ */
+export function townVertex(): THREE.MeshLambertMaterial {
+  if (!townVertexMat) {
+    townVertexMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    withBlotch(townVertexMat, STONE_BLOTCH, 'stone', 'aStone');
+    withBlotch(townVertexMat, TIMBER_BLOTCH, 'wood', 'aWood');
+  }
+  return townVertexMat;
 }
