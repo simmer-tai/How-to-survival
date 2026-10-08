@@ -42,8 +42,8 @@ const WOOD_GRAIN = [
   '11100001111222233311111111222111',
   '11100001111111133311110000022111',
 ];
-const WOOD_SHADES = [1, 0.96, 0.92, 0.88]; // 模様の数字ごとの明るさ。差を小さくして、遠目にはほぼ1色に見せる
-export const WOOD_SPAN_U = 1; // 木目の模様1枚が覆う長さ（m）。木目の向き
+const WOOD_SHADES = [1, 0.98, 0.96, 0.945]; // 模様の数字ごとの明るさ。差をごく小さくして、ムラが板の上で浮かないようにする
+export const WOOD_SPAN_U = 1.6; // 木目の模様1枚が覆う長さ（m）。木目の向き。長くして、ムラを木目に沿った細長い形にする
 export const WOOD_SPAN_V = 0.5; // 木目と直角の向き（m）。1ドットが約3cm になる
 
 let woodMat: THREE.MeshLambertMaterial | null = null;
@@ -68,7 +68,7 @@ export function woodVertex(): THREE.MeshLambertMaterial {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.magFilter = THREE.NearestFilter; // 近くではドットをくっきり
-  tex.minFilter = THREE.NearestMipmapLinearFilter; // 遠くではちらつかないようにならす
+  tex.minFilter = THREE.LinearMipmapLinearFilter; // 少し離れたらムラの境目をぼかしてならす（ドットのちらつきも出ない）
   woodMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, map: tex });
   return woodMat;
 }
