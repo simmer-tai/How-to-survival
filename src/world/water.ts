@@ -12,6 +12,48 @@ const DEPTH_RES = 256;
 const DEPTH_MAX = 4;
 const DRY = 255; // 海底のテクスチャの、海の水を描かない所の値（ほかの所は DRY - 1 まで）
 
+// 水面のドット絵（木目と同じく、明るさだけの模様を色に掛ける）。大きさの違う四角いムラを敷きつめ、横（x）に少し長い。
+// 1 が地の明るさで、0 は地より明るいムラ（さざ波の光）、2・3 は暗いムラ
+const WATER_DOTS = [
+  '1111000111122211',
+  '1111000111122211',
+  '2211111133111100',
+  '2211111133111100',
+  '1111222111110001',
+  '0001222111110001',
+  '0001111110003311',
+  '1133311110003311',
+  '1133311222111111',
+  '1111111222111222',
+  '1000011111133222',
+  '1000011111133111',
+  '1111222100011111',
+  '3311222100011000',
+  '3311111111111000',
+  '1111110003311111',
+];
+const WATER_SHADES = [1.12, 1, 0.9, 0.83]; // 模様の数字ごとの明るさ（水面は半透明で、斜めから見るので木目より差を大きくする）
+const WATER_SPAN = 2.4; // 模様1枚が覆う長さ（m）。1ドットが約15cm になる
+const WATER_DRIFT = [0.18, 0.07]; // 模様が流れる速さ（m／秒。x・z）
+const WATER_DOT_FADE = 60; // カメラからこの距離（m）までに、模様をだんだん薄くして消す（遠くでちらつかないように）
+const SHADE_SCALE = 200; // 明るさをテクスチャの 0〜255 に入れるときの倍率
+
+/** 水面のドット絵のテクスチャ（明るさ × SHADE_SCALE を入れる。近くでもドットがくっきり見えるように補間しない） */
+function waterDots(): THREE.DataTexture {
+  const w = WATER_DOTS[0].length;
+  const h = WATER_DOTS.length;
+  const data = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) data[y * w + x] = Math.round(WATER_SHADES[Number(WATER_DOTS[y][x])] * SHADE_SCALE);
+  }
+  const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /**
  * 海底の高さ height を焼き込んだテクスチャ（浅瀬の色と波打ち際の泡に使う）。場所ごとに作る。size は場所の広さ。
  * dry が true を返す所（洞窟の上）は DRY の値にして、海の水面を描かない（洞窟の上は陸なので、外からは変わらない）
@@ -83,6 +125,7 @@ export class Sea {
       uSeabedSize: this.seabedSize,
       uShallow: { value: new THREE.Color(PALETTE.sky) },
       uFoam: { value: new THREE.Color(PALETTE.sky).lerp(new THREE.Color(PALETTE.sand), 0.15) },
+      uDots: { value: waterDots() },
     };
     material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
@@ -105,6 +148,7 @@ export class Sea {
           uniform float uSeabedSize;
           uniform vec3 uShallow;
           uniform vec3 uFoam;
+          uniform sampler2D uDots;
           varying vec3 vSeaPos;`,
         )
         .replace(
@@ -131,6 +175,11 @@ export class Sea {
           shallow = floor(shallow * 3.0 + 0.5) / 3.0;
           diffuseColor.rgb = mix(diffuseColor.rgb, uShallow, shallow * 0.45);
           diffuseColor.a = mix(diffuseColor.a, diffuseColor.a * 0.7, shallow);
+          // 水面のドット絵：ゆっくり流れる四角いムラ。遠くでは薄くして消す
+          vec2 dotUv = (vSeaPos.xz - vec2(${WATER_DRIFT[0].toFixed(3)}, ${WATER_DRIFT[1].toFixed(3)}) * uTime) / ${WATER_SPAN.toFixed(2)};
+          float dotShade = texture2D(uDots, dotUv).r * ${(255 / SHADE_SCALE).toFixed(4)};
+          float dotNear = 1.0 - smoothstep(${(WATER_DOT_FADE * 0.5).toFixed(1)}, ${WATER_DOT_FADE.toFixed(1)}, length(vViewPosition));
+          diffuseColor.rgb *= mix(1.0, dotShade, dotNear);
           // 波打ち際の泡：岸に貼りつく泡と、沖から寄せてくる泡の線
           float edge = 1.0 - step(0.22, depth);
           float near = 1.0 - smoothstep(0.3, 1.8, depth);
