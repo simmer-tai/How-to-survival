@@ -103,25 +103,82 @@ export interface BlotchSpec {
   fade: number;
 }
 
-/** ドットの番号から 0〜1 の乱数を返す GLSL の関数（誰の画面でも同じ）。使うシェーダーの先頭に入れる */
-export const BLOTCH_HASH_GLSL = 'float blotchHash(vec2 c) { return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453); }';
+/** ドットの番号（2次元・3次元）から 0〜1 の乱数を返す GLSL の関数（誰の画面でも同じ）。使うシェーダーの先頭に入れる */
+export const BLOTCH_HASH_GLSL = `float blotchHash(vec2 c) { return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453); }
+float blotchHash(vec3 c) { return fract(sin(dot(c, vec3(127.1, 311.7, 74.7))) * 43758.5453); }`;
 
 /**
- * 四角いムラの明るさの倍率を float out に入れる GLSL。p は位置（m）の vec2 の式。
+ * 四角いムラの明るさの倍率を float out に入れる GLSL。p は位置（m）の式で、dims が 2 なら vec2、3 なら vec3（立体の物は3次元のマスで散らす）。
  * ムラはドットの番号から決めた乱数で散らすので、くり返しの柄にならない。遠くでは 1 に近づける（vViewPosition を使う）
  */
-export function blotchGlsl(p: string, s: BlotchSpec, out: string): string {
+export function blotchGlsl(p: string, s: BlotchSpec, out: string, dims: 2 | 3 = 2): string {
   const f = (n: number, d = 3) => n.toFixed(d);
+  const vec = `vec${dims}`;
+  const rest = dims === 3 ? ', 1.0, 1.0' : ', 1.0';
+  const shift = (k: number) => [k * 1.7, k * 2.3, k * 0.9].slice(0, dims).map((n) => f(n, 1)).join(', ');
   return `float ${out} = 1.0;
   {
-    vec2 bp = (${p}) / (${f(s.dot)} * vec2(${f(s.stretch)}, 1.0));
+    ${vec} bp = (${p}) / (${f(s.dot)} * ${vec}(${f(s.stretch)}${rest}));
 ${s.sizes
   .map(
-    (n, k) => `    { float h = blotchHash(floor((bp + vec2(${f(k * 1.7, 1)}, ${f(k * 2.3, 1)})) / ${f(n, 1)}) + ${f(k * 31, 1)});
+    (n, k) => `    { float h = blotchHash(floor((bp + ${vec}(${shift(k)})) / ${f(n, 1)}) + ${f(k * 31, 1)});
       if (h < ${f(s.darkRate)}) ${out} = ${f(s.dark)};
       else if (h > ${f(1 - s.brightRate)}) ${out} = ${f(s.bright)}; }`,
   )
   .join('\n')}
     ${out} = mix(1.0, ${out}, 1.0 - smoothstep(${f(s.fade * 0.5, 1)}, ${f(s.fade, 1)}, length(vViewPosition)));
   }`;
+}
+
+/**
+ * マテリアルに四角いムラのドット絵を足す（頂点の位置＝物の中の座標で、3次元のマスに散らす。物が動いても模様はついていく）。
+ * もとの onBeforeCompile（風の揺れなど）は先に動かす。key はシェーダーを見分ける名前（ムラの決め方ごとに変える）
+ */
+export function withBlotch<T extends THREE.Material>(mat: T, s: BlotchSpec, key: string): T {
+  const beforeSrc = mat.onBeforeCompile.toString();
+  const before = mat.onBeforeCompile.bind(mat);
+  mat.onBeforeCompile = (shader, renderer) => {
+    before(shader, renderer);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBlotchPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBlotchPos = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vBlotchPos;\n${BLOTCH_HASH_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>\n${blotchGlsl('vBlotchPos', s, 'blotchMul', 3)}\ndiffuseColor.rgb *= blotchMul;`);
+  };
+  mat.customProgramCacheKey = () => `${beforeSrc}|blotch:${key}`;
+  return mat;
+}
+
+/** 木の幹・葉・茂みのドット絵（木目と同じくらい薄く。物の中の座標の3次元のマスで散らす） */
+export const TREE_BLOTCH: BlotchSpec = {
+  dot: 0.15, // 1ドットの大きさ（m）
+  stretch: 1,
+  sizes: [3, 2, 1],
+  bright: 1.02,
+  dark: 0.957,
+  brightRate: 0.12,
+  darkRate: 0.18,
+  fade: 70,
+};
+
+const treeFlatCache = new Map<number, THREE.MeshLambertMaterial>();
+
+/** flat() に木のドット絵（TREE_BLOTCH）を足したもの（木の幹や葉の部品に使う） */
+export function treeFlat(color: number | THREE.Color): THREE.MeshLambertMaterial {
+  const key = typeof color === 'number' ? color : color.getHex();
+  let mat = treeFlatCache.get(key);
+  if (!mat) {
+    mat = withBlotch(new THREE.MeshLambertMaterial({ color: key, flatShading: true }), TREE_BLOTCH, 'tree');
+    treeFlatCache.set(key, mat);
+  }
+  return mat;
+}
+
+let treeVertexMat: THREE.MeshLambertMaterial | null = null;
+
+/** flatVertex() に木のドット絵（TREE_BLOTCH）を足したもの（遠くの木・茂みに使う） */
+export function treeVertex(): THREE.MeshLambertMaterial {
+  treeVertexMat ??= withBlotch(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), TREE_BLOTCH, 'tree');
+  return treeVertexMat;
 }

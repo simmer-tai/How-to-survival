@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { TREE_BLOTCH, withBlotch } from '../core/materials.js';
 // 風（自分の画面だけの演出）。風の強さは天気（weather.ts の wind）から決まり、草・木の葉・茂みを揺らす。
 // 揺れはその場の見た目だけで、当たり判定や共有ワールドの状態は変えない
 /** 風が吹いていく向き（XZ。雨が流れる向きと同じ） */
@@ -54,6 +55,7 @@ export function swayMaterial() {
     if (!treeMaterial) {
         treeMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
         treeMaterial.onBeforeCompile = addTreeSway;
+        withBlotch(treeMaterial, TREE_BLOTCH, 'tree'); // 葉にも幹と同じドット絵を足す
     }
     return treeMaterial;
 }
