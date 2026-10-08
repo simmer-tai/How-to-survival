@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { PALETTE } from '../core/palette.js';
-import { stoneVertex } from '../core/materials.js';
+import { townVertex } from '../core/materials.js';
 
 // 街の石積み・建物・小物を組み立てる道具（town.ts と house.ts で使う）
 
+const WOOD_HUE = [0.04, 0.09]; // 木材とみる色合い（HSL の色相。茶色の幅）。幹・木組みの色はこの中に入り、砂・布・赤い実は外れる
+const WOOD_SATURATION = 0.25; // これより鮮やかな茶色を木材とみる（石や鉄の灰色は外れる）
 const WET_LINE = 0.25; // これより低い石は濡れて藻が付いた色にする
 
 export const BOX = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
@@ -106,10 +108,19 @@ export class Batch {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
-    // 石の色で塗った所（石積み・石畳・石板）にだけ、石のドット絵を付ける（木や布・葉は付けない）
+    // 石の色で塗った所（石積み・石畳・石板）には石のドット絵、茶色の木材の所には木のドット絵を付ける（布・葉・漆喰は付けない）
     geo.setAttribute('aStone', new THREE.Float32BufferAttribute(this.stones, 1));
+    const wood = new Float32Array(this.stones.length);
+    const c = new THREE.Color();
+    const hsl = { h: 0, s: 0, l: 0 };
+    for (let i = 0; i < wood.length; i++) {
+      if (this.stones[i]) continue;
+      c.fromArray(this.colors, i * 3).getHSL(hsl);
+      wood[i] = hsl.h >= WOOD_HUE[0] && hsl.h <= WOOD_HUE[1] && hsl.s > WOOD_SATURATION ? 1 : 0;
+    }
+    geo.setAttribute('aWood', new THREE.BufferAttribute(wood, 1));
     geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, stoneVertex());
+    const mesh = new THREE.Mesh(geo, townVertex());
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
