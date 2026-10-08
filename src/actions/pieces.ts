@@ -669,14 +669,14 @@ function draftingDetails(): THREE.Object3D {
 }
 
 export const PIECES: PieceDef[] = [
-  define({ id: 'workbench', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: blueprint }),
-  define({ id: 'draftingTable', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: draftingDetails }),
-  define({ id: 'floor', snap: 'cell', color: PALETTE.trunk, look: floorLook, collision: [[CELL, FLOOR_H, CELL, 0, 0, 0]], platform: true, hp: 8 }),
+  define({ id: 'workbench', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: blueprint, wood: true }),
+  define({ id: 'draftingTable', snap: 'free', color: PALETTE.trunk, look: workbenchLook, collision: workbenchParts(), platform: false, hp: 6, details: draftingDetails, wood: true }),
+  define({ id: 'floor', snap: 'cell', color: PALETTE.trunk, look: floorLook, collision: [[CELL, FLOOR_H, CELL, 0, 0, 0]], platform: true, hp: 8, wood: true }),
   define({ id: 'wall', snap: 'edge', color: PALETTE.trunk, look: wallLook, collision: [[CELL + WALL_T, WALL_H, WALL_T, 0, 0, 0]], platform: false, hp: 10, wood: true }),
   define({ id: 'doorway', snap: 'edge', color: PALETTE.trunk, look: doorwayLook, collision: doorwayParts(), platform: false, hp: 10, wood: true }),
-  define({ id: 'pillar', snap: 'corner', color: PALETTE.trunk, look: pillarLook, collision: [[PILLAR_W, WALL_H, PILLAR_W, 0, 0, 0]], legs: PILLAR_LEGS, platform: false, hp: 8 }),
-  define({ id: 'fence', snap: 'edge', color: PALETTE.trunk, look: fenceLook, collision: [[CELL + FENCE_T, 1, FENCE_T, 0, 0, 0]], platform: false, hp: 4 }),
-  define({ id: 'stairs', snap: 'cell', color: PALETTE.trunk, look: stairsLook, collision: stairParts(), ramp: stairRamp(), cells: STAIR_CELLS, platform: false, hp: 8 }),
+  define({ id: 'pillar', snap: 'corner', color: PALETTE.trunk, look: pillarLook, collision: [[PILLAR_W, WALL_H, PILLAR_W, 0, 0, 0]], legs: PILLAR_LEGS, platform: false, hp: 8, wood: true }),
+  define({ id: 'fence', snap: 'edge', color: PALETTE.trunk, look: fenceLook, collision: [[CELL + FENCE_T, 1, FENCE_T, 0, 0, 0]], platform: false, hp: 4, wood: true }),
+  define({ id: 'stairs', snap: 'cell', color: PALETTE.trunk, look: stairsLook, collision: stairParts(), ramp: stairRamp(), cells: STAIR_CELLS, platform: false, hp: 8, wood: true }),
   define({
     id: 'foundation',
     snap: 'cell',
