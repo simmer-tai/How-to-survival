@@ -58,6 +58,7 @@ import { SeaMap } from './ui/seaMap.js';
 import { Voyage } from './ui/voyage.js';
 import { AreaMap } from './ui/areaMap.js';
 import { IslandChartView } from './ui/islandChartView.js';
+import { setRagdollEnv } from './player/ragdoll.js';
 import { Avatar, AVATAR_LAYER, loadLook } from './player/avatar.js';
 import { AvatarMenu } from './ui/avatarEditor.js';
 import { CommandMenu } from './ui/commandMenu.js';
@@ -150,6 +151,17 @@ function caveDarkness() {
     }
     return blocked / CAVE_SKY_RAYS.length;
 }
+// 力尽きた体（ラグドール）が横たわる地面：地形・岩・建てた床など（雨よけと同じ物）。見つからなければ地形の高さ
+const RAGDOLL_RAY_REACH = 30; // 地面を探す深さ（m）
+const ragdollRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+setRagdollEnv({
+    ground: (x, y, z) => {
+        ragdollRay.origin = { x, y, z };
+        const hit = physics.world.castRay(ragdollRay, RAGDOLL_RAY_REACH, true, undefined, COLLIDE.shelterQuery);
+        return hit ? y - hit.timeOfImpact : terrainHeight(x, z);
+    },
+    water: seaSurface,
+});
 /** 雨が当たる面の高さ（屋根・地面・岩・水面のいちばん上。しぶきを出す所） */
 const rainSurface = (x, z) => {
     const top = camera.position.y + RAIN_RAY_ABOVE;
@@ -1556,6 +1568,7 @@ renderer.setAnimationLoop(() => {
         if (autosaveTimer >= AUTOSAVE_INTERVAL)
             save(true);
     }
+    deathTime = death.isOpen ? deathTime + dt : 0;
     if (world && vitals.dead && !death.isOpen) {
         death.setOpen(true);
         inventory.setOpen(false, false);
@@ -1635,6 +1648,8 @@ renderer.setAnimationLoop(() => {
     avatar.object.visible = !!world;
     if (world) {
         player.pose(avatarPose);
+        if (vitals.dead)
+            avatarPose.state = 'down'; // 力尽きたら崩れ落ちる（ほかの人の画面でも倒れる）
         if (boats.riding)
             avatarPose.bodyYaw = boats.heading ?? undefined; // 船では舳先を向いて座る
         avatar.setHeld(held?.item ?? null);
@@ -1775,6 +1790,43 @@ function placeThirdPerson() {
         el.style.top = top;
     }
 }
+// 力尽きている間のカメラ：倒れた体を、倒れる前に向いていた向きの後ろの上から見下ろし、ゆっくり昇る
+const DEATH_CAM_BACK = 2.2; // 体から後ろへ下がる距離（m）
+const DEATH_CAM_UP = 1.4; // 体から上がる高さ（m）
+const DEATH_CAM_RISE = 1.6; // そこからさらに昇る高さ（m）
+const DEATH_CAM_RISE_TIME = 5; // 昇りきるまでの時間（秒）
+const DEATH_CAM_LOOK_DROP = 0.9; // 体より下を見て、体を画面の上のほう（力尽きた画面の文字の上）に映す（m）
+const deathEye = new THREE.Vector3();
+const deathEyeQuat = new THREE.Quaternion();
+const deathTarget = new THREE.Vector3();
+const deathOffset = new THREE.Vector3();
+let deathTime = 0; // 力尽きてからの時間（秒）
+function placeDeathCamera() {
+    deathEye.copy(camera.position);
+    deathEyeQuat.copy(camera.quaternion);
+    avatar.center(deathTarget);
+    const rise = THREE.MathUtils.smoothstep(deathTime, 0, DEATH_CAM_RISE_TIME);
+    camera.getWorldDirection(deathOffset).setY(0);
+    if (deathOffset.lengthSq() < 1e-6)
+        deathOffset.set(0, 0, -1);
+    deathOffset.normalize().multiplyScalar(-DEATH_CAM_BACK).setY(DEATH_CAM_UP + DEATH_CAM_RISE * rise);
+    // 間に壁や地面があれば、その手前まで
+    const dist = deathOffset.length();
+    cameraRay.set(deathTarget, deathOffset.clone().divideScalar(dist));
+    cameraRay.far = dist;
+    const hit = cameraRay.intersectObjects(aimTargets, true)[0];
+    camera.position.copy(deathTarget).addScaledVector(deathOffset, (hit ? Math.max(hit.distance - CAMERA_MARGIN, 0.3) : dist) / dist);
+    const surface = seaSurface(deathTarget.x, deathTarget.z);
+    if (deathTarget.y > surface - 0.5)
+        camera.position.y = Math.max(camera.position.y, surface + 0.3);
+    camera.lookAt(deathTarget.x, deathTarget.y - DEATH_CAM_LOOK_DROP, deathTarget.z);
+    camera.updateMatrixWorld();
+}
+function restoreDeathCamera() {
+    camera.position.copy(deathEye);
+    camera.quaternion.copy(deathEyeQuat);
+    camera.updateMatrixWorld();
+}
 function restoreEye() {
     camera.position.copy(eyePos);
     camera.updateMatrixWorld(); // 次のフレームまでのクリックなども、目の位置から狙う
@@ -1871,6 +1923,15 @@ function render() {
         camera.layers.set(0);
         camera.layers.enable(AVATAR_LAYER);
         seaMap.render(renderer, scene, camera, fog, sky.color, sky.daylight, sky.object);
+        camera.layers.set(0);
+        return;
+    }
+    // 力尽きている間は、倒れた自分の体を斜め上から見下ろす
+    if (world && death.isOpen) {
+        placeDeathCamera();
+        camera.layers.enable(AVATAR_LAYER);
+        renderWorld();
+        restoreDeathCamera();
         camera.layers.set(0);
         return;
     }
