@@ -3,10 +3,14 @@ import { PALETTE } from '../core/palette.js';
 import { flat } from '../core/materials.js';
 import { mulberry32 } from './house.js';
 import { isSandAt, withField, type HeightField } from './terrain.js';
+import type { CrabCommand, CrabRequest, CrabTool, Requester } from '../core/commands.js';
 
-// 砂浜を歩き回るカニ（敵ではない、眺めるだけの生き物）。自分の画面だけの演出。
+// 砂浜を歩き回るカニ（敵ではない生き物）。素手・ツルハシ・斧・槍で叩くと体力が減り、尽きるとひっくり返って砂に沈む。
+// しばらくするとすみかに戻ってくる。
 // すみか（歩き回る範囲の中心）は場所ごとの種から決めるので誰の画面でも同じ所にいるが、
-// 歩く先や止まる長さは各自のブラウザで決める（見た目だけで、ワールドの状態は変えない。セーブもしない）
+// 歩く先や止まる長さは各自のブラウザで決める（見た目だけ）。
+// 体力とやられているかどうかは共有ワールド：叩く（hitCrab）・戻ってくる（reviveCrab）はワールドコマンドにし、セーブにも入れる。
+// 歩く位置は人ごとに少しずれるので、当たったかどうかは叩いた人の画面で決める
 
 const HOME_TRIES = 6000; // すみかを探す回数
 const HOME_MIN_Y = 0.15; // すみかにする砂浜の高さ（波打ち際より少し上から）
@@ -32,6 +36,21 @@ const CLAW_OPEN = 0.45; // はさみの指がいちばん開いたときの角�
 const CLAW_RATE = 1.3; // 止まっている間に、はさみをゆっくり開け閉めする速さ（1秒あたりのラジアン）
 const DRAW_DIST = 60; // カメラからこれより遠いカニは描かない・動かさない（m）
 const SCALE = 0.55; // カニの大きさの倍率
+const MAX_HP = 6; // カニの体力
+/** 道具ごとに、1回叩いて減らす体力 */
+const TOOL_DAMAGE: Record<CrabTool, number> = { fist: 1, pickaxe: 2, axe: 3, spear: 3 };
+const RESPAWN = 300; // やられてから、すみかに戻ってくるまでの時間（秒）
+const HIT_RADIUS = 0.3; // 叩ける範囲（甲羅のまわりの球の半径。m）
+const HIT_Y = 0.12; // 叩ける範囲の中心の、地面からの高さ（m）
+const HURT_TIME = 0.35; // 叩かれて跳ねる時間（秒）
+const HURT_HOP = 0.12; // 叩かれて跳ねる高さ（m）
+const FLIP_TIME = 0.5; // やられてひっくり返るまでの時間（秒）
+const SINK_DELAY = 2.5; // ひっくり返ってから砂に沈み始めるまでの時間（秒）
+const SINK_TIME = 1.5; // 砂に沈みきるまでの時間（秒）
+const SINK_DEPTH = 0.3; // 沈む深さ（m）
+const AIM_EPS = 0.05; // 狙いをさえぎる物との距離の余裕（m）
+
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
 
 const SHELL = new THREE.Color(PALETTE.accent);
 const LEG = SHELL.clone().multiplyScalar(0.75);
@@ -53,7 +72,22 @@ interface Crab {
   speed: number;
   phase: number;
   clawPhase: number;
+  /** のこりの体力（共有ワールド） */
+  hp: number;
+  /** やられてから戻ってくるまでののこり時間（秒）。生きていれば null（共有ワールド） */
+  respawn: number | null;
+  /** 叩かれて跳ねるのこり時間（自分の画面だけ） */
+  hurt: number;
+  /** 叩かれて、人から逃げる向きを選び直す（自分の画面だけ） */
+  scared: boolean;
+  /** やられてからたった時間（ひっくり返って沈む見た目に使う。自分の画面だけ） */
+  dying: number;
 }
+
+/** 弱った・やられたカニの [すみかの番号, のこりの体力, 戻ってくるまでののこり秒（生きていれば -1）] */
+export type CrabSave = [number, number, number];
+/** 場所の id ごとの、弱った・やられたカニ */
+export type CrabsSave = Record<string, CrabSave[]>;
 
 /** 脚1本（右側の向きで作る。左側は台を左右反転して使う）。付け根・ひざ・先の関節で曲がる */
 interface Leg {
@@ -212,9 +246,21 @@ function buildCrab(): { root: THREE.Group; legs: Leg[]; claws: Claw[] } {
 export class Crabs {
   readonly group = new THREE.Group();
   private readonly crabs: Crab[] = [];
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly sphere = new THREE.Sphere();
+  private readonly hitPoint = new THREE.Vector3();
 
-  /** field はその場所の地形、seed はすみかを決める種、count は数 */
-  constructor(private readonly field: HeightField, seed: number, count: number) {
+  /**
+   * loc はこの場所の id、field はその場所の地形、seed はすみかを決める種、count は数。
+   * request は頼みを出す関数（main の requestWorld）
+   */
+  constructor(
+    readonly loc: string,
+    private readonly field: HeightField,
+    seed: number,
+    count: number,
+    private readonly request: Requester,
+  ) {
     const rand = mulberry32(seed);
     const homes: THREE.Vector2[] = [];
     withField(field, () => {
@@ -242,6 +288,11 @@ export class Crabs {
         speed: SPEED,
         phase: rand() * 10,
         clawPhase: rand() * 10,
+        hp: MAX_HP,
+        respawn: null,
+        hurt: 0,
+        scared: false,
+        dying: 0,
       };
       this.place(crab);
       this.group.add(root);
@@ -253,10 +304,18 @@ export class Crabs {
   update(dt: number, camera: THREE.Vector3): void {
     for (const c of this.crabs) {
       const far = Math.hypot(c.pos.x - camera.x, c.pos.y - camera.z) > DRAW_DIST;
-      c.root.visible = !far;
+      c.root.visible = !far && c.dying < FLIP_TIME + SINK_DELAY + SINK_TIME;
+      if (c.respawn !== null) {
+        // やられた：ひっくり返って、しばらくしてから砂に沈む
+        c.dying += dt;
+        this.place(c);
+        continue;
+      }
       if (far) continue;
+      if (c.hurt > 0) c.hurt = Math.max(0, c.hurt - dt);
       const near = Math.hypot(c.pos.x - camera.x, c.pos.y - camera.z) < FLEE_DIST;
-      if (near && c.speed !== FLEE_SPEED) {
+      if (c.scared || (near && c.speed !== FLEE_SPEED)) {
+        c.scared = false;
         // 人から離れる向きへ逃げる（すみかの範囲の中で）
         const away = new THREE.Vector2(c.pos.x - camera.x, c.pos.y - camera.z).normalize().multiplyScalar(ROAM);
         const t = c.pos.clone().add(away).sub(c.home).clampLength(0, ROAM * 1.4).add(c.home);
@@ -302,6 +361,114 @@ export class Crabs {
     }
   }
 
+  // ---- 入力側：狙ったカニを叩く頼みを出す ----
+
+  /** 視線の先 reach 以内にいる、生きているカニの番号（手前の targets にさえぎられていれば null） */
+  aimed(camera: THREE.Camera, reach: number, targets: THREE.Object3D[]): number | null {
+    this.raycaster.setFromCamera(SCREEN_CENTER, camera);
+    const ray = this.raycaster.ray;
+    let best: number | null = null;
+    let bestDist = reach;
+    this.crabs.forEach((c, i) => {
+      if (c.respawn !== null || !c.root.visible) return;
+      this.sphere.center.set(c.root.position.x, c.root.position.y + HIT_Y, c.root.position.z);
+      this.sphere.radius = HIT_RADIUS;
+      const hit = ray.intersectSphere(this.sphere, this.hitPoint);
+      if (!hit) return;
+      const d = hit.distanceTo(ray.origin);
+      if (d < bestDist) {
+        best = i;
+        bestDist = d;
+      }
+    });
+    if (best === null) return null;
+    this.raycaster.far = bestDist;
+    const block = this.raycaster.intersectObjects(targets, false)[0];
+    this.raycaster.far = Infinity;
+    return block && block.distance < bestDist - AIM_EPS ? null : best;
+  }
+
+  /** 狙ったカニを tool で叩く。叩けたら true（道具の耐久値を減らすのは呼んだ側） */
+  hit(camera: THREE.Camera, tool: CrabTool, reach: number, targets: THREE.Object3D[]): boolean {
+    const crab = this.aimed(camera, reach, targets);
+    return crab !== null && this.request({ type: 'hitCrab', place: this.loc, crab, tool });
+  }
+
+  /** 時間を進める。やられたカニが戻ってくる時間になったら、世界の頼みとして戻す（ホストだけが出せる） */
+  tick(dt: number): void {
+    this.crabs.forEach((c, crab) => {
+      if (c.respawn === null) return;
+      c.respawn = Math.max(0, c.respawn - dt);
+      if (c.respawn <= 0) this.request({ type: 'reviveCrab', place: this.loc, crab }, null);
+    });
+  }
+
+  // ---- 確かめる側（ホスト）：叩けるか・どれだけ減るかを決める ----
+
+  authorize(req: CrabRequest): CrabCommand | null {
+    const c = this.crabs[req.crab];
+    if (!c) return null;
+    if (req.type === 'reviveCrab') return c.respawn !== null && c.respawn <= 0 ? req : null;
+    const damage = TOOL_DAMAGE[req.tool];
+    if (c.respawn !== null || !damage) return null;
+    return { type: 'hitCrab', place: req.place, crab: req.crab, damage };
+  }
+
+  // ---- 適用側：コマンドの値だけでカニを変える ----
+
+  apply(cmd: CrabCommand): void {
+    const c = this.crabs[cmd.crab];
+    if (!c) return;
+    if (cmd.type === 'reviveCrab') {
+      this.revive(c);
+      return;
+    }
+    if (c.respawn !== null) return;
+    c.hp = Math.max(0, c.hp - cmd.damage);
+    c.hurt = HURT_TIME;
+    c.scared = true;
+    if (c.hp <= 0) {
+      c.respawn = RESPAWN;
+      c.dying = 0;
+    }
+  }
+
+  /** やられたカニを、元気な姿ですみかに戻す */
+  private revive(c: Crab): void {
+    c.hp = MAX_HP;
+    c.respawn = null;
+    c.dying = 0;
+    c.hurt = 0;
+    c.pos.copy(c.home);
+    c.target.copy(c.home);
+    c.idle = IDLE.min;
+    c.speed = SPEED;
+    this.place(c);
+  }
+
+  serialize(): CrabSave[] {
+    const out: CrabSave[] = [];
+    this.crabs.forEach((c, i) => {
+      if (c.hp < MAX_HP || c.respawn !== null) out.push([i, c.hp, c.respawn ?? -1]);
+    });
+    return out;
+  }
+
+  /** セーブや途中参加で受け取った状態に戻す（入っていないカニは元気） */
+  restore(data: CrabSave[] | undefined): void {
+    for (const c of this.crabs) this.revive(c);
+    if (!Array.isArray(data)) return;
+    for (const [i, hp, respawn] of data) {
+      const c = this.crabs[i];
+      if (!c) continue;
+      c.hp = Math.min(MAX_HP, Math.max(0, hp));
+      if (respawn >= 0) {
+        c.respawn = respawn;
+        c.dying = Infinity; // 読み込んだときには、もう沈みきっている
+      }
+    }
+  }
+
   /** 脚を振る（moving が 1 なら歩いている） */
   private swing(c: Crab, moving: number, dt: number): void {
     c.phase += dt * LEG_RATE * moving * (c.speed / SPEED);
@@ -327,7 +494,18 @@ export class Crabs {
 
   /** 位置と向きを地面に合わせる */
   private place(c: Crab): void {
-    c.root.position.set(c.pos.x, this.field.height(c.pos.x, c.pos.y), c.pos.y);
-    c.root.rotation.y = c.yaw;
+    let y = this.field.height(c.pos.x, c.pos.y);
+    let flip = 0;
+    if (c.respawn !== null) {
+      // ひっくり返る（甲羅の高さを支点に、横へ転がす）。そのあと砂に沈む
+      const k = Math.min(1, c.dying / FLIP_TIME);
+      flip = Math.PI * k * k;
+      y += Math.sin(flip) * HURT_HOP + (BODY_Y * SCALE * 2) * k;
+      y -= SINK_DEPTH * Math.min(1, Math.max(0, (c.dying - FLIP_TIME - SINK_DELAY) / SINK_TIME));
+    } else if (c.hurt > 0) {
+      y += Math.sin((c.hurt / HURT_TIME) * Math.PI) * HURT_HOP; // 叩かれて跳ねる
+    }
+    c.root.position.set(c.pos.x, y, c.pos.y);
+    c.root.rotation.set(0, c.yaw, flip, 'YXZ');
   }
 }

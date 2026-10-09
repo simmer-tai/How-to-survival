@@ -31,7 +31,8 @@ import { WorldClock } from '../world/clock.js';
 // 24 → 25：インベントリ・落とし物の島の地図が、地図の中身（chart）を持つようになった
 // 25 → 26：島の地図から海図に載せた島（isles）が入った。プレイヤー・船の場所（loc）に isle0 などが入るようになった
 // 26 → 27：木の階段が2マス使うようになった（位置 p が、並んだ2マスの真ん中になった）
-export const SAVE_VERSION = 27;
+// 27 → 28：カニの体力（crabs）が入った
+export const SAVE_VERSION = 28;
 /** 自分だけの状態（マルチでは各自のブラウザに残す） */
 export const PERSONAL_KEYS = ['player', 'inventory', 'vitals', 'guide', 'recipes'];
 /** 1 → 2：部材に並び順で ID を付ける */
@@ -182,6 +183,10 @@ function fromV26(old) {
     });
     return { ...old, version: 27, built: { ...old.built, pieces } };
 }
+/** 27 → 28：カニはみな元気 */
+function fromV27(old) {
+    return { ...old, version: 28, crabs: {} };
+}
 const INDEX_KEY = 'warfarming:worlds';
 const dataKey = (id) => `warfarming:world:${id}`;
 /** 最後に遊んだ順 */
@@ -261,6 +266,8 @@ export function loadWorld(id) {
         data = fromV25(data);
     if (data.version === 26)
         data = fromV26(data);
+    if (data.version === 27)
+        data = fromV27(data);
     if (data.version !== SAVE_VERSION)
         throw new Error(`unknown save version: ${data.version}`);
     return data;

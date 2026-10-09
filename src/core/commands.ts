@@ -145,7 +145,18 @@ export type FireCommand = AddFuel | TakeFuel | BurnFuel;
  */
 export interface ChartIsle { type: 'chartIsle'; iid: number; chart: number }
 
-export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | GrowTree | BoatCommand | SpearCommand | SetWeather | FireCommand | ChartIsle;
+/** カニを叩ける道具 */
+export type CrabTool = 'fist' | 'axe' | 'pickaxe' | 'spear';
+
+/** 場所 place（自分の島・街・海図に載せた島）のカニ（すみかを決めた順の番号 crab）を叩いて、体力を damage 減らす。減らす量はホストが道具から決める */
+export interface HitCrab { type: 'hitCrab'; place: string; crab: number; damage: number }
+
+/** やられたカニが、時間がたってすみかに戻ってくる。時間を進めるホストが出す */
+export interface ReviveCrab { type: 'reviveCrab'; place: string; crab: number }
+
+export type CrabCommand = HitCrab | ReviveCrab;
+
+export type WorldCommand = PieceCommand | DropCommand | ChopTree | HarvestBush | PickBerry | MineRock | HoleCommand | GrowTree | BoatCommand | SpearCommand | SetWeather | FireCommand | ChartIsle | CrabCommand;
 
 /** 参加者からホストへの頼み。新しく増える物の ID はホストが付けるので、まだ持たない */
 export type PieceRequest = Omit<PlacePiece, 'pid'> | RemovePiece | { type: 'hitPiece'; pid: number; tool: StrikeTool };
@@ -156,7 +167,8 @@ export type HoleRequest = { type: 'digHole'; p: [number, number]; tool: DigTool 
 export type BoatRequest = Omit<PlaceBoat, 'bid'> | PickBoat | BoardBoat | LeaveBoat | Omit<SailBoat, 'p' | 'yaw'>;
 export type SpearRequest = Omit<ThrowSpear, 'sid' | 't' | 'hit'> | PickSpear;
 export type WeatherRequest = Pick<SetWeather, 'type' | 'kind'>;
-export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | GrowTree | BoatRequest | SpearRequest | WeatherRequest | FireCommand | Omit<ChartIsle, 'iid'>;
+export type CrabRequest = (Omit<HitCrab, 'damage'> & { tool: CrabTool }) | ReviveCrab;
+export type WorldRequest = PieceRequest | DropRequest | ChopTree | BushRequest | RockRequest | HoleRequest | GrowTree | BoatRequest | SpearRequest | WeatherRequest | FireCommand | Omit<ChartIsle, 'iid'> | CrabRequest;
 
 /**
  * 頼みを出す関数（main の requestWorld）。by は頼んだ人の番号で、省くと自分。
