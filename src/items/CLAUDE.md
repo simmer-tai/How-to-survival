@@ -18,6 +18,7 @@
 | `islandChart.ts` | 島の地図の中身。種（seed）と組み合わせたメモ（told）を1つの整数 `chart` にまとめる（`newChart()`・`validChart()`）。下の桁から、最初からある11種類（`FIRST_KINDS`）のメモ・種・あとから足した地形のメモの順に並べるので、地形を足す前に作った地図もそのまま読める。本当に島にある地形（lands）と島の名前は、`readChart()` が seed と told からいつも同じ計算で決める。メモの地形はかならず全部出る。メモにない地形がときどき混ざり（あとから足した地形は、前からある島の地形と名前を変えないよう、名前を決めたあとの乱数で1つずつ混ぜる）、メモの数が多いほど混ざりやすい（`EXTRA_BASE`・`EXTRA_STEP`）。メモは `CHART_MAX_TOLD`（5）種類まで。地図を作るのは自分だけの行動なので、種は作った人のブラウザで `Math.random()` で決める（釣りの魚と同じ）。混ざる見込みと lands はプレイヤーに見せない | — |
 | `fishKinds.ts` | 釣れる魚の種類 `FISH_KINDS`（見た目・場所と時間・引きの強さ）。釣りは自分だけの行動なので `Math.random()` で決めてよい | — |
 | `itemModels.ts` | アイテムの3Dモデル（`buildXxxModel()`）。船・魚・コイン・松明（炎は描くたびに揺れる。`TORCH_FLAME_Y` は炎の高さ。炎の舌の形・色・揺らぎ・まわりの光は `FIRE_TONGUE_GEO`・`FIRE_MATS`・`fireWobble`・`fireGlowMaterial` として焚火にも貸す）・設計図（`BlueprintKind` ごとに図面を変える）・白紙の地図・島の地図・地形のメモ（`LAND_DRAWINGS` で地形ごとに紙の絵を変える）・鉄鉱石（`ORE_ROCK`・`ORE_BIT` の色は洞窟の鉄の鉱脈と共通）など | — |
+| `crabModel.ts` | カニの体（`buildCrab()`。甲羅・関節で曲がる脚・はさみ・目）と、脚とはさみを閉じる `foldCrab()`、倒したカニのアイテム「カニ」の見た目 `buildCrabModel()`（脚を閉じた姿）。砂浜を歩くカニ（`world/crabs.ts`）と同じ体を使う | — |
 | `itemIcons.ts` | アイテムのアイコン（`itemIcon()`。モデルから描く）と `itemModel()` | — |
 
 ## アイテムを追加するとき

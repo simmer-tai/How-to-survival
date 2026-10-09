@@ -1,16 +1,17 @@
 import * as THREE from 'three';
-import { PALETTE } from '../core/palette.js';
-import { flat } from '../core/materials.js';
+import { BODY_Y, LEG_BEND, LEG_UP, SCALE, buildCrab, foldCrab, type Claw, type Leg } from '../items/crabModel.js';
 import { mulberry32 } from './house.js';
 import { isSandAt, withField, type HeightField } from './terrain.js';
 import type { CrabCommand, CrabRequest, CrabTool, Requester } from '../core/commands.js';
+import type { IsleId } from './location.js';
 
-// 砂浜を歩き回るカニ（敵ではない生き物）。素手・ツルハシ・斧・槍で叩くと体力が減り、尽きるとひっくり返って砂に沈む。
-// しばらくするとすみかに戻ってくる。
+// 砂浜を歩き回るカニ（敵ではない生き物）。素手・ツルハシ・斧・槍で叩くと体力が減り、尽きるとひっくり返って脚を閉じ、
+// 落とし物の「カニ」（脚を閉じた姿）になる。しばらくすると、すみかに新しいカニが戻ってくる。
 // すみか（歩き回る範囲の中心）は場所ごとの種から決めるので誰の画面でも同じ所にいるが、
 // 歩く先や止まる長さは各自のブラウザで決める（見た目だけ）。
 // 体力とやられているかどうかは共有ワールド：叩く（hitCrab）・戻ってくる（reviveCrab）はワールドコマンドにし、セーブにも入れる。
-// 歩く位置は人ごとに少しずれるので、当たったかどうかは叩いた人の画面で決める
+// 歩く位置は人ごとに少しずれるので、当たったかどうかと、倒れた位置は叩いた人の画面で決める。
+// 倒れたカニの落とし物は、ひっくり返り終わってからホストが世界の頼み（dropItem）で落とす
 
 const HOME_TRIES = 6000; // すみかを探す回数
 const HOME_MIN_Y = 0.15; // すみかにする砂浜の高さ（波打ち際より少し上から）
@@ -25,17 +26,9 @@ const IDLE = { min: 1.5, max: 6 }; // 止まっている時間（秒）
 const LEG_SWING = 0.35; // 歩くときに、付け根で脚を前後に振る角度（rad）
 const LEG_LIFT = 0.3; // 歩くときに、脚を持ち上げる角度（rad。前へ戻す間だけ上げる）
 const LEG_RATE = 18; // 脚を振る速さ（1秒あたりのラジアン）
-const LEG_COUNT = 4; // 片側の脚の数
-const LEG_THIGH = 0.17; // もも（付け根からひざまで）の長さ
-const LEG_SHIN = 0.22; // すね（ひざから先まで）の長さ
-const LEG_TIP = 0.06; // 脚の先の爪の長さ
-const LEG_UP = 0.75; // ももを持ち上げる角度（rad）
-const LEG_BEND = -2.1; // ひざで曲げる角度（rad。下へ折って先を地面につける）
-const BODY_Y = 0.17; // 甲羅の中心の高さ（脚で持ち上げる高さ）
 const CLAW_OPEN = 0.45; // はさみの指がいちばん開いたときの角度（rad）
 const CLAW_RATE = 1.3; // 止まっている間に、はさみをゆっくり開け閉めする速さ（1秒あたりのラジアン）
 const DRAW_DIST = 60; // カメラからこれより遠いカニは描かない・動かさない（m）
-const SCALE = 0.55; // カニの大きさの倍率
 const MAX_HP = 6; // カニの体力
 /** 道具ごとに、1回叩いて減らす体力 */
 const TOOL_DAMAGE: Record<CrabTool, number> = { fist: 1, pickaxe: 2, axe: 3, spear: 3 };
@@ -44,18 +37,12 @@ const HIT_RADIUS = 0.3; // 叩ける範囲（甲羅のまわりの球の半径�
 const HIT_Y = 0.12; // 叩ける範囲の中心の、地面からの高さ（m）
 const HURT_TIME = 0.35; // 叩かれて跳ねる時間（秒）
 const HURT_HOP = 0.12; // 叩かれて跳ねる高さ（m）
-const FLIP_TIME = 0.5; // やられてひっくり返るまでの時間（秒）
-const SINK_DELAY = 2.5; // ひっくり返ってから砂に沈み始めるまでの時間（秒）
-const SINK_TIME = 1.5; // 砂に沈みきるまでの時間（秒）
-const SINK_DEPTH = 0.3; // 沈む深さ（m）
+const FLIP_TIME = 0.45; // やられてひっくり返り、脚を閉じきるまでの時間（秒）。過ぎると落とし物に替わる
+const DROP_Y = 0.15; // 落とし物を置く、地面からの高さ（m）
+const HIT_SPREAD = ROAM * 2; // 叩いた人の画面のカニの位置を、すみかからこの距離までなら信じる（m）
 const AIM_EPS = 0.05; // 狙いをさえぎる物との距離の余裕（m）
 
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
-
-const SHELL = new THREE.Color(PALETTE.accent);
-const LEG = SHELL.clone().multiplyScalar(0.75);
-const TIP = SHELL.clone().lerp(new THREE.Color(PALETTE.sand), 0.35); // 脚の先とはさみの指（白っぽい）
-const EYE = new THREE.Color(PALETTE.bark).multiplyScalar(0.5);
 
 /** カニ1匹の見た目と、動くための状態 */
 interface Crab {
@@ -80,167 +67,16 @@ interface Crab {
   hurt: number;
   /** 叩かれて、人から逃げる向きを選び直す（自分の画面だけ） */
   scared: boolean;
-  /** やられてからたった時間（ひっくり返って沈む見た目に使う。自分の画面だけ） */
+  /** やられてからたった時間（ひっくり返って脚を閉じる見た目に使う。自分の画面だけ） */
   dying: number;
+  /** 落とし物を落とすまでののこり時間（秒）。落としたら null */
+  dropIn: number | null;
 }
 
 /** 弱った・やられたカニの [すみかの番号, のこりの体力, 戻ってくるまでののこり秒（生きていれば -1）] */
 export type CrabSave = [number, number, number];
 /** 場所の id ごとの、弱った・やられたカニ */
 export type CrabsSave = Record<string, CrabSave[]>;
-
-/** 脚1本（右側の向きで作る。左側は台を左右反転して使う）。付け根・ひざ・先の関節で曲がる */
-interface Leg {
-  /** 付け根の台（左右反転と、脚ごとの前後の向き） */
-  pivot: THREE.Group;
-  /** 付け根の関節（ここで前後に振り、上下に持ち上げる） */
-  hip: THREE.Group;
-  /** ひざの関節（ここで脚の先を曲げる） */
-  knee: THREE.Group;
-  /** 振るタイミングのずれ */
-  offset: number;
-}
-
-/** はさみ1本（右側の向きで作る）。動く指が開いたり閉じたりする */
-interface Claw {
-  pivot: THREE.Group;
-  /** 動く指（上の指）の関節 */
-  finger: THREE.Group;
-  offset: number;
-}
-
-/** 先の細い棒（関節の台の +x の向きに伸びる。脚の節に使う） */
-function segment(length: number, base: number, tip: number, mat: THREE.Material): THREE.Mesh {
-  const geo = new THREE.CylinderGeometry(tip, base, length, 5);
-  geo.rotateZ(-Math.PI / 2); // 軸を +x に向ける（細いほうが先）
-  geo.translate(length / 2, 0, 0);
-  return new THREE.Mesh(geo, mat);
-}
-
-/** 先の細いとがった指（+z の向きに伸びる。はさみの指に使う） */
-function fingerShape(length: number, base: number, mat: THREE.Material): THREE.Mesh {
-  const geo = new THREE.CylinderGeometry(0.004, base, length, 5);
-  geo.rotateX(Math.PI / 2); // 軸を +z に向ける（とがったほうが先）
-  geo.translate(0, 0, length / 2);
-  geo.scale(1, 0.75, 1); // 上下に少し平たく
-  return new THREE.Mesh(geo, mat);
-}
-
-/** 脚1本を作る。右側の向き（付け根から +x の外へ）で組み、ひざで下へ折って先を地面につける */
-function buildLeg(mat: THREE.Material, tipMat: THREE.Material): Pick<Leg, 'hip' | 'knee'> & { root: THREE.Group } {
-  const root = new THREE.Group();
-  const hip = new THREE.Group();
-  hip.rotation.z = LEG_UP; // ももは外へ、少し上向きに
-  hip.add(segment(LEG_THIGH, 0.022, 0.016, mat));
-  const knee = new THREE.Group();
-  knee.position.x = LEG_THIGH;
-  knee.rotation.z = LEG_BEND; // ひざで下へ折る
-  knee.add(segment(LEG_SHIN, 0.016, 0.01, mat));
-  // ひざの継ぎ目の玉と、脚の先のとがった爪
-  const joint = new THREE.Mesh(new THREE.IcosahedronGeometry(0.018, 0), mat);
-  const tip = segment(LEG_TIP, 0.01, 0.002, tipMat);
-  tip.position.x = LEG_SHIN;
-  tip.rotation.z = -0.35;
-  knee.add(joint, tip);
-  hip.add(knee);
-  root.add(hip);
-  return { root, hip, knee };
-}
-
-/** はさみ1本を作る。右側の向きで、肩から前へ腕を伸ばし、ひじで内へ曲げ、手のひらから上下2本の指が出る */
-function buildClaw(shell: THREE.Material, leg: THREE.Material, tipMat: THREE.Material, size: number): Pick<Claw, 'finger'> & { root: THREE.Group } {
-  const root = new THREE.Group();
-  const shoulder = new THREE.Group();
-  shoulder.rotation.set(-0.25, 0.55, 0); // 前・外向き、少し上へ
-  const upper = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.04, 0.13).translate(0, 0, 0.065), leg);
-  const elbow = new THREE.Group();
-  elbow.position.z = 0.13;
-  elbow.rotation.set(0.2, -1.05, 0); // ひじで内へ曲げる
-  const fore = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.045, 0.09).translate(0, 0, 0.045), shell);
-  const elbowJoint = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 0), leg);
-  const wrist = new THREE.Group();
-  wrist.position.z = 0.09;
-  wrist.rotation.y = 0.5; // 手首で少し外へ向け直す
-  wrist.scale.setScalar(size);
-  // 手のひら（ふくらんだ甲羅）と、下の動かない指・上の動く指
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.07, 7, 5), shell);
-  palm.scale.set(0.85, 0.75, 1.25);
-  palm.position.z = 0.07;
-  const fixed = fingerShape(0.1, 0.034, tipMat);
-  fixed.position.set(0, -0.018, 0.14);
-  fixed.rotation.x = -0.12;
-  const finger = new THREE.Group();
-  finger.position.set(0, 0.025, 0.13);
-  const moving = fingerShape(0.095, 0.028, tipMat);
-  finger.add(moving);
-  wrist.add(palm, fixed, finger);
-  elbow.add(fore, elbowJoint, wrist);
-  shoulder.add(upper, elbow);
-  root.add(shoulder);
-  return { root, finger };
-}
-
-/** カニ1匹の体（甲羅・はさみ・脚・目）。脚とはさみは関節ごとに動かす */
-function buildCrab(): { root: THREE.Group; legs: Leg[]; claws: Claw[] } {
-  const root = new THREE.Group();
-  const shell = flat(SHELL.getHex());
-  const leg = flat(LEG.getHex());
-  const tip = flat(TIP.getHex());
-  const eye = flat(EYE.getHex());
-  // 甲羅：横に広い平たい楕円に、前のふちのでこぼこ
-  const body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 5), shell);
-  body.scale.set(1.25, 0.45, 0.92);
-  body.position.y = BODY_Y;
-  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.2, 7, 3), leg);
-  belly.scale.set(1.15, 0.25, 0.85);
-  belly.position.y = BODY_Y - 0.035;
-  root.add(body, belly);
-  for (const x of [-0.1, 0, 0.1]) {
-    const bump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 0), shell);
-    bump.position.set(x, BODY_Y + 0.03, 0.18);
-    root.add(bump);
-  }
-  // 目（甲羅の前から突き出た2本）
-  for (const s of [-1, 1]) {
-    const stalk = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, 0.02), leg);
-    stalk.position.set(s * 0.06, BODY_Y + 0.08, 0.16);
-    const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.028, 0), eye);
-    ball.position.set(s * 0.06, BODY_Y + 0.125, 0.16);
-    root.add(stalk, ball);
-  }
-  // はさみ（前の左右。右のほうが少し大きい）
-  const claws: Claw[] = [];
-  for (const s of [-1, 1]) {
-    const { root: arm, finger } = buildClaw(shell, leg, tip, s > 0 ? 1.15 : 1);
-    const pivot = new THREE.Group();
-    pivot.position.set(s * 0.13, BODY_Y, 0.15);
-    pivot.scale.x = s; // 左は左右反転
-    pivot.add(arm);
-    root.add(pivot);
-    claws.push({ pivot, finger, offset: s > 0 ? 0 : 1.7 });
-  }
-  // 脚（左右に4本ずつ。付け根の台を体のふちに置き、前から後ろへ扇のように向きを変える）
-  const legs: Leg[] = [];
-  for (const s of [-1, 1]) {
-    for (let i = 0; i < LEG_COUNT; i++) {
-      const { root: limb, hip, knee } = buildLeg(leg, tip);
-      const pivot = new THREE.Group();
-      const z = 0.09 - i * 0.075;
-      pivot.position.set(s * 0.2, BODY_Y - 0.01, z);
-      pivot.rotation.y = -s * (0.45 - i * 0.3); // 前の脚は前へ、後ろの脚は後ろへ向ける
-      pivot.scale.x = s;
-      pivot.add(limb);
-      root.add(pivot);
-      // 左右の同じ番号の脚、となりの脚どうしは逆のタイミングで動かす（交互に歩く）
-      legs.push({ pivot, hip, knee, offset: i * Math.PI + (s > 0 ? Math.PI / 2 : 0) });
-    }
-  }
-  root.scale.setScalar(SCALE);
-  root.traverse((o) => {
-    if (o instanceof THREE.Mesh) o.castShadow = true;
-  });
-  return { root, legs, claws };
-}
 
 /** 1つの場所の砂浜のカニたち */
 export class Crabs {
@@ -293,6 +129,7 @@ export class Crabs {
         hurt: 0,
         scared: false,
         dying: 0,
+        dropIn: null,
       };
       this.place(crab);
       this.group.add(root);
@@ -304,10 +141,11 @@ export class Crabs {
   update(dt: number, camera: THREE.Vector3): void {
     for (const c of this.crabs) {
       const far = Math.hypot(c.pos.x - camera.x, c.pos.y - camera.z) > DRAW_DIST;
-      c.root.visible = !far && c.dying < FLIP_TIME + SINK_DELAY + SINK_TIME;
+      c.root.visible = !far && (c.respawn === null || c.dying < FLIP_TIME);
       if (c.respawn !== null) {
-        // やられた：ひっくり返って、しばらくしてから砂に沈む
+        // やられた：ひっくり返りながら脚を閉じる（閉じきったら隠し、落とし物に替わる）
         c.dying += dt;
+        foldCrab(c, Math.min(1, c.dying / FLIP_TIME));
         this.place(c);
         continue;
       }
@@ -391,13 +229,22 @@ export class Crabs {
   /** 狙ったカニを tool で叩く。叩けたら true（道具の耐久値を減らすのは呼んだ側） */
   hit(camera: THREE.Camera, tool: CrabTool, reach: number, targets: THREE.Object3D[]): boolean {
     const crab = this.aimed(camera, reach, targets);
-    return crab !== null && this.request({ type: 'hitCrab', place: this.loc, crab, tool });
+    if (crab === null) return false;
+    const { pos } = this.crabs[crab];
+    return this.request({ type: 'hitCrab', place: this.loc, crab, tool, p: [pos.x, pos.y] });
   }
 
   /** 時間を進める。やられたカニが戻ってくる時間になったら、世界の頼みとして戻す（ホストだけが出せる） */
   tick(dt: number): void {
     this.crabs.forEach((c, crab) => {
       if (c.respawn === null) return;
+      if (c.dropIn !== null) {
+        c.dropIn -= dt;
+        if (c.dropIn <= 0) {
+          c.dropIn = null;
+          this.dropBody(c);
+        }
+      }
       c.respawn = Math.max(0, c.respawn - dt);
       if (c.respawn <= 0) this.request({ type: 'reviveCrab', place: this.loc, crab }, null);
     });
@@ -411,12 +258,19 @@ export class Crabs {
     if (req.type === 'reviveCrab') return c.respawn !== null && c.respawn <= 0 ? req : null;
     const damage = TOOL_DAMAGE[req.tool];
     if (c.respawn !== null || !damage) return null;
-    return { type: 'hitCrab', place: req.place, crab: req.crab, damage };
+    // 叩いた人の画面の位置が、すみかから離れすぎていればすみかにする
+    const [x, z] = req.p;
+    const p: [number, number] = Number.isFinite(x) && Number.isFinite(z) && Math.hypot(x - c.home.x, z - c.home.y) <= HIT_SPREAD ? [x, z] : [c.home.x, c.home.y];
+    return { type: 'hitCrab', place: req.place, crab: req.crab, damage, p };
   }
 
   // ---- 適用側：コマンドの値だけでカニを変える ----
 
-  apply(cmd: CrabCommand): void {
+  /** 叩かれた（跳ねる・ダメージの数を出す見た目のため）。p はカニの位置、mine は自分が叩いたか */
+  onHit: (p: THREE.Vector3, damage: number, killed: boolean, mine: boolean) => void = () => {};
+
+  /** mine は自分の頼みか */
+  apply(cmd: CrabCommand, mine: boolean): void {
     const c = this.crabs[cmd.crab];
     if (!c) return;
     if (cmd.type === 'reviveCrab') {
@@ -427,10 +281,25 @@ export class Crabs {
     c.hp = Math.max(0, c.hp - cmd.damage);
     c.hurt = HURT_TIME;
     c.scared = true;
-    if (c.hp <= 0) {
+    const killed = c.hp <= 0;
+    if (killed) {
+      // 叩いた人の画面の位置で倒れる
+      c.pos.set(cmd.p[0], cmd.p[1]);
+      c.target.copy(c.pos);
       c.respawn = RESPAWN;
       c.dying = 0;
+      c.dropIn = FLIP_TIME; // 落とすのは世界の頼みなので、ホストの頼みだけが通る
+      this.place(c);
     }
+    this.onHit(new THREE.Vector3(c.root.position.x, c.root.position.y + HIT_Y * 2, c.root.position.z), cmd.damage, killed, mine);
+  }
+
+  /** 倒れたカニを落とし物にする（世界の頼み。ひっくり返った向きで落とす） */
+  private dropBody(c: Crab): void {
+    const y = this.field.height(c.pos.x, c.pos.y) + DROP_Y;
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, c.yaw, Math.PI, 'YXZ'));
+    const at = this.loc === 'island' ? {} : { loc: this.loc as IsleId };
+    this.request({ type: 'dropItem', item: 'crab', count: 1, p: [c.pos.x, y, c.pos.y], v: [0, 0, 0], q: q.toArray() as [number, number, number, number], ...at }, null);
   }
 
   /** やられたカニを、元気な姿ですみかに戻す */
@@ -438,7 +307,9 @@ export class Crabs {
     c.hp = MAX_HP;
     c.respawn = null;
     c.dying = 0;
+    c.dropIn = null;
     c.hurt = 0;
+    foldCrab(c, 0);
     c.pos.copy(c.home);
     c.target.copy(c.home);
     c.idle = IDLE.min;
@@ -464,7 +335,7 @@ export class Crabs {
       c.hp = Math.min(MAX_HP, Math.max(0, hp));
       if (respawn >= 0) {
         c.respawn = respawn;
-        c.dying = Infinity; // 読み込んだときには、もう沈みきっている
+        c.dying = Infinity; // 読み込んだときには、もう落とし物に替わっている
       }
     }
   }
@@ -497,11 +368,10 @@ export class Crabs {
     let y = this.field.height(c.pos.x, c.pos.y);
     let flip = 0;
     if (c.respawn !== null) {
-      // ひっくり返る（甲羅の高さを支点に、横へ転がす）。そのあと砂に沈む
+      // ひっくり返る（甲羅の高さを支点に、横へ転がす）
       const k = Math.min(1, c.dying / FLIP_TIME);
       flip = Math.PI * k * k;
-      y += Math.sin(flip) * HURT_HOP + (BODY_Y * SCALE * 2) * k;
-      y -= SINK_DEPTH * Math.min(1, Math.max(0, (c.dying - FLIP_TIME - SINK_DELAY) / SINK_TIME));
+      y += Math.sin(flip) * HURT_HOP + BODY_Y * SCALE * 2 * k;
     } else if (c.hurt > 0) {
       y += Math.sin((c.hurt / HURT_TIME) * Math.PI) * HURT_HOP; // 叩かれて跳ねる
     }
