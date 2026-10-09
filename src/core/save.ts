@@ -19,6 +19,7 @@ import type { HolesSave } from '../actions/digging.js';
 import type { PlantingSave } from '../actions/planting.js';
 import type { FireSave } from '../actions/campfire.js';
 import type { IslesSave } from '../world/isles.js';
+import type { CrabsSave } from '../world/crabs.js';
 
 // ワールドはブラウザの localStorage に保存する（ページの URL のオリジンごとに別々になる）。
 // 地形や木・茂みの配置は固定シードで毎回同じに生成されるので、変化した状態だけを持つ
@@ -49,7 +50,8 @@ import type { IslesSave } from '../world/isles.js';
 // 24 → 25：インベントリ・落とし物の島の地図が、地図の中身（chart）を持つようになった
 // 25 → 26：島の地図から海図に載せた島（isles）が入った。プレイヤー・船の場所（loc）に isle0 などが入るようになった
 // 26 → 27：木の階段が2マス使うようになった（位置 p が、並んだ2マスの真ん中になった）
-export const SAVE_VERSION = 27;
+// 27 → 28：カニの体力（crabs）が入った
+export const SAVE_VERSION = 28;
 
 export interface WorldData {
   version: number;
@@ -88,6 +90,8 @@ export interface WorldData {
   planted: PlantingSave;
   /** 島の地図から海図に載せた島（島の番号順） */
   isles: IslesSave;
+  /** 叩かれて弱った・やられたカニ（場所の id ごと） */
+  crabs: CrabsSave;
 }
 
 /** 自分だけの状態（マルチでは各自のブラウザに残す） */
@@ -332,10 +336,10 @@ function fromV25(old: WorldDataV25): WorldDataV26 {
 }
 
 /** バージョン 26 のセーブデータ（階段は1マスで、位置 p はそのマスの真ん中） */
-type WorldDataV26 = Omit<WorldData, 'version'> & { version: 26 };
+type WorldDataV26 = Omit<WorldDataV27, 'version'> & { version: 26 };
 
 /** 26 → 27：階段は、もとのマスをいちばん手前（低い側）にして、上る向き（部材の -Z）へ1マス伸ばす */
-function fromV26(old: WorldDataV26): WorldData {
+function fromV26(old: WorldDataV26): WorldDataV27 {
   const pieces = old.built.pieces.map((s) => {
     if (s.id !== 'stairs') return s;
     const a = (s.r * Math.PI) / 2;
@@ -343,6 +347,14 @@ function fromV26(old: WorldDataV26): WorldData {
     return { ...s, p: [s.p[0] - Math.round(Math.sin(a)) * half, s.p[1], s.p[2] - Math.round(Math.cos(a)) * half] };
   });
   return { ...old, version: 27, built: { ...old.built, pieces } };
+}
+
+/** バージョン 27 のセーブデータ（カニの体力がない） */
+type WorldDataV27 = Omit<WorldData, 'version' | 'crabs'> & { version: 27 };
+
+/** 27 → 28：カニはみな元気 */
+function fromV27(old: WorldDataV27): WorldData {
+  return { ...old, version: 28, crabs: {} };
 }
 
 export interface WorldMeta {
@@ -380,7 +392,7 @@ export function createWorld(name: string): WorldMeta {
 export function loadWorld(id: string): WorldData | null {
   const json = localStorage.getItem(dataKey(id));
   if (json === null) return null;
-  let data = JSON.parse(json) as WorldData | WorldDataV1 | WorldDataV2 | WorldDataV3 | WorldDataV4 | WorldDataV5 | WorldDataV6 | WorldDataV7 | WorldDataV8 | WorldDataV9 | WorldDataV10 | WorldDataV11 | WorldDataV12 | WorldDataV13 | WorldDataV14 | WorldDataV15 | WorldDataV16 | WorldDataV17 | WorldDataV18 | WorldDataV19 | WorldDataV20 | WorldDataV21 | WorldDataV22 | WorldDataV23 | WorldDataV24 | WorldDataV25 | WorldDataV26;
+  let data = JSON.parse(json) as WorldData | WorldDataV1 | WorldDataV2 | WorldDataV3 | WorldDataV4 | WorldDataV5 | WorldDataV6 | WorldDataV7 | WorldDataV8 | WorldDataV9 | WorldDataV10 | WorldDataV11 | WorldDataV12 | WorldDataV13 | WorldDataV14 | WorldDataV15 | WorldDataV16 | WorldDataV17 | WorldDataV18 | WorldDataV19 | WorldDataV20 | WorldDataV21 | WorldDataV22 | WorldDataV23 | WorldDataV24 | WorldDataV25 | WorldDataV26 | WorldDataV27;
   if (data.version === 1) data = fromV1(data as WorldDataV1);
   if (data.version === 2) data = fromV2(data as WorldDataV2);
   if (data.version === 3) data = fromV3(data as WorldDataV3);
@@ -407,6 +419,7 @@ export function loadWorld(id: string): WorldData | null {
   if (data.version === 24) data = fromV24(data as WorldDataV24);
   if (data.version === 25) data = fromV25(data as WorldDataV25);
   if (data.version === 26) data = fromV26(data as WorldDataV26);
+  if (data.version === 27) data = fromV27(data as WorldDataV27);
   if (data.version !== SAVE_VERSION) throw new Error(`unknown save version: ${data.version}`);
   return data as WorldData;
 }

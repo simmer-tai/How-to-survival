@@ -165,11 +165,11 @@ const sea = new Sea();
 scene.add(sea.mesh);
 const props = buildProps();
 scene.add(props.group);
-// 砂浜を歩き回るカニ（眺めるだけの、自分の画面だけの演出）。場所ごとに持ち、今いる場所の分だけ動かす
+// 砂浜を歩き回るカニ。場所ごとに持ち、今いる場所の分だけ動かす（叩いて減った体力は共有ワールド）
 const CRAB_SEED = 7100; // カニのすみかを決める種（海図に載せた島は、島の地図の種に足す）
 const HOME_CRABS = 10; // 自分の島のカニの数
 const ISLE_CRABS = { beach: 14, other: 6 }; // 海図に載せた島のカニの数（白い渚の島は多い）
-const homeCrabs = new Crabs(islandField, CRAB_SEED, HOME_CRABS);
+const homeCrabs = new Crabs('island', islandField, CRAB_SEED, HOME_CRABS, (req, by) => requestWorld(req, by));
 scene.add(homeCrabs.group);
 const crabsByPlace = new Map([['island', homeCrabs]]);
 for (const mesh of props.solids)
@@ -324,10 +324,14 @@ fisher.onCatch = (item, count) => {
     gain(item, count);
     wearTool('fishingRod');
 };
+// 素手・ツルハシ・斧・槍は、狙った先にカニがいればカニを叩く（叩けたら、ほかの物は叩かない）
+const hitCrab = (tool, reach) => crabsByPlace.get(here)?.hit(camera, tool, reach, aimTargets) ?? false;
 // 斧や素手で建てた部材を叩くと耐久値が減り、0 になると壊れる（部材より手前に木や茂みがあれば、そちらを叩く）。
 // 道具は何かに当てるたびに自分の耐久値も 1 減る（空振りでは減らない）
 const AXE_REACH = 3.2; // 斧で部材を叩ける距離
 hand.onImpact = () => {
+    if (hitCrab('axe', AXE_REACH))
+        return wearTool('axe');
     const k = kit();
     if (builder.strike('axe', AXE_REACH) || (k && (k.forager.harvest(camera, 'axe', AXE_REACH) || k.chopper.chop(camera))))
         wearTool('axe');
@@ -338,6 +342,8 @@ const PUNCH_REACH = 2.2;
 const KNIFE_REACH = 2.6;
 const PICK_REACH = 3.2;
 pickaxeHand.onImpact = () => {
+    if (hitCrab('pickaxe', PICK_REACH))
+        return wearTool('pickaxe');
     if (kit()?.miner.mine(camera, 'pickaxe', PICK_REACH))
         wearTool('pickaxe');
 };
@@ -369,10 +375,14 @@ knifeHand.onImpact = () => {
 // 石の槍は先に石のナイフが付いているので、ナイフと同じく茂みを刈れる（ツルも採れる）。柄が長い分だけ遠くまで届く
 const SPEAR_REACH = 3.4;
 spearHand.onImpact = () => {
+    if (hitCrab('spear', SPEAR_REACH))
+        return wearTool('spear');
     if (kit()?.forager.harvest(camera, 'knife', SPEAR_REACH))
         wearTool('spear');
 };
 emptyHand.onImpact = () => {
+    if (hitCrab('fist', PUNCH_REACH))
+        return;
     const k = kit();
     if (!builder.strike('fist', PUNCH_REACH) && k && !k.forager.harvest(camera, 'fist', PUNCH_REACH))
         k.chopper.punch(camera, PUNCH_REACH);
@@ -447,7 +457,8 @@ const isles = new Isles({
     // 今いない島は隠す（剛体は physics が止めている）
     built: (isle) => {
         lod.addProps(isle.id, isle.props);
-        const crabs = new Crabs(isle.shape.field, isle.chart.seed + CRAB_SEED, isle.chart.lands.includes('beach') ? ISLE_CRABS.beach : ISLE_CRABS.other);
+        const count = isle.chart.lands.includes('beach') ? ISLE_CRABS.beach : ISLE_CRABS.other;
+        const crabs = new Crabs(isle.id, isle.shape.field, isle.chart.seed + CRAB_SEED, count, (req, by) => requestWorld(req, by));
         isle.group.add(crabs.group); // 島と一緒に見せる・隠す
         crabsByPlace.set(isle.id, crabs);
         if (isle.id !== here)
@@ -604,6 +615,9 @@ const authorizeWorld = (req, by) => {
         case 'takeFuel':
         case 'burnFuel':
             return campfires.authorize(req);
+        case 'hitCrab':
+        case 'reviveCrab':
+            return crabsByPlace.get(req.place)?.authorize(req) ?? null;
         default:
             return builder.authorize(req);
     }
@@ -621,6 +635,8 @@ const scopeOf = (cmd) => {
         case 'sailBoat':
         case 'setWeather':
         case 'chartIsle':
+        case 'hitCrab': // カニは剛体を持たず、どの場所でも見えたまま変えてよい
+        case 'reviveCrab':
             return null;
         case 'dropItem':
         case 'pickDrop':
@@ -698,6 +714,10 @@ const applyCommand = (cmd, by) => {
         case 'takeFuel':
         case 'burnFuel':
             campfires.apply(cmd, mine);
+            break;
+        case 'hitCrab':
+        case 'reviveCrab':
+            crabsByPlace.get(cmd.place)?.apply(cmd);
             break;
     }
 };
@@ -1031,11 +1051,14 @@ const sharedSnapshot = () => ({
     spears: spears.serialize(),
     clock: clock.serialize(),
     weather: weather.serialize(),
+    crabs: Object.fromEntries([...crabsByPlace].map(([loc, c]) => [loc, c.serialize()])),
 });
 const snapshot = () => ({ version: SAVE_VERSION, ...personalSnapshot(), ...sharedSnapshot() });
 /** 共有ワールドを戻す（床などの足場を先に置いてから、restorePersonal でプレイヤーを戻す） */
 const restoreShared = (data) => {
     isles.restore(data.isles); // 船やプレイヤーがいる島を読めるように、先に海図に載せた島を作る
+    for (const [loc, c] of crabsByPlace)
+        c.restore(data.crabs?.[loc]); // 海図に載せた島のカニは、島を作ってから
     physics.within('island', () => {
         builder.restore(data.built);
         campfires.restore(data.fires); // 焚火の部材を置いてから、燃料と火を戻す
@@ -1509,6 +1532,8 @@ renderer.setAnimationLoop(() => {
                 pebbles.update(dt); // 街にいる間は、島の砂浜に小石を足さない
             digger.tick(dt); // 掘った穴は時間がたつと埋まる
         }
+        for (const c of crabsByPlace.values())
+            c.tick(dt); // やられたカニが戻ってくる（戻すのはホストだけが決める）
         campfires.tick(dt); // 焚火の燃料が燃えていく（次の燃料を燃やすのはホストだけが決める）
         saplings.tick(dt); // 植えた苗が育っていく（育ちきって木になるのはホストだけが決める）
         autosaveTimer += dt;
