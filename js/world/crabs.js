@@ -16,56 +16,144 @@ const SPEED = 1.1; // 歩く速さ（m／秒）
 const FLEE_SPEED = 2.6; // 人から逃げるときの速さ
 const FLEE_DIST = 3; // 人がこれより近づくと逃げる（m）
 const IDLE = { min: 1.5, max: 6 }; // 止まっている時間（秒）
-const LEG_SWING = 0.5; // 歩くときに脚を振る角度（rad）
+const LEG_SWING = 0.35; // 歩くときに、付け根で脚を前後に振る角度（rad）
+const LEG_LIFT = 0.3; // 歩くときに、脚を持ち上げる角度（rad。前へ戻す間だけ上げる）
 const LEG_RATE = 18; // 脚を振る速さ（1秒あたりのラジアン）
+const LEG_COUNT = 4; // 片側の脚の数
+const LEG_THIGH = 0.17; // もも（付け根からひざまで）の長さ
+const LEG_SHIN = 0.22; // すね（ひざから先まで）の長さ
+const LEG_TIP = 0.06; // 脚の先の爪の長さ
+const LEG_UP = 0.75; // ももを持ち上げる角度（rad）
+const LEG_BEND = -2.1; // ひざで曲げる角度（rad。下へ折って先を地面につける）
+const BODY_Y = 0.17; // 甲羅の中心の高さ（脚で持ち上げる高さ）
+const CLAW_OPEN = 0.45; // はさみの指がいちばん開いたときの角度（rad）
+const CLAW_RATE = 1.3; // 止まっている間に、はさみをゆっくり開け閉めする速さ（1秒あたりのラジアン）
 const DRAW_DIST = 60; // カメラからこれより遠いカニは描かない・動かさない（m）
 const SCALE = 0.55; // カニの大きさの倍率
 const SHELL = new THREE.Color(PALETTE.accent);
 const LEG = SHELL.clone().multiplyScalar(0.75);
+const TIP = SHELL.clone().lerp(new THREE.Color(PALETTE.sand), 0.35); // 脚の先とはさみの指（白っぽい）
 const EYE = new THREE.Color(PALETTE.bark).multiplyScalar(0.5);
-/** カニ1匹の体（甲羅・はさみ・脚・目）。脚は振って歩かせるので別の部品にする */
+/** 先の細い棒（関節の台の +x の向きに伸びる。脚の節に使う） */
+function segment(length, base, tip, mat) {
+    const geo = new THREE.CylinderGeometry(tip, base, length, 5);
+    geo.rotateZ(-Math.PI / 2); // 軸を +x に向ける（細いほうが先）
+    geo.translate(length / 2, 0, 0);
+    return new THREE.Mesh(geo, mat);
+}
+/** 先の細いとがった指（+z の向きに伸びる。はさみの指に使う） */
+function fingerShape(length, base, mat) {
+    const geo = new THREE.CylinderGeometry(0.004, base, length, 5);
+    geo.rotateX(Math.PI / 2); // 軸を +z に向ける（とがったほうが先）
+    geo.translate(0, 0, length / 2);
+    geo.scale(1, 0.75, 1); // 上下に少し平たく
+    return new THREE.Mesh(geo, mat);
+}
+/** 脚1本を作る。右側の向き（付け根から +x の外へ）で組み、ひざで下へ折って先を地面につける */
+function buildLeg(mat, tipMat) {
+    const root = new THREE.Group();
+    const hip = new THREE.Group();
+    hip.rotation.z = LEG_UP; // ももは外へ、少し上向きに
+    hip.add(segment(LEG_THIGH, 0.022, 0.016, mat));
+    const knee = new THREE.Group();
+    knee.position.x = LEG_THIGH;
+    knee.rotation.z = LEG_BEND; // ひざで下へ折る
+    knee.add(segment(LEG_SHIN, 0.016, 0.01, mat));
+    // ひざの継ぎ目の玉と、脚の先のとがった爪
+    const joint = new THREE.Mesh(new THREE.IcosahedronGeometry(0.018, 0), mat);
+    const tip = segment(LEG_TIP, 0.01, 0.002, tipMat);
+    tip.position.x = LEG_SHIN;
+    tip.rotation.z = -0.35;
+    knee.add(joint, tip);
+    hip.add(knee);
+    root.add(hip);
+    return { root, hip, knee };
+}
+/** はさみ1本を作る。右側の向きで、肩から前へ腕を伸ばし、ひじで内へ曲げ、手のひらから上下2本の指が出る */
+function buildClaw(shell, leg, tipMat, size) {
+    const root = new THREE.Group();
+    const shoulder = new THREE.Group();
+    shoulder.rotation.set(-0.25, 0.55, 0); // 前・外向き、少し上へ
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.04, 0.13).translate(0, 0, 0.065), leg);
+    const elbow = new THREE.Group();
+    elbow.position.z = 0.13;
+    elbow.rotation.set(0.2, -1.05, 0); // ひじで内へ曲げる
+    const fore = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.045, 0.09).translate(0, 0, 0.045), shell);
+    const elbowJoint = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 0), leg);
+    const wrist = new THREE.Group();
+    wrist.position.z = 0.09;
+    wrist.rotation.y = 0.5; // 手首で少し外へ向け直す
+    wrist.scale.setScalar(size);
+    // 手のひら（ふくらんだ甲羅）と、下の動かない指・上の動く指
+    const palm = new THREE.Mesh(new THREE.SphereGeometry(0.07, 7, 5), shell);
+    palm.scale.set(0.85, 0.75, 1.25);
+    palm.position.z = 0.07;
+    const fixed = fingerShape(0.1, 0.034, tipMat);
+    fixed.position.set(0, -0.018, 0.14);
+    fixed.rotation.x = -0.12;
+    const finger = new THREE.Group();
+    finger.position.set(0, 0.025, 0.13);
+    const moving = fingerShape(0.095, 0.028, tipMat);
+    finger.add(moving);
+    wrist.add(palm, fixed, finger);
+    elbow.add(fore, elbowJoint, wrist);
+    shoulder.add(upper, elbow);
+    root.add(shoulder);
+    return { root, finger };
+}
+/** カニ1匹の体（甲羅・はさみ・脚・目）。脚とはさみは関節ごとに動かす */
 function buildCrab() {
     const root = new THREE.Group();
     const shell = flat(SHELL.getHex());
     const leg = flat(LEG.getHex());
+    const tip = flat(TIP.getHex());
     const eye = flat(EYE.getHex());
-    const body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 7, 4), shell);
-    body.scale.set(1.2, 0.45, 0.9);
-    body.position.y = 0.16;
-    root.add(body);
-    // はさみ（前の左右）
-    for (const s of [-1, 1]) {
-        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.16), leg);
-        arm.position.set(s * 0.15, 0.15, 0.2);
-        arm.rotation.y = -s * 0.5;
-        const claw = new THREE.Mesh(new THREE.IcosahedronGeometry(0.08, 0), shell);
-        claw.scale.set(0.9, 0.7, 1.3);
-        claw.position.set(s * 0.2, 0.16, 0.31);
-        root.add(arm, claw);
+    // 甲羅：横に広い平たい楕円に、前のふちのでこぼこ
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 5), shell);
+    body.scale.set(1.25, 0.45, 0.92);
+    body.position.y = BODY_Y;
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.2, 7, 3), leg);
+    belly.scale.set(1.15, 0.25, 0.85);
+    belly.position.y = BODY_Y - 0.035;
+    root.add(body, belly);
+    for (const x of [-0.1, 0, 0.1]) {
+        const bump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 0), shell);
+        bump.position.set(x, BODY_Y + 0.03, 0.18);
+        root.add(bump);
     }
     // 目（甲羅の前から突き出た2本）
     for (const s of [-1, 1]) {
-        const stalk = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.08, 0.025), leg);
-        stalk.position.set(s * 0.06, 0.24, 0.15);
-        const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 0), eye);
-        ball.position.set(s * 0.06, 0.29, 0.15);
+        const stalk = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, 0.02), leg);
+        stalk.position.set(s * 0.06, BODY_Y + 0.08, 0.16);
+        const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.028, 0), eye);
+        ball.position.set(s * 0.06, BODY_Y + 0.125, 0.16);
         root.add(stalk, ball);
     }
-    // 脚（左右に3本ずつ。付け根で振れるように、付け根を原点にした台に付ける）
+    // はさみ（前の左右。右のほうが少し大きい）
+    const claws = [];
+    for (const s of [-1, 1]) {
+        const { root: arm, finger } = buildClaw(shell, leg, tip, s > 0 ? 1.15 : 1);
+        const pivot = new THREE.Group();
+        pivot.position.set(s * 0.13, BODY_Y, 0.15);
+        pivot.scale.x = s; // 左は左右反転
+        pivot.add(arm);
+        root.add(pivot);
+        claws.push({ pivot, finger, offset: s > 0 ? 0 : 1.7 });
+    }
+    // 脚（左右に4本ずつ。付け根の台を体のふちに置き、前から後ろへ扇のように向きを変える）
     const legs = [];
     for (const s of [-1, 1]) {
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < LEG_COUNT; i++) {
+            const { root: limb, hip, knee } = buildLeg(leg, tip);
             const pivot = new THREE.Group();
-            pivot.position.set(s * 0.2, 0.15, 0.08 - i * 0.1);
-            pivot.rotation.y = s * (0.15 - i * 0.2);
-            const seg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.03), leg);
-            seg.position.set(s * 0.09, -0.05, 0);
-            seg.rotation.z = s * -0.5;
-            pivot.add(seg);
-            pivot.userData.side = s;
-            pivot.userData.offset = i * 2.1 + (s > 0 ? Math.PI : 0); // 脚ごとに振るタイミングをずらす
+            const z = 0.09 - i * 0.075;
+            pivot.position.set(s * 0.2, BODY_Y - 0.01, z);
+            pivot.rotation.y = -s * (0.45 - i * 0.3); // 前の脚は前へ、後ろの脚は後ろへ向ける
+            pivot.scale.x = s;
+            pivot.add(limb);
             root.add(pivot);
-            legs.push(pivot);
+            // 左右の同じ番号の脚、となりの脚どうしは逆のタイミングで動かす（交互に歩く）
+            legs.push({ pivot, hip, knee, offset: i * Math.PI + (s > 0 ? Math.PI / 2 : 0) });
         }
     }
     root.scale.setScalar(SCALE);
@@ -73,7 +161,7 @@ function buildCrab() {
         if (o instanceof THREE.Mesh)
             o.castShadow = true;
     });
-    return { root, legs };
+    return { root, legs, claws };
 }
 /** 1つの場所の砂浜のカニたち */
 export class Crabs {
@@ -100,10 +188,11 @@ export class Crabs {
             }
         });
         for (const home of homes) {
-            const { root, legs } = buildCrab();
+            const { root, legs, claws } = buildCrab();
             const crab = {
                 root,
                 legs,
+                claws,
                 home,
                 pos: home.clone(),
                 target: home.clone(),
@@ -111,6 +200,7 @@ export class Crabs {
                 idle: rand() * IDLE.max,
                 speed: SPEED,
                 phase: rand() * 10,
+                clawPhase: rand() * 10,
             };
             this.place(crab);
             this.group.add(root);
@@ -176,8 +266,18 @@ export class Crabs {
     /** 脚を振る（moving が 1 なら歩いている） */
     swing(c, moving, dt) {
         c.phase += dt * LEG_RATE * moving * (c.speed / SPEED);
+        c.clawPhase += dt * CLAW_RATE * (moving ? 4 : 1);
         for (const leg of c.legs) {
-            leg.rotation.z = moving * Math.sin(c.phase + leg.userData.offset) * LEG_SWING * leg.userData.side;
+            const t = c.phase + leg.offset;
+            // 付け根で前後に振り、前へ戻す間だけ脚を持ち上げて、ひざを少し伸ばす
+            const lift = moving * Math.max(0, Math.cos(t)) * LEG_LIFT;
+            leg.hip.rotation.y = moving * Math.sin(t) * LEG_SWING;
+            leg.hip.rotation.z = LEG_UP + lift;
+            leg.knee.rotation.z = LEG_BEND + lift * 0.6;
+        }
+        for (const claw of c.claws) {
+            // 動く指を開けたり閉じたりする（逃げるときはせわしなく）
+            claw.finger.rotation.x = -CLAW_OPEN * (0.5 + 0.5 * Math.sin(c.clawPhase + claw.offset));
         }
     }
     /** p が歩ける陸か（海の中と洞窟の上には入らない） */
