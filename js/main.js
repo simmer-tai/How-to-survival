@@ -45,6 +45,7 @@ import { Weather } from './world/weather.js';
 import { Rain } from './world/rain.js';
 import { Wind } from './world/wind.js';
 import { BeachPebbles } from './world/pebbles.js';
+import { Crabs } from './world/crabs.js';
 import { PickupFeed } from './ui/pickupFeed.js';
 import { ChargeRing } from './ui/chargeRing.js';
 import { FARMER_LOOK, MAP_LOOK, Npc, pierSpot } from './world/npc.js';
@@ -164,6 +165,13 @@ const sea = new Sea();
 scene.add(sea.mesh);
 const props = buildProps();
 scene.add(props.group);
+// 砂浜を歩き回るカニ（眺めるだけの、自分の画面だけの演出）。場所ごとに持ち、今いる場所の分だけ動かす
+const CRAB_SEED = 7100; // カニのすみかを決める種（海図に載せた島は、島の地図の種に足す）
+const HOME_CRABS = 10; // 自分の島のカニの数
+const ISLE_CRABS = { beach: 14, other: 6 }; // 海図に載せた島のカニの数（白い渚の島は多い）
+const homeCrabs = new Crabs(islandField, CRAB_SEED, HOME_CRABS);
+scene.add(homeCrabs.group);
+const crabsByPlace = new Map([['island', homeCrabs]]);
 for (const mesh of props.solids)
     if (!props.rocks.includes(mesh))
         physics.addStatic(mesh); // 岩の当たり判定は RockMiner が付ける
@@ -439,11 +447,14 @@ const isles = new Isles({
     // 今いない島は隠す（剛体は physics が止めている）
     built: (isle) => {
         lod.addProps(isle.id, isle.props);
+        const crabs = new Crabs(isle.shape.field, isle.chart.seed + CRAB_SEED, isle.chart.lands.includes('beach') ? ISLE_CRABS.beach : ISLE_CRABS.other);
+        isle.group.add(crabs.group); // 島と一緒に見せる・隠す
+        crabsByPlace.set(isle.id, crabs);
         if (isle.id !== here)
             setShown(isle.group, false);
     },
 });
-const homePlace = { roots: [terrain, props.group, grass.mesh], field: islandField, collider: islandTerrainCollider, seabed: islandSeabed, platforms: [] };
+const homePlace = { roots: [terrain, props.group, grass.mesh, homeCrabs.group], field: islandField, collider: islandTerrainCollider, seabed: islandSeabed, platforms: [] };
 const townPlace = { roots: [town.group], field: townField, collider: townTerrainCollider, seabed: townSeabed, platforms: town.platforms };
 const placeOf = (loc) => {
     if (loc === 'island')
@@ -1479,6 +1490,7 @@ renderer.setAnimationLoop(() => {
     grass.update(camera.position, grassFar);
     isles.get(here)?.grass?.update(camera.position, grassFar);
     lod.update(camera.position, here, fog.far, gfx.lodScale);
+    crabsByPlace.get(here)?.update(dt, camera.position);
     if (world)
         player.update(dt);
     else
