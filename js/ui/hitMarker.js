@@ -17,6 +17,13 @@ export class HitMarker {
         for (let i = 0; i < 4; i++)
             this.marks.append(document.createElement('i'));
         crosshair.append(this.marks);
+        // 終わったら印を外す（残っていると、メニューでクロスヘアを隠して出し直したときにもう一度再生される）
+        for (const el of [this.marks, crosshair]) {
+            el.addEventListener('animationend', (e) => {
+                if (e.target === el)
+                    el.classList.remove('hit', 'kill');
+            });
+        }
     }
     /** 合図を出す（続けて当てても、はじめから出し直す） */
     play(killed) {
