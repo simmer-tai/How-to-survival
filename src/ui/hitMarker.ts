@@ -19,6 +19,12 @@ export class HitMarker {
     this.marks.className = 'hit-marks';
     for (let i = 0; i < 4; i++) this.marks.append(document.createElement('i'));
     crosshair.append(this.marks);
+    // 終わったら印を外す（残っていると、メニューでクロスヘアを隠して出し直したときにもう一度再生される）
+    for (const el of [this.marks, crosshair]) {
+      el.addEventListener('animationend', (e) => {
+        if (e.target === el) el.classList.remove('hit', 'kill');
+      });
+    }
   }
 
   /** 合図を出す（続けて当てても、はじめから出し直す） */
@@ -36,13 +42,12 @@ let injected = false;
 function injectStyle(): void {
   if (injected) return;
   injected = true;
-  const ink = '#2b2633';
   const style = document.createElement('style');
   style.textContent = `
     .hit-marks { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; pointer-events: none; }
     .hit-marks i {
       position: absolute; left: calc(-1.5 * var(--u)); top: calc(-7 * var(--u)); width: calc(3 * var(--u)); height: calc(8 * var(--u));
-      border-radius: calc(2 * var(--u)); background: #fff; box-shadow: 0 0 0 calc(1 * var(--u)) ${ink};
+      border-radius: calc(2 * var(--u)); background: #fff;
       transform-origin: 50% calc(7 * var(--u));
     }
     .hit-marks i:nth-child(1) { transform: rotate(45deg) translateY(calc(-9 * var(--u))); }
