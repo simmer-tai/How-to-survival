@@ -187,16 +187,16 @@ export const PLASTER_BLOTCH = {
     darkRate: 0.18,
     fade: 60,
 };
-/** 洞窟の岩肌のドット絵（壁をはっきりごつごつ見せるため、ほかより大きく濃いムラ） */
+/** 洞窟の岩肌のドット絵（ほかの石と同じくらい薄く、少しだけ大きいムラ） */
 export const CAVE_BLOTCH = {
-    dot: 0.18, // 1ドットの大きさ（m）
+    dot: 0.12, // 1ドットの大きさ（m）
     stretch: 1,
-    sizes: [6, 3, 2, 1],
-    bright: 1.14,
-    dark: 0.78,
-    brightRate: 0.16,
-    darkRate: 0.24,
-    fade: 90,
+    sizes: [4, 2, 1],
+    bright: 1.04,
+    dark: 0.95,
+    brightRate: 0.14,
+    darkRate: 0.18,
+    fade: 70,
 };
 let townVertexMat = null;
 /**
