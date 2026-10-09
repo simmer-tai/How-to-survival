@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { Ragdoll, resetRig } from './ragdoll.js';
 import { PALETTE } from '../core/palette.js';
 import { solid } from '../core/materials.js';
 import { box, headGeometry, joint, lathe, limb, mix, shade } from './bodyParts.js';
@@ -136,7 +137,8 @@ export interface AvatarPose {
   pitch: number;
   /** 水平に動く速さ（m/秒） */
   speed: number;
-  state: 'ground' | 'air' | 'swim' | 'sit';
+  /** down は力尽きて倒れている（体はラグドールで崩れ落ちる） */
+  state: 'ground' | 'air' | 'swim' | 'sit' | 'down';
   /** しゃがみ具合（0〜1） */
   crouch: number;
   /** 体の向き（船に座っているときの舳先の向き。yaw と同じ向きの取り方）。省くと視線に合わせて回る */
@@ -215,6 +217,8 @@ export class Avatar {
   private readonly held: (string | null)[] = [null, null];
   private readonly grips: Grip[] = ['none', 'none'];
   private readonly heldModels: (THREE.Object3D | null)[] = [null, null];
+  /** 力尽きて倒れている間のラグドール（倒れていなければ null） */
+  private ragdoll: Ragdoll | null = null;
 
   /** layer は体を描くレイヤー（自分の体は AVATAR_LAYER。マルチで描く他の人の体は、いつも見える 0） */
   constructor(look: AvatarLook, private readonly layer = AVATAR_LAYER) {
@@ -233,6 +237,8 @@ export class Avatar {
   /** 見た目を変える（体を作り直す。持っている物はそのまま） */
   setLook(look: AvatarLook): void {
     this.look = { ...look };
+    this.ragdoll = null; // 倒れている間なら、作り直した体で倒れ直す
+    this.object.quaternion.identity();
     for (const child of [...this.body.children]) {
       this.body.remove(child);
       child.traverse((o) => {
@@ -300,9 +306,35 @@ export class Avatar {
     this.chargeTarget = charge === null ? 0 : THREE.MathUtils.smootherstep(charge, 0, 1);
   }
 
+  /** 倒れている体の腰の位置（倒れていなければ足元から腰の高さ） */
+  center(out: THREE.Vector3): THREE.Vector3 {
+    if (this.ragdoll) return this.ragdoll.center(out);
+    return out.copy(this.object.position).setY(this.object.position.y + HIP_Y);
+  }
+
   update(dt: number, pose: AvatarPose): void {
     this.time += dt;
     const r = this.rig;
+    // 力尽きたら、ラグドールで崩れ落ちる。起き上がったら（リスポーン）関節の向きを元に戻す
+    if (pose.state === 'down') {
+      if (!this.ragdoll) {
+        const ahead = new THREE.Vector3(-Math.sin(pose.yaw), 0, -Math.cos(pose.yaw)); // 視線の水平の向き
+        const velocity = ahead.clone().multiplyScalar(pose.speed);
+        // 倒れる向き：動いていれば前へ、止まっていれば前か後ろのどちらか（少し横へずらす）
+        const side = new THREE.Vector3(-ahead.z, 0, ahead.x).multiplyScalar((Math.random() - 0.5) * 0.8);
+        const fall = ahead.multiplyScalar(pose.speed > 0.5 || Math.random() < 0.5 ? 1 : -1).add(side).normalize();
+        this.object.position.copy(pose.p); // 体を動かす前に倒れたとき（読み込んだときなど）も、今いる所から倒れる
+        this.ragdoll = new Ragdoll(r, this.object, velocity, fall);
+      }
+      this.ragdoll.step(dt);
+      this.ragdoll.apply(this.object, [this.tilt, this.body]);
+      return;
+    }
+    if (this.ragdoll) {
+      this.ragdoll = null;
+      resetRig(r);
+      this.object.quaternion.identity();
+    }
     this.object.position.copy(pose.p);
 
     // ---- 体の向き：動いている間は視線の向きへ追いつき、止まっている間は首だけで向けない分だけ回る ----
