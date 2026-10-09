@@ -56,6 +56,7 @@ export const ITEMS = {
     ironOre: { id: 'ironOre', name: '鉄鉱石', maxStack: MAX_STACK }, // 「鉄鉱脈」の島の洞窟にある鉱脈を、石のツルハシで叩くと採れる
     seed: { id: 'seed', name: '木の種', maxStack: MAX_STACK },
     berry: { id: 'berry', name: 'ベリー', maxStack: 32 },
+    crab: { id: 'crab', name: 'カニ', maxStack: 16 }, // 砂浜のカニを倒すと落ちる（脚を閉じた姿）
     // 魚：釣り竿で釣れる。持って右クリックで食べる（種類ごとの見た目・釣れる場所は items/fishKinds.ts）
     fish: { id: 'fish', name: 'アジ', maxStack: 32 },
     clownfish: { id: 'clownfish', name: 'クマノミ', maxStack: 32 },

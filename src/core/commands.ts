@@ -148,8 +148,11 @@ export interface ChartIsle { type: 'chartIsle'; iid: number; chart: number }
 /** カニを叩ける道具 */
 export type CrabTool = 'fist' | 'axe' | 'pickaxe' | 'spear';
 
-/** 場所 place（自分の島・街・海図に載せた島）のカニ（すみかを決めた順の番号 crab）を叩いて、体力を damage 減らす。減らす量はホストが道具から決める */
-export interface HitCrab { type: 'hitCrab'; place: string; crab: number; damage: number }
+/**
+ * 場所 place（自分の島・街・海図に載せた島）のカニ（すみかを決めた順の番号 crab）を叩いて、体力を damage 減らす。減らす量はホストが道具から決める。
+ * p は叩いた人の画面のカニの位置 [x, z]（体力が尽きたら、ここで倒れて落とし物になる）
+ */
+export interface HitCrab { type: 'hitCrab'; place: string; crab: number; damage: number; p: [number, number] }
 
 /** やられたカニが、時間がたってすみかに戻ってくる。時間を進めるホストが出す */
 export interface ReviveCrab { type: 'reviveCrab'; place: string; crab: number }

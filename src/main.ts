@@ -48,6 +48,8 @@ import { Wind } from './world/wind.js';
 import { BeachPebbles } from './world/pebbles.js';
 import { Crabs } from './world/crabs.js';
 import { PickupFeed } from './ui/pickupFeed.js';
+import { HitMarker } from './ui/hitMarker.js';
+import { DamageNumbers } from './ui/damageNumbers.js';
 import { ChargeRing } from './ui/chargeRing.js';
 import { FARMER_LOOK, MAP_LOOK, Npc, pierSpot } from './world/npc.js';
 import { Guide } from './story/guide.js';
@@ -180,7 +182,16 @@ scene.add(props.group);
 const CRAB_SEED = 7100; // カニのすみかを決める種（海図に載せた島は、島の地図の種に足す）
 const HOME_CRABS = 10; // 自分の島のカニの数
 const ISLE_CRABS = { beach: 14, other: 6 }; // 海図に載せた島のカニの数（白い渚の島は多い）
-const homeCrabs = new Crabs('island', islandField, CRAB_SEED, HOME_CRABS, (req, by) => requestWorld(req, by));
+/** カニを叩いたら、ダメージの数を出す（今いる場所のカニだけ）。自分が叩いたなら、クロスヘアにも当たった合図を出す */
+const wireCrabs = (crabs: Crabs): Crabs => {
+  crabs.onHit = (p, damage, killed, mine) => {
+    if (crabs.loc !== here) return;
+    damageNumbers.spawn(p, damage, killed);
+    if (mine) hitMarker.play(killed);
+  };
+  return crabs;
+};
+const homeCrabs = wireCrabs(new Crabs('island', islandField, CRAB_SEED, HOME_CRABS, (req, by) => requestWorld(req, by)));
 scene.add(homeCrabs.group);
 const crabsByPlace = new Map<LocationId, Crabs>([['island', homeCrabs]]);
 for (const mesh of props.solids) if (!props.rocks.includes(mesh)) physics.addStatic(mesh); // 岩の当たり判定は RockMiner が付ける
@@ -285,7 +296,7 @@ const rodHand = new ToolHand(handRoot, rodRig.root, ROD_LEAN);
 const SPEAR_LEAN = 1.4;
 const spearHand = new ToolHand(handRoot, buildSpear(), SPEAR_LEAN, THRUST_MOTION);
 // 木材・板・枝・葉っぱ・魚・ベリー・木の種・土・設計図・白紙の地図・島の地図・地形のメモ・船・焚火は選んでいる間、手に持って見せる
-const MATERIAL_KINDS = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'seed', 'dirt', 'ironOre', 'boatBlueprint', 'pickaxeBlueprint', 'spearBlueprint', 'hammerBlueprint', 'fishingRodBlueprint', 'draftingTableBlueprint', 'hoeBlueprint', 'map', 'islandMap', ...LAND_INFO_IDS, 'boat', 'campfire', 'torch'] as const;
+const MATERIAL_KINDS = ['wood', 'plank', 'stick', 'leaf', ...FISH_IDS, 'berry', 'crab', 'seed', 'dirt', 'ironOre', 'boatBlueprint', 'pickaxeBlueprint', 'spearBlueprint', 'hammerBlueprint', 'fishingRodBlueprint', 'draftingTableBlueprint', 'hoeBlueprint', 'map', 'islandMap', ...LAND_INFO_IDS, 'boat', 'campfire', 'torch'] as const;
 const materialHands = MATERIAL_KINDS.map((kind) => ({ kind, hand: new ItemHand(handRoot, kind) }));
 // 左手のマス（ホットバーの左）の物は、右手と同じ持ち方を鏡に映して左手に持つ。左手では振ったり食べたりしない
 const leftTools = [
@@ -470,7 +481,7 @@ const isles = new Isles({
   built: (isle) => {
     lod.addProps(isle.id, isle.props);
     const count = isle.chart.lands.includes('beach') ? ISLE_CRABS.beach : ISLE_CRABS.other;
-    const crabs = new Crabs(isle.id, isle.shape.field, isle.chart.seed + CRAB_SEED, count, (req, by) => requestWorld(req, by));
+    const crabs = wireCrabs(new Crabs(isle.id, isle.shape.field, isle.chart.seed + CRAB_SEED, count, (req, by) => requestWorld(req, by)));
     isle.group.add(crabs.group); // 島と一緒に見せる・隠す
     crabsByPlace.set(isle.id, crabs);
     if (isle.id !== here) setShown(isle.group, false);
@@ -721,7 +732,7 @@ const applyCommand = (cmd: WorldCommand, by: number | null): void => {
       break;
     case 'hitCrab':
     case 'reviveCrab':
-      crabsByPlace.get(cmd.place as LocationId)?.apply(cmd);
+      crabsByPlace.get(cmd.place as LocationId)?.apply(cmd, mine);
       break;
   }
 };
@@ -1082,6 +1093,8 @@ document.addEventListener('visibilitychange', () => {
 
 const overlay = document.getElementById('overlay')!;
 const crosshair = document.getElementById('crosshair')!;
+const hitMarker = new HitMarker(crosshair); // 叩いて当たったときのクロスヘアの合図
+const damageNumbers = new DamageNumbers(); // 叩いた物の上に浮かぶダメージの数
 const pickupHint = document.getElementById('pickup-hint')!;
 // ---- HP が尽きたら「力尽きた」画面（リスポーンするとスタート地点へ。持ち物はそのまま） ----
 const death = new DeathScreen();
@@ -1466,6 +1479,7 @@ renderer.setAnimationLoop(() => {
   isles.get(here)?.grass?.update(camera.position, grassFar);
   lod.update(camera.position, here, fog.far, gfx.lodScale);
   crabsByPlace.get(here)?.update(dt, camera.position);
+  damageNumbers.update(dt, camera);
   if (world) player.update(dt);
   else orbitCamera(t);
   crafting.update(dt); // 作業台を使っているときは、カメラを天板に寄せる

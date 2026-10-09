@@ -4,6 +4,7 @@ import { flat } from '../core/materials.js';
 import { buildAxe, buildFishingRod, buildHammer, buildHoe, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
 import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel, buildIronOreModel, buildTorchModel } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
+import { buildCrabModel } from './crabModel.js';
 import { FISH_KINDS } from './fishKinds.js';
 import { perLandInfo } from './landInfo.js';
 const ICON_SIZE = 128; // 描画解像度（px）。表示はこれより小さく縮める
@@ -91,6 +92,13 @@ function buildDirtIcon() {
     small.rotation.y = 1.4;
     g.add(big, small);
     g.rotation.set(0.45, -0.3, 0);
+    return g;
+}
+/** 倒したカニ：脚を閉じた姿を、甲羅が見えるように斜め上から */
+function buildCrabIcon() {
+    const g = new THREE.Group();
+    g.add(buildCrabModel());
+    g.rotation.set(0.6, -0.5, 0);
     return g;
 }
 /** 芽の出た木の種 */
@@ -261,6 +269,7 @@ const MODELS = {
     ironOre: buildIronOreIcon,
     seed: buildSeed,
     berry: buildBerry,
+    crab: buildCrabIcon,
     fish: () => buildFishIcon('fish'),
     clownfish: () => buildFishIcon('clownfish'),
     snapper: () => buildFishIcon('snapper'),

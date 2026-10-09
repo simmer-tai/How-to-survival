@@ -4,6 +4,7 @@ import { flat } from '../core/materials.js';
 import { buildAxe, buildFishingRod, buildHammer, buildHoe, buildPickaxe, buildShovel, buildSpear, buildStoneKnife } from '../player/hand.js';
 import { PLANK_T, buildFishModel, buildLeafModel, buildPlankModel, buildStickModel, buildCoinModel, buildBoatModel, buildBlueprintModel, buildMapModel, buildIslandMapModel, buildLandInfoModel, buildSeedModel, buildDirtModel, buildIronOreModel, buildTorchModel, type BlueprintKind } from './itemModels.js';
 import { pieceIconModel } from '../actions/pieces.js';
+import { buildCrabModel } from './crabModel.js';
 import { FISH_KINDS, type FishId } from './fishKinds.js';
 import type { ItemId } from './inventory.js';
 import { perLandInfo, type LandKind } from './landInfo.js';
@@ -101,6 +102,14 @@ function buildDirtIcon(): THREE.Group {
   small.rotation.y = 1.4;
   g.add(big, small);
   g.rotation.set(0.45, -0.3, 0);
+  return g;
+}
+
+/** 倒したカニ：脚を閉じた姿を、甲羅が見えるように斜め上から */
+function buildCrabIcon(): THREE.Group {
+  const g = new THREE.Group();
+  g.add(buildCrabModel());
+  g.rotation.set(0.6, -0.5, 0);
   return g;
 }
 
@@ -283,6 +292,7 @@ const MODELS: Record<ItemId, () => THREE.Object3D> = {
   ironOre: buildIronOreIcon,
   seed: buildSeed,
   berry: buildBerry,
+  crab: buildCrabIcon,
   fish: () => buildFishIcon('fish'),
   clownfish: () => buildFishIcon('clownfish'),
   snapper: () => buildFishIcon('snapper'),

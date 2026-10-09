@@ -7,6 +7,7 @@ import { FISH_KINDS, type FishId } from '../items/fishKinds.js';
 import { perLandInfo, type LandKind } from '../items/landInfo.js';
 import { HandModel, HAND_POSES, type HandAnchor, type HandPoseName, type Vec3 } from './handModel.js';
 import { pieceIconModel } from '../actions/pieces.js';
+import { buildCrabModel } from '../items/crabModel.js';
 
 /** 腕を伸ばす向き（カメラ基準）。どの持ち方でも、画面の右下手前から手へまっすぐ腕が伸びる */
 const ARM_DIR: Vec3 = [0.25, -0.5, 0.83];
@@ -876,6 +877,14 @@ const HOLD_STYLES = {
     rotation: [0.25, -0.3, 0],
     scale: 0.42,
     hand: { pose: 'cup', at: [0.08, 0.03, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
+  },
+  // 倒したカニ：脚を閉じた姿を、甲羅を上にして手のひらにのせる（はさみを左奥へ）
+  crab: {
+    build: buildCrabModel,
+    slots: [[0, 0.02, 0, 0, Math.PI * 0.75, 0]],
+    rotation: [0.25, -0.3, 0],
+    scale: 0.6,
+    hand: { pose: 'cup', at: [0.04, -0.02, 0.02], fingers: [-0.35, 0.35, -0.85], palm: [0, 0.8, 0.6], anchor: 'palm' },
   },
   // 木の種：ベリーと同じように手のひらに数粒のせる
   seed: {
